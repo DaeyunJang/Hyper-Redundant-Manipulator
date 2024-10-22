@@ -1,0 +1,431 @@
+
+/******************************************************************************************
+ * Project : gripper_ws :: main
+ *
+ * @file main.ino
+ * @author Dae-Yun Jang (bigyun9375@gmail.com)
+ * @git  https://github.com/Bigyuun/SIFM
+ * @version 0.0
+ * @date 2024-04-09
+ * @copyright Copyright (c) 2024
+ * @brief
+ * Read Loadcell(HX711) and Force-torque Sensor(CAN comm)
+ * Write Serial print
+ * @note
+ * MCU          : Arduin DUE
+ ******************************************************************************************/
+
+#include <Arduino_FreeRTOS.h>
+#include <queue.h>
+#include <semphr.h>  // add the FreeRTOS functions for Semaphores (or Flags).
+#include <SPI.h>
+#include <mcp2515.h> // mcp2515 라이브러리를 설치해야 합니다. (https://github.com/autowp/arduino-mcp2515/)
+//#include <HX711.h>
+#include <HX711_ADC.h>
+
+#define FORCE_CAN_ID 0x2A
+#define TORQUE_CAN_ID 0x2B
+// #define LOADCELL_1_/ID 0x07F
+
+// Load Cell pin
+#define NUMBER_OF_LOADCELL_MODULE        2
+#define PRESS_TENSILE_DIRECTION          1 // PRESS: 1, TENSILE(PULL): -1
+
+#define HX711_DOUT_1                     4  // mcu > HX711 no 1 dout pin
+#define HX711_SCK_1                      5  // mcu > HX711 no 1 sck pin
+#define CALIBRATION_FACTOR_1             275.684936
+#define CALIBRATION_INIT_DATA_1          30670  // it measured without tare() function
+
+#define HX711_DOUT_2                     6  // mcu > HX711 no 2 dout pin
+#define HX711_SCK_2                      7  // mcu > HX711 no 2 sck pin
+#define CALIBRATION_FACTOR_2             255.5
+#define CALIBRATION_INIT_DATA_2          32770  // it measured without tare() function
+
+// CAN comm pin
+#define MCP2515_SPI_CS                   10
+
+// Serial communication Parameters
+#define BAUDRATE                         115200
+#define BANDWIDTH                        10
+
+// ROTS Threads Frequency Setting
+#define RTOS_FREQUENCY                   100   // Hz (Default)
+#define RTOS_FREQUENCY_LOADCELLUPDATE    100   // Hz (Default)
+#define RTOS_FREQUENCY_FORCETORQUESENSOR 200   // Hz (Default)
+#define RTOS_FREQUENCY_EEPROM_SAVE       250   // H-z (Default)
+#define RTOS_FREQUENCY_MONITORING        25    // Hz (Default)
+#define RTOS_FREQUENCY_SERIALREADING     500   // Hz (Default)
+#define RTOS_FREQUENCY_SERIALWRITING     200   // Hz (Default)
+#define TOTAL_SYSTEM_DELAY               1     // ms
+
+#define PIN_BOARD_LED                    LED_BUILTIN    // pin 13 for LED in board
+
+
+// MCP2515 mcp2515(MCP2515_SPI_CS);                 // SPI CS Pin 10
+// SemaphoreHandle_t mutex;
+MCP2515 mcp2515(MCP2515_SPI_CS);  // SPI CS Pin 10
+struct can_frame kcan_read_msg_;
+struct can_frame kcan_send_msg_;
+QueueHandle_t integerQueue;
+
+/******************************************************************************************
+ * Class & Enum & Structure
+ ******************************************************************************************/
+//===========================================================
+// timer structure
+//===========================================================
+struct LoopTimeChecker
+{
+  float loop_time_checker_LoadCellUpdate = -1;
+  float loop_time_checker_ForceTorqueUpdate = -1;
+  float loop_time_checker_MotorOperation = -1;
+  float loop_time_checker_CANReead       = -1;
+  float loop_time_checker_EEPROMUpdate   = -1;
+  float loop_time_checker_SerialWriting  = -1;
+  float loop_time_checker_SerialReading  = -1;
+};
+
+/******************************************************************************************
+ * Global variables
+ ******************************************************************************************/
+LoopTimeChecker TimeChecker;
+static volatile long fx_ = 0, fy_ = 0, fz_ = 0; 
+static volatile long tx_ = 0, ty_ = 0, tz_ = 0;
+static volatile float lc_data_[NUMBER_OF_LOADCELL_MODULE] = {0};
+static volatile float lc_tare_offset_[NUMBER_OF_LOADCELL_MODULE] = {0};
+
+/******************************************************************************************
+ * Functions
+ ******************************************************************************************/
+uint8_t init_objects();
+void PrintOnMutex(String msg);
+
+void FTSNode();
+void LCNode();
+void SerialWriteNode();
+void SerialReadNode();
+
+//===========================================================
+// Node Manager (RTOS)
+//===========================================================
+
+
+
+
+void SerialWriteNode(void *pvParameters)
+{
+  static unsigned long curt_time = millis();
+  static unsigned long prev_time = millis();
+  static unsigned long temp_time = 0;
+  static unsigned long count_ = 0;
+
+  const char C_STX = '/';
+  const char C_ETX = ';';
+  String str_send_buffer = "";
+  static long count = 0;
+
+  while(true)
+  {
+    curt_time = millis();
+    temp_time = curt_time - prev_time;
+    prev_time = curt_time;
+    str_send_buffer = "";
+    str_send_buffer += String(C_STX);
+    str_send_buffer += String(fx_) + ",";
+    str_send_buffer += String(fy_) + ",";
+    str_send_buffer += String(fz_) + ",";
+    str_send_buffer += String(tx_) + ",";
+    str_send_buffer += String(ty_) + ",";
+    str_send_buffer += String(tz_) + ",";
+    str_send_buffer += String((lc_data_[0]-CALIBRATION_INIT_DATA_1), 2) + ",";
+    str_send_buffer += String((lc_data_[1]-CALIBRATION_INIT_DATA_2), 2);
+    str_send_buffer += String(C_ETX);
+    // str_send_buffer += String(lc_tare_offset_[0]) + "/";
+    // str_send_buffer += String(lc_tare_offset_[1]);
+
+    // str_send_buffer += String(count++);
+    Serial.println(str_send_buffer);
+    TimeChecker.loop_time_checker_SerialWriting = temp_time;
+    // vTaskDelay(((1000 / RTOS_FREQUENCY_SERIALWRITING) - TOTAL_SYSTEM_DELAY) / portTICK_PERIOD_MS);
+  }
+}
+
+// void LCNode(void *pvParameters){
+
+//   HX711 lc1, lc2;
+//   lc1.begin(HX711_DOUT_1, HX711_SCK_1);
+//   lc1.set_scale(CALIBRATION_FACTOR_1);
+//   lc1.tare();
+//   lc2.begin(HX711_DOUT_2, HX711_SCK_2);
+//   lc2.set_scale(CALIBRATION_FACTOR_2);
+//   lc2.tare();
+
+//   while(true)
+//   {
+//     lc_data_[0] = PRESS_TENSILE_DIRECTION * lc1.read();
+//     lc_data_[1] = PRESS_TENSILE_DIRECTION * lc2.read();
+//   }
+//   // FTS.spin(pvParameters);
+// }
+
+void LCNode(void *pvParameters){
+
+  HX711_ADC lc1(HX711_DOUT_1, HX711_SCK_1);
+  HX711_ADC lc2(HX711_DOUT_2, HX711_SCK_2);
+  lc1.begin();
+  lc2.begin();
+  Serial.println("HX711 start...");
+
+  unsigned long stabilizingtime = 2000; // preciscion right after power-up can be improved by adding a few seconds of stabilizing time
+  boolean _tare = true; //set this to false if you don't want tare to be performed in the next step
+  byte loadcell_1_rdy = 0;
+  byte loadcell_2_rdy = 0;
+  while ((loadcell_1_rdy + loadcell_2_rdy) < 2) { //run startup, stabilization and tare, both modules simultaniously
+    if (!loadcell_1_rdy) loadcell_1_rdy = lc1.startMultiple(stabilizingtime, _tare);
+    if (!loadcell_2_rdy) loadcell_2_rdy = lc2.startMultiple(stabilizingtime, _tare);
+  }
+  lc1.start(stabilizingtime, _tare);
+  if (lc1.getTareTimeoutFlag()) {
+    Serial.println("Timeout, check MCU>HX711 wiring and pin designations");
+    while (1);
+  }
+  lc2.start(stabilizingtime, _tare);
+  if (lc2.getTareTimeoutFlag()) {
+    Serial.println("Timeout, check MCU>HX711 wiring and pin designations");
+    while (1);
+  }
+  lc1.setCalFactor(CALIBRATION_FACTOR_1); // user set calibration value (float)
+  lc2.setCalFactor(CALIBRATION_FACTOR_2); // user set calibration value (float)
+
+  unsigned long t = 0;
+  Serial.println("HX711 is up");
+
+  while(true)
+  {
+    static boolean newDataReady = 0;
+    const int serialPrintInterval = 0; //increase value to slow down serial print activity
+
+    // check for new data/start next conversion:
+    if (lc1.update()) newDataReady = true;
+    lc2.update();
+
+    //get smoothed value from data set
+    if ((newDataReady)) {
+      if (millis() > t + serialPrintInterval) {
+        lc_data_[0] = lc1.getData();
+        lc_data_[1] = lc2.getData();
+        // Serial.print("Load_cell 1 output val: ");
+        // Serial.print(a);
+        // Serial.print("    Load_cell 2 output val: ");
+        // Serial.println(b);
+        newDataReady = 0;
+        t = millis();
+      }
+    }
+    Serial.println("HX711 update");
+
+  }
+}
+
+void FTSNode(void *pvParameters){
+
+  mcp2515.reset();
+  mcp2515.setBitrate(CAN_1000KBPS, MCP_8MHZ); //Sets CAN at speed 500KBPS and Clock 8MHz
+  mcp2515.setNormalMode();                  //Sets CAN at normal mode
+  canid_t can_id_force_ = FORCE_CAN_ID;
+  canid_t can_id_torque_ = TORQUE_CAN_ID;
+
+  while(true)
+  {
+    if (mcp2515.readMessage(&kcan_read_msg_) == MCP2515::ERROR_OK) {
+      // CAN 메시지 출력
+//      Serial.print(kcan_read_msg_.can_id, HEX); // ID 출력
+//      Serial.print(" ");
+//      Serial.print(kcan_read_msg_.can_dlc, HEX); // DLC 출력
+//      Serial.print(" ");
+//      for (int i = 0; i < kcan_read_msg_.can_dlc; i++) {
+//        Serial.print(kcan_read_msg_.data[i], HEX);
+//      }
+//      Serial.println("");
+
+      if (kcan_read_msg_.can_id == can_id_force_){  // 26
+        // mN 으로 force 계산
+        fx_ = (kcan_read_msg_.data[0]*256 + kcan_read_msg_.data[1])-30000;
+        fy_ = (kcan_read_msg_.data[2]*256 + kcan_read_msg_.data[3])-30000;
+        fz_ = (kcan_read_msg_.data[4]*256 + kcan_read_msg_.data[5])-30000;
+        // Serial.println("FORCE");
+      }
+      else if (kcan_read_msg_.can_id == can_id_torque_){ //27
+        // mNm 으로 torque 계산
+        tx_ = (kcan_read_msg_.data[0]*256 + kcan_read_msg_.data[1])-30000;
+        ty_ = (kcan_read_msg_.data[2]*256 + kcan_read_msg_.data[3])-30000;
+        tz_ = (kcan_read_msg_.data[4]*256 + kcan_read_msg_.data[5])-30000;
+        // Serial.println("TORQUE");
+      }
+    }
+  }
+  // FTS.spin(pvParameters);
+}
+
+void SensorsNode(void *pvParameters){
+
+  //////////////////////////////////////////////////////////////////////////////////
+  mcp2515.reset();
+  mcp2515.setBitrate(CAN_1000KBPS, MCP_8MHZ); //Sets CAN at speed 500KBPS and Clock 8MHz
+  mcp2515.setNormalMode();                  //Sets CAN at normal mode
+  canid_t can_id_force_ = FORCE_CAN_ID;
+  canid_t can_id_torque_ = TORQUE_CAN_ID;
+
+  //////////////////////////////////////////////////////////////////////////////////
+  HX711_ADC lc1(HX711_DOUT_1, HX711_SCK_1);
+  HX711_ADC lc2(HX711_DOUT_2, HX711_SCK_2);
+  lc1.begin();
+  lc2.begin();
+  // Serial.println("HX711 start...");
+
+  unsigned long stabilizingtime = 2000; // preciscion right after power-up can be improved by adding a few seconds of stabilizing time
+  // boolean _tare = true; //set this to false if you don't want tare to be performed in the next step
+  boolean _tare = false; //set this to false if you don't want tare to be performed in the next step
+  // byte loadcell_1_rdy = 0;
+  // byte loadcell_2_rdy = 0;
+  // while ((loadcell_1_rdy + loadcell_2_rdy) < 2) { //run startup, stabilization and tare, both modules simultaniously
+  //   if (!loadcell_1_rdy) loadcell_1_rdy = lc1.startMultiple(stabilizingtime, _tare);
+  //   if (!loadcell_2_rdy) loadcell_2_rdy = lc2.startMultiple(stabilizingtime, _tare);
+  // }
+  lc1.start(stabilizingtime, _tare);
+  if (lc1.getTareTimeoutFlag()) {
+    Serial.println("Timeout, check MCU>HX711 wiring and pin designations");
+    while (1);
+  }
+  else {
+    lc1.setCalFactor(CALIBRATION_FACTOR_1); // user set calibration value (float)
+  }
+  lc2.start(stabilizingtime, _tare);
+  if (lc2.getTareTimeoutFlag()) {
+    Serial.println("Timeout, check MCU>HX711 wiring and pin designations");
+    while (1);
+  }
+  else {
+    lc2.setCalFactor(CALIBRATION_FACTOR_2); // user set calibration value (float)
+  }
+  // lc1.setCalFactor(CALIBRATION_FACTOR_1); // user set calibration value (float)
+  // lc2.setCalFactor(CALIBRATION_FACTOR_2); // user set calibration value (float)
+
+  unsigned long t = 0;
+  // Serial.println("HX711 is up");
+
+  //////////////////////////////////////////////////////////////////////////////////
+  while(true)
+  {
+    if (mcp2515.readMessage(&kcan_read_msg_) == MCP2515::ERROR_OK) {
+      // CAN 메시지 출력
+//      Serial.print(kcan_read_msg_.can_id, HEX); // ID 출력
+//      Serial.print(" ");
+//      Serial.print(kcan_read_msg_.can_dlc, HEX); // DLC 출력
+//      Serial.print(" ");
+//      for (int i = 0; i < kcan_read_msg_.can_dlc; i++) {
+//        Serial.print(kcan_read_msg_.data[i], HEX);
+//      }
+//      Serial.println("");
+
+      if (kcan_read_msg_.can_id == can_id_force_){  // 26
+        // mN 으로 force 계산
+        fx_ = (kcan_read_msg_.data[0]*256 + kcan_read_msg_.data[1])-30000;
+        fy_ = (kcan_read_msg_.data[2]*256 + kcan_read_msg_.data[3])-30000;
+        fz_ = (kcan_read_msg_.data[4]*256 + kcan_read_msg_.data[5])-30000;
+        // Serial.println("FORCE");
+      }
+      else if (kcan_read_msg_.can_id == can_id_torque_){ //27
+        // mNm 으로 torque 계산
+        tx_ = (kcan_read_msg_.data[0]*256 + kcan_read_msg_.data[1])-30000;
+        ty_ = (kcan_read_msg_.data[2]*256 + kcan_read_msg_.data[3])-30000;
+        tz_ = (kcan_read_msg_.data[4]*256 + kcan_read_msg_.data[5])-30000;
+        // Serial.println("TORQUE");
+      }
+    }
+    
+    
+    static boolean newDataReady = 0;
+    const int serialPrintInterval = 0; //increase value to slow down serial print activity
+
+    // check for new data/start next conversion:
+    if (lc1.update()) newDataReady = true;
+    if (lc2.update()) newDataReady = true;
+    // lc2.update();
+
+    //get smoothed value from data set
+    if ((newDataReady)) {
+      if (millis() > t + serialPrintInterval) {
+        lc_data_[0] = lc1.getData();
+        lc_data_[1] = lc2.getData();
+
+        lc_tare_offset_[0] = lc1.getTareOffset();
+        lc_tare_offset_[1] = lc2.getTareOffset();
+        // Serial.print("Load_cell 1 output val: ");
+        // Serial.print(a);
+        // Serial.print("    Load_cell 2 output val: ");
+        // Serial.println(b);
+        newDataReady = 0;
+        t = millis();
+      }
+    }
+  }
+  // FTS.spin(pvParameters);
+}
+
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(115200);
+  SPI.begin();
+
+  integerQueue = xQueueCreate(10, // Queue length
+                              sizeof(int) // Queue item size
+                              );
+
+  if (integerQueue != NULL) {
+    
+  //  xTaskCreate(SensorsNode,
+  //              "SensorsNode",
+  //              512,
+  //              NULL,
+  //              2,
+  //              NULL);
+    // xTaskCreate(LCNode,
+    //             "LoadcellNode",
+    //             384,
+    //             NULL,
+    //             2,
+    //             NULL);
+    // xTaskCreate(FTSNode,
+    //             "FTSNode",
+    //             128,
+    //             NULL,
+    //             2,
+    //             NULL);
+    
+    xTaskCreate(SerialWriteNode,
+                "SerialWriteNode",
+                256,
+                NULL,
+                2,
+                NULL);
+    xTaskCreate(SensorsNode,
+                "SensorsNode",
+                384,
+                NULL,
+                2,
+                NULL);
+    // xTaskCreate(SensorsNode,
+    //             "SensorsNode",
+    //             384,
+    //             NULL,
+    //             2,
+    //             NULL);
+    
+  }
+}
+
+void loop() {
+
+}

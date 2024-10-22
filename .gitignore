@@ -1,0 +1,6 @@
+*.pyc
+build
+install
+log
+.git
+record

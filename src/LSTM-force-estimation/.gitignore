@@ -1,0 +1,8 @@
+.idea
+build
+install
+log
+data
+images_with_arrow_*
+scripts/videos
+fit*
