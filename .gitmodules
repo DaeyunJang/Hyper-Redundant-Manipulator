@@ -1,4 +1,0 @@
-[submodule "src/LSTM-force-estimation"]
-	path = src/LSTM-force-estimation
-	url = https://github.com/Bigyuun/LSTM-force-estimation.git
-	branch = humble
