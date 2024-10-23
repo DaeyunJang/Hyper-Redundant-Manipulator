@@ -1,0 +1,3 @@
+[submodule "src/LSTM-force-estimation"]
+	path = src/LSTM-force-estimation
+	url = https://github.com/DaeyunJang/LSTM-force-estimation.git

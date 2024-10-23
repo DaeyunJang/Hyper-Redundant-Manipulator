@@ -1,16 +1,15 @@
 
 /**
- * @file kinematics_control_node.hpp
+ * @file control_node.hpp
  * @author daeyun (bigyun9375@gmail.com)
  * @brief 
- * @version 0.1
- * @date 2023-11-14
- * 
- * @copyright Copyright (c) 2023
+ * @version 1.0
+ * @date 2024-10-23
+ * @copyright Copyright (c) 2024
  * 
  */
-#ifndef KINEMATICS_CONTROL_NODE_HPP_
-#define KINEMATICS_CONTROL_NODE_HPP_
+#ifndef CONTROL_NODE_HPP_
+#define CONTROL_NODE_HPP_
 
 #include <stdio.h>
 #include <stdlib.h>

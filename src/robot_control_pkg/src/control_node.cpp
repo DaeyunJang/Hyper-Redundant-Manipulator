@@ -1,6 +1,5 @@
-#include "kinematics_control_node.hpp"
+#include "control_node.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include <algorithm>  
 
 using MotorState = custom_interfaces::msg::MotorState;
 using MotorCommand = custom_interfaces::msg::MotorCommand;

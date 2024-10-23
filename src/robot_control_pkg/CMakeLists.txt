@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(kinematics_control_pkg)
+project(robot_control_pkg)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -23,7 +23,7 @@ find_package(robot_state_publisher REQUIRED)
 find_package(urdf REQUIRED)
 
 include_directories(include
-  "include/kinematics_control_pkg"
+  "include/robot_control_pkg"
   "/opt/ros/hubmle/include"
   "../tcp_pkg/include/tcp_pkg"
 
@@ -68,9 +68,6 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY launch # urdf rviz meshes param
-  DESTINATION share/${PROJECT_NAME}
-)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

@@ -3,9 +3,9 @@
  * @author daeyun (bigyun9375@gmail.com)
  * @brief 
  * @version 0.1
- * @date 2023-08-25
+ * @date 2024-10-23
  * 
- * @copyright Copyright (c) 2023
+ * @copyright Copyright (c) 2024
  * 
  */
 #ifndef HW_DEFINITION_HPP_
