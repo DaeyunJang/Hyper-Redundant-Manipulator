@@ -28,9 +28,9 @@ def generate_launch_description():
     
     return LaunchDescription([
         Node(
-            package='kinematics_control_pkg',
-            executable='kinematics_control',
-            name='kinematics_control',
+            package='robot_control_pkg',
+            executable='robot_control',
+            name='robot_control',
             output='screen',
         ),
     ])

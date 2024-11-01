@@ -12,8 +12,10 @@
                 "/usr/include",
 
                 "${workspaceFoler}/src",
+                "${workspaceFoler}/src/robot_control_pkg",
                 "${workspaceFoler}/src/robot_control_pkg/include",
                 "${workspaceFoler}/src/robot_control_pkg/include/robot_control_pkg",
+                "${workspaceFoler}/src/robot_control_pkg/src",
                 "${workspaceFoler}/**",
                 "${workspaceFoler}/src/tcp_pkg/include",
                 "${workspaceFoler}/install/custom_interfaces/**",
@@ -22,8 +24,7 @@
                 "/usr/lib/python3/dist-packages/PyQt5",
                 "${workspaceFoler}/src/tcp_pkg",
                 "${workspaceFoler}/src/tcp_pkg/include",
-                "${workspaceFoler}/src/robot_control_pkg",
-                "${workspaceFoler}/src/robot_control_pkg/include/**",
+                
             ],
             "name": "ROS",
             "intelliSenseMode": "gcc-x64",

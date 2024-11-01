@@ -174,7 +174,7 @@ class RecordNode(Node):
         # hw_definition.hpp 파일의 경로 설정
         self.get_logger().info(f'{os.getcwd()}')
 
-        hw_definition_hpp_path = './src/kinematics_control_pkg/include/kinematics_control_pkg/hw_definition.hpp'
+        hw_definition_hpp_path = './src/robot_control_pkg/include/robot_control_pkg/hw_definition.hpp'
         # 파싱하여 상수 값을 읽어옴
         constants = self.parse_hw_definition_hpp(hw_definition_hpp_path)
         # 상수 값 출력

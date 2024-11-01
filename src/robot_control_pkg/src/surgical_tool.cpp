@@ -1,7 +1,7 @@
 #include "surgical_tool.hpp"
 
 SurgicalTool::SurgicalTool() {
-	init_surgicaltool(
+	init_surgical_tool(
 		NUM_OF_JOINT,
 		SEGMENT_ARC,
 		SEGMENT_DIAMETER,
@@ -15,7 +15,7 @@ SurgicalTool::~SurgicalTool() {
 
 }
 
-void SurgicalTool::init_surgicaltool(int num_joint,
+void SurgicalTool::init_surgical_tool(int num_joint,
 									 float arc,
 									 float diameter,
 									 float disWire,
@@ -38,7 +38,7 @@ void SurgicalTool::set_forceps_angle(double angle) {	// degree
 	this->target_forceps_angle_ = angle;	// non radian
 }
 
-std::tuple<double, double, double, double, double> SurgicalTool::get_bending_kinematic_result(
+std::vector<double> SurgicalTool::get_IK_result(
 	double pAngle,
 	double tAngle,
 	double gAngle)
@@ -47,15 +47,16 @@ std::tuple<double, double, double, double, double> SurgicalTool::get_bending_kin
 	this->set_bending_angle(pAngle, tAngle);
 	// 2. set angle(degree) o forceps
 	this->set_forceps_angle(gAngle);
-	// 3. calculate kinematics
-	this->kinematics();
+	// 3. calculate inverse_kinematics
+	this->inverse_kinematics();
 
-	return std::make_tuple(this->wrLengthEast_, this->wrLengthWest_, this->wrLengthSouth_, this->wrLengthNorth_, this->wrLengthGrip);
+	std::vector<double> wire_length_results = {this->wrLengthEast_, this->wrLengthWest_, this->wrLengthSouth_, this->wrLengthNorth_, this->wrLengthGrip};
+	return  wire_length_results;
 	// return std::tuple<double, double, double, double, double>
 	// (this->wrLengthEast_, this->wrLengthWest_, this->wrLengthSouth_, this->wrLengthNorth_, this->wrLengthGrip);
 }
 
-void SurgicalTool::kinematics()
+void SurgicalTool::inverse_kinematics()
 {
 	// y = kx (k=SHIFT/SHIFT_THRESHOLD)
 

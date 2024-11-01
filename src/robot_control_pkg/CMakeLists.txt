@@ -8,6 +8,7 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -26,17 +27,21 @@ include_directories(include
   "include/robot_control_pkg"
   "/opt/ros/hubmle/include"
   "../tcp_pkg/include/tcp_pkg"
-
 )
 
-add_executable(kinematics_control
+add_executable(robot_control
   src/main.cpp
-  src/kinematics_control_node.cpp
+  src/control_node.cpp
+  src/controller.cpp
+  src/damping_friction_model.cpp
+  src/HRM_dynamics_model.cpp
+  src/PID_controller.cpp
   src/surgical_tool.cpp
 )
-ament_target_dependencies(kinematics_control
+ament_target_dependencies(robot_control
   rclcpp
   rclcpp_action
+  rcl_interfaces
   std_msgs
   std_srvs
   sensor_msgs
@@ -59,7 +64,7 @@ ament_target_dependencies(homing
 # DY
 # install
 install(TARGETS
-  kinematics_control
+  robot_control
   homing
   # joint_state_publisher
   # broadcaster
@@ -68,6 +73,9 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

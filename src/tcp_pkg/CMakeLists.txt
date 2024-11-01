@@ -26,7 +26,7 @@ find_package(custom_interfaces REQUIRED)
 
 include_directories("./include/tcp_pkg/"
                     "/opt/ros/humble/include"
-                    "../kinematics_control_pkg/include/kinematics_control_pkg"
+                    "../robot_control_pkg/include/robot_control_pkg"
 )
 
 # DY
@@ -35,8 +35,8 @@ add_executable(tcpclient src/main.cpp src/tcp_node.cpp)
 ament_target_dependencies(tcpclient
   rclcpp
   rclcpp_action
-  std_msgs 
-  sensor_msgs 
+  std_msgs
+  sensor_msgs
   geometry_msgs
   custom_interfaces
 )

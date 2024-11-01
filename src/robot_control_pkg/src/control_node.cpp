@@ -1,15 +1,20 @@
 #include "control_node.hpp"
-#include "rclcpp/rclcpp.hpp"
 
 using MotorState = custom_interfaces::msg::MotorState;
 using MotorCommand = custom_interfaces::msg::MotorCommand;
 using namespace std::chrono_literals;
 
-KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_options)
-: Node("KinematicsControlNode", node_options)
+ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
+: Node("ControlNode", node_options), control_mode_(ControlMode::kKinematics), loop_rate_(SAMPLING_HZ)
 {
   this->declare_parameter("qos_depth", 10);
   int8_t qos_depth = this->get_parameter("qos_depth", qos_depth);
+
+  this->declare_parameter("control_mode", "kinematics");
+  // 파라미터 변경 콜백 등록
+  param_callback_handle_ = this->add_on_set_parameters_callback(
+    std::bind(&ControlNode::parameter_callback, this, std::placeholders::_1)
+  );
 
   const auto QoS_RKL10V =
   rclcpp::QoS(rclcpp::KeepLast(qos_depth)).reliable().durability_volatile();
@@ -56,14 +61,8 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
 
         for (int i=0; i<NUM_OF_MOTORS; i++) {
           this->wire_length_.data[i] = this->motor_state_.actual_position[i] * 2 / gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
-          // this->wire_length_.data.push_back(this->motor_state_.actual_position[i] * 2 / gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION));
         }
         this->wire_length_publisher_->publish(this->wire_length_);
-        // if(this->op_mode_ == kEnable) {
-        //   this->cal_inverse_kinematics();
-        //   this->motor_control_publisher_->publish(this->motor_control_target_val_);
-        //   this->surgical_tool_pose_publisher_->publish(this->surgical_tool_pose_);
-        // }
       }
     );
   
@@ -85,14 +84,68 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
         } catch (const std::runtime_error & e) {
           RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
         }
-        
+      }
+    );
+
+  external_force_subscriber_ =
+    this->create_subscription<geometry_msgs::msg::Vector3>(
+      "estimated_external_force",
+      QoS_RKL10V,
+      [this] (const geometry_msgs::msg::Vector3::SharedPtr msg) -> void
+      {
+        try {
+          this->external_force_op_flag_ = true;
+          this->external_force_.x = msg->x;
+          this->external_force_.y = msg->y;
+          RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_external_force.");
+        } catch (const std::runtime_error & e) {
+          RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+        }
+      }
+    );
+  
+  segment_angle_subscriber =
+    this->create_subscription<std_msgs::msg::Float32MultiArray>(
+      "estimated_segment_angle/relative",
+      QoS_RKL10V,
+      [this] (const std_msgs::msg::Float32MultiArray::SharedPtr msg) -> void
+      {
+        try {
+          this->segment_angle_op_flag_ = true;
+          this->segment_angle_.data = msg->data;
+
+          RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/relative.");
+        } catch (const std::runtime_error & e) {
+          RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+        }
+      }
+    );
+  
+  segment_angular_velocity_subscriber =
+    this->create_subscription<std_msgs::msg::Float32MultiArray>(
+      "estimated_segment_angle/relative",
+      QoS_RKL10V,
+      [this] (const std_msgs::msg::Float32MultiArray::SharedPtr msg) -> void
+      {
+        try {
+          this->segment_angular_velocity_op_flag_ = true;
+          this->segment_angular_velocity_.data = msg->data;
+
+          RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/relative.");
+        } catch (const std::runtime_error & e) {
+          RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+        }
       }
     );
 
 
-  /**
+
+
+
+
+  /**********************************************************************
    * @brief service
-   */
+   **********************************************************************/
   auto get_target_move_motor_direct = 
   [this](
   const std::shared_ptr<MoveMotorDirect::Request> request,
@@ -128,18 +181,22 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
     }
-    
   };
   move_motor_direct_service_server_ = 
-    create_service<MoveMotorDirect>("kinematics/move_motor_direct", get_target_move_motor_direct);
+    create_service<MoveMotorDirect>("move_motor_direct", get_target_move_motor_direct);
 
-  auto get_target_move_tool_angle = 
+  auto kinematics_move_tool_angle = 
   [this](
   const std::shared_ptr<MoveToolAngle::Request> request,
   std::shared_ptr<MoveToolAngle::Response> response) -> void
   {
     try {
       // run
+      if (control_mode_ != ControlMode::kKinematics) {
+        RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
+        return;
+      }
+
       if(this->op_mode_ == kEnable) {
         if(request->mode == 0) {
           // MOVE ABSOLUTELY
@@ -160,15 +217,15 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
           this->surgical_tool_pose_publisher_->publish(this->surgical_tool_pose_);
         }
         response->success = true;
-        RCLCPP_INFO(this->get_logger(), "Service <MoveToolAngle> accept the request");
+        RCLCPP_INFO(this->get_logger(), "Service <kinematics/move_tool_angle> accept the request");
       }
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
     }
     
   };
-  move_tool_angle_service_server_ = 
-    create_service<MoveToolAngle>("kinematics/move_tool_angle", get_target_move_tool_angle);
+  kinematics_move_tool_angle_service_server_ = 
+    create_service<MoveToolAngle>("kinematics/move_tool_angle", kinematics_move_tool_angle);
 
 
   auto sine_wave_callback = 
@@ -178,13 +235,18 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
   {
     try {
       // run
+      if (control_mode_ != ControlMode::kKinematics) {
+        RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
+        return;
+      }
+
       if(request->data) {
         // True --> Start timer
         RCLCPP_INFO(this->get_logger(), "Starting sine wave publishing.");
         if (timer_ == nullptr) {
           timer_ = this->create_wall_timer(
             std::chrono::milliseconds(timer_period_ms_),
-            std::bind(&KinematicsControlNode::publish_sine_wave, this));
+            std::bind(&ControlNode::publish_sine_wave, this));
         } else {
           RCLCPP_WARN(this->get_logger(), "Error: sine wave motion is operating. Please stop using [ros2 service call]");
         }
@@ -200,12 +262,12 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
         response->message = "Sine wave publishing stopped.";
       }
 
-      RCLCPP_INFO(this->get_logger(), "Service <sine_wave> accept the request.");
+      RCLCPP_INFO(this->get_logger(), "Service <kinematics/move_sine_wave> accept the request.");
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
     }
   };
-  move_sine_wave_server_ = 
+  kinematics_move_sine_wave_server_ = 
     create_service<std_srvs::srv::SetBool>("kinematics/move_sine_wave", sine_wave_callback);
 
 
@@ -215,6 +277,11 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
   {
     try {
+      if (control_mode_ != ControlMode::kKinematics) {
+        RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
+        return;
+      }
+
       // run
       if(request->data) {
         // True --> Start timer
@@ -222,13 +289,12 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
         if (timer_ == nullptr) {
           timer_ = this->create_wall_timer(
             std::chrono::milliseconds(timer_period_ms_),
-            std::bind(&KinematicsControlNode::publish_circle_motion, this));
+            std::bind(&ControlNode::publish_circle_motion, this));
         } else {
           RCLCPP_WARN(this->get_logger(), "Error: circle motion is operating. Please stop using [ros2 service call]");
         }
         response->success = true;
         response->message = "Circle-motion publishing started.";
-        
       } else {
         // 서비스 요청이 False일 때 타이머 중지
         if (timer_ != nullptr) {
@@ -239,12 +305,12 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
         response->message = "Circle-motion publishing stopped.";
       }
 
-      RCLCPP_INFO(this->get_logger(), "Service <circle_motion> accept the request.");
+      RCLCPP_INFO(this->get_logger(), "Service <kinematics/move_circle_motion> accept the request.");
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
     }
   };
-  move_circle_motion_server_ = 
+  kinematics_move_circle_motion_server_ = 
     create_service<std_srvs::srv::SetBool>("kinematics/move_circle_motion", circle_motion_callback);
 
   auto moebius_motion_callback = 
@@ -253,6 +319,11 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
   {
     try {
+      if (control_mode_ != ControlMode::kKinematics) {
+        RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
+        return;
+      }
+
       // run
       if(request->data) {
         // True --> Start timer
@@ -260,7 +331,7 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
         if (timer_ == nullptr) {
           timer_ = this->create_wall_timer(
             std::chrono::milliseconds(timer_period_ms_),
-            std::bind(&KinematicsControlNode::publish_moebius_motion, this));
+            std::bind(&ControlNode::publish_moebius_motion, this));
         }
         else {
           RCLCPP_WARN(this->get_logger(), "Error: moebius motion is operating. Please stop using [ros2 service call]");
@@ -277,53 +348,95 @@ KinematicsControlNode::KinematicsControlNode(const rclcpp::NodeOptions & node_op
         response->message = "Moebius-motion publishing stopped.";
       }
 
-      RCLCPP_INFO(this->get_logger(), "Service <circle_motion> accept the request.");
+      RCLCPP_INFO(this->get_logger(), "Service <kinematics/move_moebius_motion> accept the request.");
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
     }
   };
-  move_moebius_motion_server_ = 
+  kinematics_move_moebius_motion_server_ = 
     create_service<std_srvs::srv::SetBool>("kinematics/move_moebius_motion", moebius_motion_callback);
 
+
+  auto dynamics_move_tool_angle = 
+  [this](
+  const std::shared_ptr<MoveToolAngle::Request> request,
+  std::shared_ptr<MoveToolAngle::Response> response) -> void
+  {
+    try {
+      // run
+      if (control_mode_ != ControlMode::kDynamics) {
+        RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'DYNAMICS\' mode. Change parameter \'control_mode\'.");
+        return;
+      }
+
+      if(this->op_mode_ == kEnable) {
+        if(request->mode == 0) {
+          /**
+           * @brief 
+           * DYNAMICS does not use ''ABSOLUTE'' mode
+              > only ''RELATIVE'' mode
+           */
+          
+          // MOVE ABSOLUTELY
+          // RCLCPP_INFO(this->get_logger(), "MODE: %d, tilt: %.2f, pan: %.2f, grip: %.2f", request->mode, request->tiltangle, request->panangle, request->gripangle);
+          // this->cal_inverse_kinematics(request->panangle, request->tiltangle, request->gripangle);
+          // this->motor_control_publisher_->publish(this->motor_control_target_val_);
+          // this->surgical_tool_pose_publisher_->publish(this->surgical_tool_pose_);
+        }
+        else if (request->mode == 1) {
+          // MOVE RELATIVELY
+          double pan_angle =  this->current_pan_angle_ + request->panangle;
+          double tilt_angle = this->current_tilt_angle_ + request->tiltangle;
+          double grip_angle = this->current_grip_angle_ + request->gripangle;
+
+          this->theta_desired_ = pan_angle;
+          RCLCPP_INFO(this->get_logger(), "Dynamics mode, target theta_desired: %.2f", this->theta_desired_);
+        }
+        response->success = true;
+        RCLCPP_INFO(this->get_logger(), "Service <dynamics/move_tool_angle> accept the request");
+      }
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+    }
+    
+  };
+  dynamics_move_tool_angle_service_server_ = 
+    create_service<MoveToolAngle>("dynamics/move_tool_angle", dynamics_move_tool_angle);
+
+
+
+  // opertion thread which kinematics and dynamics
+  control_thread_ = std::thread(&ControlNode::run_control_thread, this);
   /**
    * @brief homing
    */
-  // this->homingthread_ = std::thread(&KinematicsControlNode::homing, this);
+  // this->homingthread_ = std::thread(&ControlNode::homing, this);
 }
 
-KinematicsControlNode::~KinematicsControlNode() {
-
+ControlNode::~ControlNode() {
+  if (control_thread_.joinable()) {
+    control_thread_.join();
+  }
 }
 
-void KinematicsControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gAngle) {
+void ControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gAngle) {
   /* code */
   /* input : actual pos & actual velocity & controller input */
   /* output : target value*/
-
   this->current_pan_angle_ = pAngle;
   this->current_tilt_angle_ = tAngle;
   this->current_grip_angle_ = gAngle;
   this->surgical_tool_pose_.angular.y = tAngle * M_PI/180;
   this->surgical_tool_pose_.angular.z = pAngle * M_PI/180;
-  this->ST_.get_bending_kinematic_result(this->current_pan_angle_, this->current_tilt_angle_, this->current_grip_angle_);
-
-  // std::cout << this->current_pan_angle_ << std::endl;
-  // std::cout << this->current_tilt_angle_ << std::endl;
-  // std::cout << this->current_grip_angle_ << std::endl;
+  this->HRM_controller_.surgical_tool_.get_IK_result(this->current_pan_angle_, this->current_tilt_angle_, this->current_grip_angle_);
+  // this->ST_.get_IK_result(this->current_pan_angle_, this->current_tilt_angle_, this->current_grip_angle_);
 
   double f_val[5];
-  f_val[0] = this->ST_.wrLengthEast_;
-  f_val[1] = this->ST_.wrLengthWest_;
-  f_val[2] = this->ST_.wrLengthSouth_;
-  f_val[3] = this->ST_.wrLengthNorth_;
-  f_val[4] = this->ST_.wrLengthGrip;
-
-  // std::cout << "--------------------------" << std::endl;
-  // std::cout << "East  : " << f_val[0] << " mm" << std::endl;
-  // std::cout << "West  : " << f_val[1] << " mm" << std::endl;
-  // std::cout << "South : " << f_val[2] << " mm" << std::endl;
-  // std::cout << "North : " << f_val[3] << " mm" << std::endl;
-  // std::cout << "Grip  : " << f_val[4] << " mm" << std::endl;
+  f_val[0] = this->HRM_controller_.surgical_tool_.wrLengthEast_;
+  f_val[1] = this->HRM_controller_.surgical_tool_.wrLengthWest_;
+  f_val[2] = this->HRM_controller_.surgical_tool_.wrLengthSouth_;
+  f_val[3] = this->HRM_controller_.surgical_tool_.wrLengthNorth_;
+  f_val[4] = this->HRM_controller_.surgical_tool_.wrLengthGrip;
 
   this->motor_control_target_val_.header.stamp = this->now();
   this->motor_control_target_val_.header.frame_id = "kinematics_motor_target_position";
@@ -365,22 +478,22 @@ void KinematicsControlNode::cal_inverse_kinematics(double pAngle, double tAngle,
   // std::cout << "fin" <<std::endl;
 }
 
-double KinematicsControlNode::gear_encoder_ratio_conversion(double gear_ratio, int e_channel, int e_resolution) {
+double ControlNode::gear_encoder_ratio_conversion(double gear_ratio, int e_channel, int e_resolution) {
   return gear_ratio * e_channel * e_resolution;
 }
 
-void KinematicsControlNode::set_position_zero() {
+void ControlNode::set_position_zero() {
   for (int i=0; i<NUM_OF_MOTORS; i++) {
     this->virtual_home_pos_[i] = 0;
   }
 }
 
-void KinematicsControlNode::publishall()
+void ControlNode::publishall()
 {
 
 }
 
-void KinematicsControlNode::publish_sine_wave()
+void ControlNode::publish_sine_wave()
 {
   double omega = 2.0 * M_PI / period_;
   angle_ = amp_ * std::sin(omega * count_);
@@ -391,7 +504,7 @@ void KinematicsControlNode::publish_sine_wave()
   std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
 }
 
-void KinematicsControlNode::publish_circle_motion()
+void ControlNode::publish_circle_motion()
 {
   double omega = 2.0 * M_PI / period_;
   double pan_deg = amp_ * std::sin(omega * count_);
@@ -403,7 +516,7 @@ void KinematicsControlNode::publish_circle_motion()
   std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
 }
 
-void KinematicsControlNode::publish_moebius_motion()
+void ControlNode::publish_moebius_motion()
 {
   double omega = 2.0 * M_PI / period_;
   double pan_deg = 0.5 * amp_ * std::sin((omega*2.0) * count_);
@@ -413,4 +526,68 @@ void KinematicsControlNode::publish_moebius_motion()
   surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
   count_ += count_add_;
   std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
+}
+
+rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const std::vector<rclcpp::Parameter> &parameters) {
+  for (const auto &param : parameters) {
+    if (param.get_name() == "control_mode") {
+      if (param.as_string() == "kinematics") {
+        control_mode_ = ControlMode::kKinematics;
+        RCLCPP_INFO(this->get_logger(), "Switched to KINEMATICS mode");
+      } else if (param.as_string() == "dynamics") {
+        control_mode_ = ControlMode::kDynamics;
+        RCLCPP_INFO(this->get_logger(), "Switched to DYNAMICS mode");
+      } else {
+        RCLCPP_WARN(this->get_logger(), "Unknown mode. Keeping previous mode.");
+      }
+    }
+  }
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+  return result;
+}
+
+void ControlNode::run_control_thread() {
+  RCLCPP_INFO(this->get_logger(), "control_thread is started on [%s]", this->get_parameter("control_mode").as_string().c_str());
+
+  while (rclcpp::ok()) {
+    if (control_mode_ == ControlMode::kDynamics) {
+      // run dynamics() code
+      /***
+       * @todo
+       * optimazation for memory based on avoiding memory copy
+       */
+      double theta_desired = this->theta_desired_;
+
+      // if using std::vector<double> a = msg.data
+      // The type must be conversion from float(msg.data) to double
+      std::vector<double> theta_actual(this->segment_angle_.data.begin(), this->segment_angle_.data.end());
+      std::vector<double> dtheta_dt_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
+      double dt = DT;
+      std::vector<double> force_external = {this->external_force_.x, this->external_force_.y};
+
+      auto wire_length_to_move = this->HRM_controller_.compute(
+        theta_desired,
+        theta_actual,
+        dtheta_dt_actual,
+        dt,
+        force_external);
+
+      double f_val[5];
+      f_val[0] = wire_length_to_move[0];  // East
+      f_val[1] = wire_length_to_move[1];  // West
+      f_val[2] = wire_length_to_move[2];  // South
+      f_val[3] = wire_length_to_move[3];  // North
+      f_val[4] = wire_length_to_move[4];  // grip
+
+      this->motor_control_target_val_.header.stamp = this->now();
+      this->motor_control_target_val_.header.frame_id = "kinematics_motor_target_position";
+      this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+      this->motor_control_target_val_.target_position[1] = DIRECTION_COUPLER * f_val[1] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+
+      loop_rate_.sleep();
+    } else {  // kinematics
+      //
+    }
+  }
 }

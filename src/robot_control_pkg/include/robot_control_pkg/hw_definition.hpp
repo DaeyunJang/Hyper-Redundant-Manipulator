@@ -1,3 +1,4 @@
+#pragma once
 /**
  * @file hw_definition.hpp
  * @author daeyun (bigyun9375@gmail.com)

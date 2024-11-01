@@ -1,3 +1,4 @@
+#pragma once
 #ifndef DAMPING_FRICTION_MODEL_HPP
 #define DAMPING_FRICTION_MODEL_HPP
 
@@ -16,7 +17,7 @@
  * @return std::pair<double, double> Pair where first value is B, and second is the resulting friction.
  *
  * @example
- * #include "B_and_Fric.hpp"
+ * #include "damping_friction_model.hpp"
  * #include <iostream>
  *
  * int main() {
@@ -26,15 +27,28 @@
  *     std::vector<double> p_dq = {0.005, 0.01, 0.015};
  *     int mode = 1;
  *
- *     auto result = B_and_Fric(q, dq, p_q, p_dq, mode);
+ *     auto result = compute_dampingCoeff_and_friction(q, dq, p_q, p_dq, mode);
  *     std::cout << "B: " << result.first << ", res_friction: " << result.second << std::endl;
  *     return 0;
  * }
  */
-std::pair<double, double> DampingFrictionModel(const std::vector<double>& q,
-                                  const std::vector<double>& dq,
-                                  const std::vector<double>& p_q,
-                                  const std::vector<double>& p_dq,
-                                  int mode);
+class DampingFrictionModel {
+public:
+  DampingFrictionModel();
+  ~DampingFrictionModel();
+
+  std::pair<double, double> compute_dampingCoeff_and_friction(
+    const std::vector<double>& q,
+    const std::vector<double>& dq,
+    const std::vector<double>& q_prev,
+    const std::vector<double>& dq_prev,
+    int mode);  //
+
+  std::vector<double> q_;
+  std::vector<double> dq_;
+  std::vector<double> q_prev_;
+  std::vector<double> dq_prev_;
+
+};
 
 #endif  // DAMPING_FRICTION_MODEL_HPP

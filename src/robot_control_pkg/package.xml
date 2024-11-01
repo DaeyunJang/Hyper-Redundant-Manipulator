@@ -19,6 +19,7 @@
   <depend>custom_interfaces</depend>
   <depend>sensor_msgs</depend>
   <depend>rclcpp_action</depend>
+  <depend>rcl_interfaces</depend>
 
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>joint_state_publisher</exec_depend>

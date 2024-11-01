@@ -5,8 +5,8 @@
 #include <signal.h>
 
 #include "rclcpp/rclcpp.hpp"
-#include "kinematics_control_node.hpp"
 #include "rcutils/cmdline_parser.h"
+#include "control_node.hpp"
 
 void print_help()
 {
@@ -18,7 +18,7 @@ void print_help()
 
 void signal_callback_handler (int signum) {
   signal(signum, SIG_IGN);
-  printf("Ctrl+C break.\n");  
+  printf("Ctrl+C break.\n");
   exit(1);
 }
 
@@ -31,9 +31,17 @@ int main(int argc, char * argv[])
 
   rclcpp::init(argc, argv);
   // signal(SIGINT, signal_callback_handler);
-  auto node = std::make_shared<KinematicsControlNode>();
+  auto node = std::make_shared<ControlNode>();
+
+  // if use
+  // rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+  // it has limitation of thread --> poor performance
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node);
+
   std::cout << "ros spin() start" << std::endl;
-  rclcpp::spin(node);
+  executor.spin();
+  
   rclcpp::shutdown();
   std::cout << "ROS node Shutdown" << std::endl;
   return 0;

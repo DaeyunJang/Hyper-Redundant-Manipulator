@@ -1,3 +1,4 @@
+#pragma once
 /**
  * @file surgical_tool.hpp
  * @author daeyun (bigyun9375@gmail.com)
@@ -65,7 +66,7 @@ public:
    * @authors DY
    * @brief initialize of surgical tool
    */
-  void init_surgicaltool(
+  void init_surgical_tool(
     int num_joint,
     float arc,
     float diameter,
@@ -112,12 +113,12 @@ public:
    *         or use the return values
    * @return std::tuple<double ...>
    */
-  std::tuple<double, double, double, double, double> get_bending_kinematic_result(double pAngle, double tAngle, double grip);
+  std::vector<double> get_IK_result(double pAngle, double tAngle, double grip);
 
   /**
-   * @brief calculate the kinematics
+   * @brief calculate the inverse-kinematics
    */
-  void kinematics();
+  void inverse_kinematics();
 
   /**
    * @brief make input variable to 'mm' unit

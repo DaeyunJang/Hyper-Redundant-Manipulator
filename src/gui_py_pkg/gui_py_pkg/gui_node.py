@@ -1,4 +1,5 @@
 import sys, os
+import threading
 os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = '/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so'
 
 import PyQt5.QtCore
@@ -21,6 +22,9 @@ from rclpy.qos import QoSDurabilityPolicy
 from rclpy.qos import QoSHistoryPolicy
 from rclpy.qos import QoSReliabilityPolicy
 from rclpy.node import Node
+from rcl_interfaces.msg import ParameterValue
+from rclpy.parameter import Parameter
+from rclpy.executors import MultiThreadedExecutor
 
 from std_msgs.msg import String
 from std_msgs.msg import Bool
@@ -47,7 +51,7 @@ class GUINode(Node):
 
         # hw_definition.hpp 파일의 경로 설정
         print(os.getcwd())
-        hw_definition_hpp_path = './src/kinematics_control_pkg/include/kinematics_control_pkg/hw_definition.hpp'
+        hw_definition_hpp_path = './src/robot_control_pkg/include/robot_control_pkg/hw_definition.hpp'
         # 파싱하여 상수 값을 읽어옴
         constants = self.parse_hw_definition_hpp(hw_definition_hpp_path)
         # 상수 값 출력
@@ -142,10 +146,10 @@ class GUINode(Node):
 
         self.move_motor_direct_service_client = self.create_client(
             MoveMotorDirect,
-            '/kinematics/move_motor_direct'
+            '/move_motor_direct'
         )
         while not self.move_motor_direct_service_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warning('The "/kinematics/move_motor_direct" service server not available. Check the kinematics_control_node')
+            self.get_logger().warning('The "/move_motor_direct" service server not available. Check the kinematics_control_node')
 
         self.move_tool_angle_service_client = self.create_client(
             MoveToolAngle,
@@ -153,6 +157,14 @@ class GUINode(Node):
         )
         while not self.move_tool_angle_service_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().warning('The "/kinematics/move_tool_angle" service server not available. Check the kinematics_control_node')
+
+        self.move_tool_angle_dynamics_service_client = self.create_client(
+            MoveToolAngle,
+            '/dynamics/move_tool_angle'
+        )
+        while not self.move_tool_angle_dynamics_service_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning('The "/dynamics/move_tool_angle" service server not available. Check the kinematics_control_node')
+
 
         self.recoder_service_client = self.create_client(
             SetBool,
@@ -209,6 +221,16 @@ class GUINode(Node):
         service_request.gripangle = grip
         service_request.mode = mode
         future = self.move_tool_angle_service_client.call_async(service_request)
+        # rclpy.spin_until_future_complete(self, future)
+        return future.result()
+    
+    def send_request_move_tool_angle_dynamics(self, pan=0.0, tilt=0.0, grip=0.0, mode=0):
+        service_request = MoveToolAngle.Request()
+        service_request.panangle = pan
+        service_request.tiltangle = tilt
+        service_request.gripangle = grip
+        service_request.mode = mode
+        future = self.move_tool_angle_dynamics_service_client.call_async(service_request)
         # rclpy.spin_until_future_complete(self, future)
         return future.result()
     
@@ -323,7 +345,7 @@ class MyGUI(QWidget):
         '''
         self.layout_mode = QVBoxLayout()
         self.label_mode = QLabel('Operation Mode')
-        self.checkbox_mode_list = [QCheckBox('manual'), QCheckBox('kinematics')]
+        self.checkbox_mode_list = [QCheckBox('manual'), QCheckBox('kinematics'), QCheckBox('Dynamics')]
         self.checkbox_mode_list[0].setChecked(False)
         self.checkbox_mode_list[0].setFixedWidth(200)
         self.checkbox_mode_list[0].clicked.connect(self.checkbox_mode_clicked)
@@ -331,6 +353,9 @@ class MyGUI(QWidget):
         self.checkbox_mode_list[1].setChecked(True)
         self.checkbox_mode_list[1].setFixedWidth(200)
         self.checkbox_mode_list[1].clicked.connect(self.checkbox_mode_clicked)
+        self.checkbox_mode_list[2].setChecked(False)
+        self.checkbox_mode_list[2].setFixedWidth(200)
+        self.checkbox_mode_list[2].clicked.connect(self.checkbox_mode_clicked)
         # self.checkbox_mode_list[1].stateChanged.connect(self.disable_mode)
         self.layout_mode.addWidget(self.label_mode)
         self.layout_mode.addWidget(self.checkbox_mode_list[0])
@@ -472,7 +497,7 @@ class MyGUI(QWidget):
         # self.motor_kinematics_layout.addWidget(self.motor_kinematics_label)
         # self.motor_kinematics_layout.addWidget(self.motor_kinematics_line_edit)
         # self.motor_kinematics_layout.addWidget(self.motor_kinematics_button)
-        self.layout_global.addLayout(self.motor_kinematics_layout)
+        # self.layout_global.addLayout(self.motor_kinematics_layout)
 
     def init_filter_checkbox(self):
         self.layout_fileter_checkbox = QVBoxLayout()
@@ -639,10 +664,30 @@ class MyGUI(QWidget):
     #         self.node.get_logger().warning(f'F:FuncAnimation() -> {e}')
     def checkbox_mode_clicked(self):
         sender = self.sender()
+
+        # manual
         if sender == self.checkbox_mode_list[0] and self.checkbox_mode_list[0].isChecked():
             self.checkbox_mode_list[1].setChecked(False)
+            self.checkbox_mode_list[2].setChecked(False)
+
+        # kinematics
         elif sender == self.checkbox_mode_list[1] and self.checkbox_mode_list[1].isChecked():
+            self.node.get_logger().info("Setting parameter...")
+            # 원하는 파라미터 설정 (예: kinematics 모드)
+            param = Parameter('control_mode', Parameter.Type.STRING, 'kinematics')
+            self.node.set_parameters([param])
+
             self.checkbox_mode_list[0].setChecked(False)
+            self.checkbox_mode_list[2].setChecked(False)
+
+        # dynamics
+        elif sender == self.checkbox_mode_list[2] and self.checkbox_mode_list[2].isChecked():
+            self.node.get_logger().info("Setting parameter...")
+            # 원하는 파라미터 설정 (예: kinematics 모드)
+            param = Parameter('control_mode', Parameter.Type.STRING, 'dynamics')
+            self.node.set_parameters([param])
+            self.checkbox_mode_list[0].setChecked(False)
+            self.checkbox_mode_list[1].setChecked(False)
 
     def checkbox_amode_clicked(self):
         sender = self.sender()
@@ -678,6 +723,7 @@ class MyGUI(QWidget):
                 return
             else:
 
+                # Mode : Manual operation of each motors
                 if self.checkbox_mode_list[0].isChecked():
                     if self.node.opmode == '0x08':   # CSP
                         # cmd_val = self.node.motor_state.actual_position[num] + (int(self.motor_pub_line_edit_list[num].text()))
@@ -688,6 +734,7 @@ class MyGUI(QWidget):
                         cmd_val = int(self.motor_pub_line_edit_list[num].text())
                     self.node.get_logger().info(f'motor #{num} -> {cmd_val} command update {response}.')
 
+                # Mode : Operated by the inverse-kinematics of manipulator
                 elif self.checkbox_mode_list[1].isChecked():
                     # Calculate the encoder value from the degree of surgical tool target
 
@@ -699,6 +746,12 @@ class MyGUI(QWidget):
                         response = self.node.send_request_move_tool_angle(pan=float(self.motor_kinematics_line_edit_list[0].text()),
                                                                           tilt=float(self.motor_kinematics_line_edit_list[1].text()),
                                                                           mode=1)
+                # Mode : Dynamics
+                elif self.checkbox_mode_list[2].isChecked():
+                    response = self.node.send_request_move_tool_angle_dynamics(pan=float(self.motor_kinematics_line_edit_list[0].text()),
+                                                                      tilt=float(self.motor_kinematics_line_edit_list[1].text()),
+                                                                      mode=0)
+                    pass
         except Exception as e:
             self.node.get_logger().warning(f'F:request_motor_move() -> {e}')
             return
@@ -783,7 +836,6 @@ class MyGUI(QWidget):
 
         self.node.data_filter_setting_publisher.publish(msg)
 
-    
 
 def main():
 
@@ -792,7 +844,31 @@ def main():
     app = QApplication(sys.argv)
     gui = MyGUI(node)
     gui.show()
+
     sys.exit(app.exec_())
+    # rclpy.init(args=None)
+    # node = GUINode()
+
+    # # 멀티스레드 실행기를 사용하여 ROS2 노드를 별도의 스레드에서 실행
+    # executor = MultiThreadedExecutor()
+    # executor.add_node(node)
+
+    # # 별도 스레드에서 spin 시작
+    # spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    # spin_thread.start()
+
+    # # PyQt5 GUI 실행
+    # app = QApplication(sys.argv)
+    # gui = MyGUI(node)
+    # gui.show()
+
+    # # GUI 종료 시 실행기와 스레드도 정리
+    # exit_code = app.exec_()
+    # executor.shutdown()
+    # node.destroy_node()
+    # rclpy.shutdown()
+    # spin_thread.join()
+    # sys.exit(exit_code)
 
 if __name__ == '__main__':
     main()

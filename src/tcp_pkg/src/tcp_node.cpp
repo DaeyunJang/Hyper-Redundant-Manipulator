@@ -36,7 +36,7 @@ TCPClientNode::TCPClientNode(const rclcpp::NodeOptions & node_options)
     );
 
   
-  this->commthread_ = std::thread(&TCPClientNode::CommThread, this);
+  this->commthread_ = std::thread(&TCPClientNode::commThread, this);
 }
 
 
@@ -51,7 +51,7 @@ TCPClientNode::~TCPClientNode()
 
 
 
-uint8_t TCPClientNode::Initialize()
+uint8_t TCPClientNode::initialize()
 {
   return this->TCPconfiguration();
 }
@@ -86,8 +86,8 @@ uint8_t TCPClientNode::TCPconfiguration() {
 
 
 
-void TCPClientNode::CommThread() {
-  if (this->Initialize()) {
+void TCPClientNode::commThread() {
+  if (this->initialize()) {
     std::cout << "[TCPClientNode] Init Error." << std::endl;
     return;
   }
@@ -158,7 +158,7 @@ void TCPClientNode::recvmsg()
     send(this->client_socket_, msg, sizeof(msg), 0);
     close(this->client_socket_);
 
-    if (this->Initialize()) {
+    if (this->initialize()) {
       std::cout << "[TCPClientNode] Init Error." << std::endl;
       return;
     }

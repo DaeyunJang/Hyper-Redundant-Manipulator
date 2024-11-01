@@ -28,7 +28,7 @@ def generate_launch_description():
     
     return LaunchDescription([
         Node(
-            package='kinematics_control_pkg',
+            package='robot_control_pkg',
             executable='homing',
             name='homing',
             output='screen',

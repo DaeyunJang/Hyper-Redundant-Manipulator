@@ -46,7 +46,7 @@ def generate_launch_description():
     ),
     IncludeLaunchDescription(
       PythonLaunchDescriptionSource(
-        [get_package_share_directory('kinematics_control_pkg'), '/launch/_launch.py'])
+        [get_package_share_directory('robot_control_pkg'), '/launch/_launch.py'])
     ),
     
     IncludeLaunchDescription(      

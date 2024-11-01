@@ -1,3 +1,4 @@
+#pragma once
 #ifndef DYNAMICS_MODEL_HPP
 #define DYNAMICS_MODEL_HPP
 
@@ -12,17 +13,18 @@
  * @version 1.0
  * @note    I⋅θ¨ + B⋅θ˙ + K⋅θ + τ_ext + τ_fric = τ_input
  */
-class DynamcisModel {
+class HRMDynamicsModel {
 public:
-  DynamcisModel(double inertia, double damping_coef, double stiffness);
-  ~DynamcisModel();
+  HRMDynamicsModel();
+  HRMDynamicsModel(double inertia, double damping_coef, double stiffness);
+  ~HRMDynamicsModel();
   void set_parameters(double inertia, double damping_coef, double stiffness);
 
   void update_inertia(double inertia);
-  void update_damping(double damping_coef_);
+  void update_damping_coefficient(double damping_coef_);
   void update_stiffness(double stiffness);
 
-  void compute_torque(double position, double velocity);
+  double compute_torque(double position, double velocity);
 
   /**
    * @brief // angular acceleration: θ¨ = {τ_input - (B⋅θ˙ + K⋅θ + τ_ext + τ_fric)} / I
@@ -40,7 +42,7 @@ public:
   );
 
 private:
-  double intertia_;
+  double inertia_;
   double damping_coef_;
   double stiffness_;
 

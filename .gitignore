@@ -4,3 +4,4 @@ install
 log
 .git
 record
+.mypy_cache

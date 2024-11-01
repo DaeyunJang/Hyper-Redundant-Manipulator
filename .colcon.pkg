@@ -1,0 +1,4 @@
+{
+    "packages-ignore": ["LSTM-force-estimation/src/custom_interfaces"],
+    "packages-ignore": ["LSTM-force-estimation"]
+}

@@ -63,7 +63,7 @@ private:
    * @brief Setting IP and Port number for TCP connection.
    * @return uint8_t success=0, fail=-1
    */
-  uint8_t Initialize();
+  uint8_t initialize();
 
   /**
    * @author DY
@@ -78,7 +78,7 @@ private:
    *       2. send data to device
    *       3. iteration 1 & 2
    */
-  void CommThread();
+  void commThread();
 
   /**
    * @author DY

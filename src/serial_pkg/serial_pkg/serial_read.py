@@ -101,7 +101,17 @@ class SerialNode(Node):
 
         self.serial_port = '/dev/ttyACM0'  # 사용하는 시리얼 포트(COM 포트)를 지정하세요.
         self.baudrate = 115200  # 아두이노와 통신하는 속도
-        self.ser = serial.Serial(self.serial_port, self.baudrate, timeout=1)
+        self.ser = None
+        while self.ser is None or not self.ser.is_open:
+            try:
+                print(f"Attempting to connect to {self.serial_port} at {self.baudrate} baud...")
+                self.ser = serial.Serial(self.serial_port, self.baudrate, timeout=1)
+                print("Connection successful!")
+            except serial.SerialException as e:
+                print(f"Connection failed: {e}. Retrying in 2 seconds...")
+                time.sleep(2)  # 2초 후 재시도
+
+        # self.ser = serial.Serial(self.serial_port, self.baudrate, timeout=1)
         self.get_logger().info(f'Serial status: {self.ser}')
 
         # self.force3d = [0 for i in range(3)]   # empty list [0, 0, 0]

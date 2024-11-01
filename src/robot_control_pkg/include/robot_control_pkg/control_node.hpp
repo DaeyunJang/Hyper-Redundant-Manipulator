@@ -1,3 +1,4 @@
+#pragma once
 
 /**
  * @file control_node.hpp
@@ -36,14 +37,18 @@
 #include <tuple>
 #include <cstdint>
 #include <stdexcept>
+#include <thread>
+#include <numeric>
 
 // Surgical Tool Class
-#include "surgical_tool.hpp"
 #include "hw_definition.hpp"
+#include "dynamics_parameters.hpp"
+#include "controller.hpp"
 
 // ROS2
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/int32_multi_array.hpp"
 #include "std_msgs/msg/int32.hpp"
@@ -64,7 +69,20 @@ typedef enum  {
   kHoming = 5,
 } OpMode;
 
-class KinematicsControlNode : public rclcpp::Node
+typedef enum  {
+  kKinematics,
+  kDynamics,
+} ControlMode;
+
+
+
+/**
+ * @brief 
+ * @author DY
+ * @date 2024.10.31. 
+ * @todo make choosing one which Kinematics or Dynamics version
+ */
+class ControlNode : public rclcpp::Node
 {
 public:
   using MotorState = custom_interfaces::msg::MotorState;
@@ -72,21 +90,23 @@ public:
   using MoveMotorDirect = custom_interfaces::srv::MoveMotorDirect;
   using MoveToolAngle = custom_interfaces::srv::MoveToolAngle;
 
+  Controller HRM_controller_;
+  double theta_desired_;
+  std::vector<double> theta_actual_;
+  std::vector<double> dtheta_dt_actual_;
+  double dt_;
+  std::vector<double> force_external_;
+
   /**
    * @brief Construct a new Kinematics Control Node object
    * @param node_options ROS
    */
-  explicit KinematicsControlNode(const rclcpp::NodeOptions & node_options = rclcpp::NodeOptions());
+  explicit ControlNode(const rclcpp::NodeOptions & node_options = rclcpp::NodeOptions());
 
   /**
    * @brief Destroy the Kinematics Control Node object
    */
-  virtual ~KinematicsControlNode();
-
-  /**
-   * @brief sugical_tool.hpp
-   */
-  SurgicalTool ST_;
+  virtual ~ControlNode();
 
   /**
    * @author DY, JKim
@@ -112,6 +132,13 @@ public:
 
 private:
   OpMode op_mode_ = kStop;
+
+  /**
+   * @brief ROS2 parameters 
+   */
+  ControlMode control_mode_;
+  rcl_interfaces::msg::SetParametersResult parameter_callback(const std::vector<rclcpp::Parameter> &parameters);
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 
   /**
    * @author DY
@@ -151,10 +178,9 @@ private:
    * @author DY
    * @brief kinematic info publisher
    */
-  float current_tilt_angle_ = 0; 
-  float current_pan_angle_ = 0; 
-  float current_grip_angle_ = 0; 
-
+  float current_tilt_angle_ = 0;
+  float current_pan_angle_ = 0;
+  float current_grip_angle_ = 0;
 
   geometry_msgs::msg::Twist surgical_tool_pose_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr surgical_tool_pose_publisher_;
@@ -163,21 +189,37 @@ private:
 
   /**
    * @author DY
-   * @brief Loadcell data subscriber
+   * @brief subscriber
    */
   bool loadcell_op_flag_ = false;
   custom_interfaces::msg::LoadcellState loadcell_data_;
   rclcpp::Subscription<custom_interfaces::msg::LoadcellState>::SharedPtr loadcell_data_subscriber_;
 
+  bool external_force_op_flag_ = false;
+  geometry_msgs::msg::Vector3 external_force_;
+  rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr external_force_subscriber_;
+
+  bool segment_angle_op_flag_ = false;
+  std_msgs::msg::Float32MultiArray segment_angle_;
+  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angle_subscriber;
+
+  bool segment_angular_velocity_op_flag_ = false;
+  std_msgs::msg::Float32MultiArray segment_angular_velocity_;
+  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angular_velocity_subscriber;
+
   /**
    * @author DY
    * @brief Service server for motion
    */
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr dynamics_mode_server_;
   rclcpp::Service<MoveMotorDirect>::SharedPtr move_motor_direct_service_server_;
-  rclcpp::Service<MoveToolAngle>::SharedPtr move_tool_angle_service_server_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr move_sine_wave_server_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr move_circle_motion_server_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr move_moebius_motion_server_;
+  rclcpp::Service<MoveToolAngle>::SharedPtr kinematics_move_tool_angle_service_server_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr kinematics_move_sine_wave_server_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr kinematics_move_circle_motion_server_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr kinematics_move_moebius_motion_server_;
+
+  rclcpp::Service<MoveToolAngle>::SharedPtr dynamics_move_tool_angle_service_server_;
+
   rclcpp::TimerBase::SharedPtr timer_;  // 타이머는 시작과 중지를 위해 nullptr로 관리
   int timer_period_ms_ = 10;
   float amp_ = 60;
@@ -185,6 +227,10 @@ private:
   float count_ = 0;
   float count_add_ = timer_period_ms_ / 1000.0;
   float angle_ = 0;
+
+  std::thread control_thread_;
+  rclcpp::Rate loop_rate_;  // DY == initialize in the constructor of .cpp file (unit. Hz)
+  void run_control_thread();
 };
 
 #endif
