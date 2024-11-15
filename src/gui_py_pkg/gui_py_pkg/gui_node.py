@@ -165,6 +165,12 @@ class GUINode(Node):
         while not self.move_tool_angle_dynamics_service_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().warning('The "/dynamics/move_tool_angle" service server not available. Check the kinematics_control_node')
 
+        self.control_mode_client = self.create_client(
+            SetBool,
+            'control/control_mode'
+        )
+        while not self.move_tool_angle_dynamics_service_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning('The "/dynamics/move_tool_angle" service server not available. Check the kinematics_control_node')
 
         self.recoder_service_client = self.create_client(
             SetBool,
@@ -175,6 +181,8 @@ class GUINode(Node):
             SetBool,
             '/serial_data/set_zero'
         )
+
+
         # while not self.recoder_service_client.wait_for_service(timeout_sec=2.0):
         #     self.get_logger().warning('The "data/recode" service server not available. Check the kinematics_control_node')
 
@@ -232,6 +240,14 @@ class GUINode(Node):
         service_request.mode = mode
         future = self.move_tool_angle_dynamics_service_client.call_async(service_request)
         # rclpy.spin_until_future_complete(self, future)
+        return future.result()
+    
+    # mode : true-dynamics / false-kinematics
+    def send_request_change_control_mode(self, mode=False):
+        service_request = SetBool.Request()
+        service_request.data = mode
+        future = self.control_mode_client.call_async(service_request)
+        rclpy.spin_until_future_complete(self, future)
         return future.result()
     
     def send_request_record_start(self):
@@ -360,9 +376,11 @@ class MyGUI(QWidget):
         self.layout_mode.addWidget(self.label_mode)
         self.layout_mode.addWidget(self.checkbox_mode_list[0])
         self.layout_mode.addWidget(self.checkbox_mode_list[1])
+        self.layout_mode.addWidget(self.checkbox_mode_list[2])
         self.layout_mode.setAlignment(self.label_mode, Qt.AlignRight)
         self.layout_mode.setAlignment(self.checkbox_mode_list[0], Qt.AlignRight)
         self.layout_mode.setAlignment(self.checkbox_mode_list[1], Qt.AlignRight)
+        self.layout_mode.setAlignment(self.checkbox_mode_list[2], Qt.AlignRight)
         self.layout_global.addLayout(self.layout_mode)
 
         self.motor_layout_list = []
@@ -667,25 +685,20 @@ class MyGUI(QWidget):
 
         # manual
         if sender == self.checkbox_mode_list[0] and self.checkbox_mode_list[0].isChecked():
+            self.node.send_request_change_control_mode(mode=False)
             self.checkbox_mode_list[1].setChecked(False)
             self.checkbox_mode_list[2].setChecked(False)
-
         # kinematics
         elif sender == self.checkbox_mode_list[1] and self.checkbox_mode_list[1].isChecked():
             self.node.get_logger().info("Setting parameter...")
-            # 원하는 파라미터 설정 (예: kinematics 모드)
-            param = Parameter('control_mode', Parameter.Type.STRING, 'kinematics')
-            self.node.set_parameters([param])
-
+            self.node.send_request_change_control_mode(mode=False)
             self.checkbox_mode_list[0].setChecked(False)
             self.checkbox_mode_list[2].setChecked(False)
 
         # dynamics
         elif sender == self.checkbox_mode_list[2] and self.checkbox_mode_list[2].isChecked():
             self.node.get_logger().info("Setting parameter...")
-            # 원하는 파라미터 설정 (예: kinematics 모드)
-            param = Parameter('control_mode', Parameter.Type.STRING, 'dynamics')
-            self.node.set_parameters([param])
+            self.node.send_request_change_control_mode(mode=True)
             self.checkbox_mode_list[0].setChecked(False)
             self.checkbox_mode_list[1].setChecked(False)
 

@@ -4,8 +4,9 @@
 #include <cmath>
 #include <vector>
 #include <numeric>
+#include <iterator>
 
-Controller::Controller() {}
+Controller::Controller() {initialize();}
 Controller::~Controller() {}
 
 void Controller::initialize() {
@@ -24,8 +25,8 @@ std::vector<double> Controller::compute(
     /**
      * @todo length of manipulator should be calculated from the segment_estimation_package
      */
-    const double kLength = 9;    // temp
-    const double kCenterToHole = 3;    // mm
+    double kLength = TOTAL_LENGTH;    // temp
+    double kCenterToHole = WIRE_DISTANCE;    // mm
     // data initializing
     if (theta_actual_prev_.empty()) {
         theta_actual_prev_ = theta_actual;
@@ -42,15 +43,23 @@ std::vector<double> Controller::compute(
     double torque_input = pid_controller_.compute_output(theta_desired, end_effector_theta_actual, dt);
 
     // Find B and F_friction
-    std::pair<double, double> dandf = damping_friction_model_.compute_dampingCoeff_and_friction(
+    std::vector<double> dandf = damping_friction_model_.compute_dampingCoeff_and_friction(
         theta_actual,
         dtheta_dt_actual,
         theta_actual_prev_,
         dtheta_dt_actual_prev_,
         1);
     
-    hrm_dynamics_model_.update_damping_coefficient(dandf.first);
-
+    // hrm_dynamics_model_.update_inertia(0.02);
+    hrm_dynamics_model_.update_damping_coefficient(dandf[0]);
+    // std::cout << "<<<<<<<<<<<<<<<<<<<<<<" << std::endl;
+    // std::copy(dandf.begin(), dandf.end(), 
+    //         std::ostream_iterator<double>(std::cout, " "));
+    // std::cout << std::endl;
+    // std::cout << hrm_dynamics_model_.inertia_ << std::endl;
+    // std::cout << hrm_dynamics_model_.damping_coef_ << std::endl;
+    // std::cout << hrm_dynamics_model_.stiffness_ << std::endl;
+    // std::cout << "<<<<<<<<<<<<<<<<<<<<<<" << std::endl;
     /**
      * @brief
      * conversion forces to torques (external, frction)
@@ -58,7 +67,7 @@ std::vector<double> Controller::compute(
      * (-1) is multiplied, because the fx and fy calculated from "LSTM force estimation" has the F/T sensor coordinate
      */
     double tau_ext = (-1) * kLength * (force_external[0]*cos(end_effector_theta_actual) - force_external[1]*sin(end_effector_theta_actual));
-    double tau_friction = kCenterToHole * dandf.second;
+    double tau_friction = kCenterToHole * dandf[1];
 
     // calculate angular acceleration
     double theta_ddot_input = hrm_dynamics_model_.compute_angular_acceleration(
@@ -72,11 +81,49 @@ std::vector<double> Controller::compute(
     double theta_dot_input = theta_ddot_input * dt;
     // calculate angle
     double theta_input = theta_dot_input * dt;
+    // calibration DY definition to Y.J. Kim kinematics definition
+    theta_input *= -1 * surgical_tool_.todeg();
     // innverse kinematics for moving the wire
     auto wire_length_to_move = surgical_tool_.get_IK_result(theta_input, 0, 0);
 
     theta_actual_prev_ = theta_actual;
     dtheta_dt_actual_prev_ = dtheta_dt_actual;
+
+    std::cout <<  "===========================================================" << std::endl;
+    std::cout << "KP: " << pid_controller_.kp_ << std::endl;
+    std::cout << "KI: " << pid_controller_.ki_ << std::endl;
+    std::cout << "KD: " << pid_controller_.kd_ << std::endl;
+    std::cout << "dt: " << dt << std::endl;
+    std::cout << "integral: " << pid_controller_.get_integral() << std::endl;
+    std::cout << "prev_error: " << pid_controller_.get_previous_error() << std::endl;
+    // std::cout <<  "theta_actual"     << theta_actual     << std::endl;
+    // std::cout <<  "dtheta_dt_actual" << dtheta_dt_actual << std::endl;
+    std::cout << "theta_desired: "    << theta_desired    << std::endl;
+    std::cout << "theta_actual: ";
+    std::copy(theta_actual.begin(), theta_actual.end(), 
+            std::ostream_iterator<double>(std::cout, " "));
+    // std::cout << std::endl;
+    // std::cout << "dtheta_dt_actual: ";
+    // std::copy(dtheta_dt_actual.begin(), dtheta_dt_actual.end(), 
+    //         std::ostream_iterator<double>(std::cout, " "));
+    // std::cout << std::endl;
+    std::cout <<  "dt: "               << dt               << std::endl;
+    std::cout <<  "force_external: "   << force_external[0] << force_external[1] << std::endl;
+    std::cout <<  "torque_input: "                    << torque_input                     << std::endl;
+    std::cout <<  "tau_ext: "                         << tau_ext                          << std::endl;
+    std::cout <<  "tau_friction: "                    << tau_friction                     << std::endl;
+    std::cout <<  "end_effector_theta_actual: "       << end_effector_theta_actual        << std::endl;
+    std::cout <<  "end_effector_dtheta_dt_actual: "   << end_effector_dtheta_dt_actual    << std::endl;
+    std::cout <<  "theta_ddot_input: "                << theta_ddot_input                 << std::endl;
+    std::cout <<  "theta_dot_input: "                 << theta_dot_input                  << std::endl;
+    std::cout <<  "theta_input: "                     << theta_input                      << std::endl;
+
+    // std::cout <<  "wire_length_to_move: "             << wire_length_to_move              << std::endl;
+    std::cout << "wire_length_to_move: ";
+    for (const auto& value : wire_length_to_move) {
+        std::cout << value << " ";
+    }
+    std::cout << std::endl;
 
     return wire_length_to_move;
 }

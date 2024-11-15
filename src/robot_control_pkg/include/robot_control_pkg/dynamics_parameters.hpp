@@ -13,10 +13,10 @@
 #define DYNAMICS_PARAMETERS_HPP_
 
 // PID controller
-#define KP  5
-#define KI  5
-#define KD  5
-#define SAMPLING_HZ  15    // Hz
+#define KP  1
+#define KI  1
+#define KD  1
+#define SAMPLING_HZ  10.0    // Hz
 #define DT  1/SAMPLING_HZ  // sec
 
 // HRM equation of motion parameters (I B K)

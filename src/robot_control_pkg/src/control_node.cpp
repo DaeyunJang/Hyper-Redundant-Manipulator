@@ -11,10 +11,15 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   int8_t qos_depth = this->get_parameter("qos_depth", qos_depth);
 
   this->declare_parameter("control_mode", "kinematics");
+  this->declare_parameter<double>("dynamics/p_gain", KP);
+  this->declare_parameter<double>("dynamics/i_gain", KI);
+  this->declare_parameter<double>("dynamics/d_gain", KD);
   // 파라미터 변경 콜백 등록
   param_callback_handle_ = this->add_on_set_parameters_callback(
     std::bind(&ControlNode::parameter_callback, this, std::placeholders::_1)
   );
+
+
 
   const auto QoS_RKL10V =
   rclcpp::QoS(rclcpp::KeepLast(qos_depth)).reliable().durability_volatile();
@@ -123,7 +128,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   
   segment_angular_velocity_subscriber =
     this->create_subscription<std_msgs::msg::Float32MultiArray>(
-      "estimated_segment_angle/relative",
+      "estimated_segment_angular_velocity/relative",
       QoS_RKL10V,
       [this] (const std_msgs::msg::Float32MultiArray::SharedPtr msg) -> void
       {
@@ -357,6 +362,35 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
     create_service<std_srvs::srv::SetBool>("kinematics/move_moebius_motion", moebius_motion_callback);
 
 
+
+
+  auto control_mode_callback = 
+  [this](
+  const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+        std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
+  {
+    try {
+      // requst->data : true-Dynamics, false-Kinematics
+      if(request->data) {
+        // true : Dynamics
+        RCLCPP_INFO(this->get_logger(), "Control mode changed -> Dynamics.");
+        this->set_parameter(rclcpp::Parameter("control_mode", "dynamics"));
+        response->success = true;
+        response->message = "Control mode changed -> Dynamics.";
+      } else {
+        // false : Kinematics
+        RCLCPP_INFO(this->get_logger(), "Control mode changed -> Kinematics.");
+        this->set_parameter(rclcpp::Parameter("control_mode", "kinematics"));
+        response->success = true;
+        response->message = "Control mode changed -> Kinematics.";
+      }
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+    }
+  };
+  control_mode_service_server_ = 
+    create_service<std_srvs::srv::SetBool>("control/control_mode", control_mode_callback);
+
   auto dynamics_move_tool_angle = 
   [this](
   const std::shared_ptr<MoveToolAngle::Request> request,
@@ -368,20 +402,14 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'DYNAMICS\' mode. Change parameter \'control_mode\'.");
         return;
       }
-
       if(this->op_mode_ == kEnable) {
         if(request->mode == 0) {
-          /**
-           * @brief 
-           * DYNAMICS does not use ''ABSOLUTE'' mode
-              > only ''RELATIVE'' mode
-           */
-          
           // MOVE ABSOLUTELY
-          // RCLCPP_INFO(this->get_logger(), "MODE: %d, tilt: %.2f, pan: %.2f, grip: %.2f", request->mode, request->tiltangle, request->panangle, request->gripangle);
-          // this->cal_inverse_kinematics(request->panangle, request->tiltangle, request->gripangle);
-          // this->motor_control_publisher_->publish(this->motor_control_target_val_);
-          // this->surgical_tool_pose_publisher_->publish(this->surgical_tool_pose_);
+          double pan_angle =  request->panangle;
+          double tilt_angle = request->tiltangle;
+          double grip_angle = request->gripangle;
+          this->theta_desired_ = pan_angle;
+          RCLCPP_INFO(this->get_logger(), "Dynamics mode, target theta_desired: %.2f", this->theta_desired_);
         }
         else if (request->mode == 1) {
           // MOVE RELATIVELY
@@ -438,6 +466,10 @@ void ControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gA
   f_val[3] = this->HRM_controller_.surgical_tool_.wrLengthNorth_;
   f_val[4] = this->HRM_controller_.surgical_tool_.wrLengthGrip;
 
+  for (int i=0; i<5; i++)
+  {
+    std::cout<< "f_val" << i << ": " << f_val[i] << std::endl;
+  }
   this->motor_control_target_val_.header.stamp = this->now();
   this->motor_control_target_val_.header.frame_id = "kinematics_motor_target_position";
   this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
@@ -497,7 +529,7 @@ void ControlNode::publish_sine_wave()
 {
   double omega = 2.0 * M_PI / period_;
   angle_ = amp_ * std::sin(omega * count_);
-  cal_inverse_kinematics(angle_, angle_, 0);
+  cal_inverse_kinematics(angle_, 0, 0);
   motor_control_publisher_->publish(motor_control_target_val_);
   surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
   count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
@@ -509,7 +541,7 @@ void ControlNode::publish_circle_motion()
   double omega = 2.0 * M_PI / period_;
   double pan_deg = amp_ * std::sin(omega * count_);
   double tilt_deg = amp_ * std::cos(omega * count_);
-  cal_inverse_kinematics(pan_deg, tilt_deg, 0);
+  cal_inverse_kinematics(pan_deg, 0, 0);
   motor_control_publisher_->publish(motor_control_target_val_);
   surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
   count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
@@ -540,7 +572,22 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       } else {
         RCLCPP_WARN(this->get_logger(), "Unknown mode. Keeping previous mode.");
       }
+    // }
+    } else if (param.get_name() == "dynamics/p_gain") {
+      double p_gain = param.as_double();
+      HRM_controller_.pid_controller_.kp_ = p_gain;
+      RCLCPP_INFO(this->get_logger(), "Updated P gain: %f", p_gain);
+    } else if (param.get_name() == "dynamics/i_gain") {
+      double i_gain = param.as_double();
+      HRM_controller_.pid_controller_.ki_ = i_gain;
+      RCLCPP_INFO(this->get_logger(), "Updated I gain: %f", i_gain);
+    } else if (param.get_name() == "dynamics/d_gain") {
+      double d_gain = param.as_double();
+      HRM_controller_.pid_controller_.kd_ = d_gain;
+      RCLCPP_INFO(this->get_logger(), "Updated D gain: %f", d_gain);
     }
+
+
   }
   rcl_interfaces::msg::SetParametersResult result;
   result.successful = true;
@@ -556,8 +603,10 @@ void ControlNode::run_control_thread() {
       /***
        * @todo
        * optimazation for memory based on avoiding memory copy
+       * Y.J. Kim's kinematics is defined that CW direction is positive and CCW is negative.
+       * But DY defined opposite.
        */
-      double theta_desired = this->theta_desired_;
+      double theta_desired = (-1) * this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
 
       // if using std::vector<double> a = msg.data
       // The type must be conversion from float(msg.data) to double
@@ -565,6 +614,20 @@ void ControlNode::run_control_thread() {
       std::vector<double> dtheta_dt_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
       double dt = DT;
       std::vector<double> force_external = {this->external_force_.x, this->external_force_.y};
+
+      force_external[0] = 0;
+      force_external[1] = 0;
+
+      // std::cout << "[NODE] theta_actual: " << theta_actual[0] << std::endl;
+      // std::cout << "[NODE] dtheta_dt_actual: " << dtheta_dt_actual[0] << std::endl;
+      // std::cout << "[NODE] theta_actual: ";
+      // std::copy(theta_actual.begin(), theta_actual.end(), 
+      //           std::ostream_iterator<double>(std::cout, " "));
+      // std::cout << std::endl;
+      // std::cout << "dtheta_dt_actual: ";
+      // std::copy(dtheta_dt_actual.begin(), dtheta_dt_actual.end(), 
+      //           std::ostream_iterator<double>(std::cout, " "));
+      // std::cout << std::endl;
 
       auto wire_length_to_move = this->HRM_controller_.compute(
         theta_desired,
@@ -584,6 +647,33 @@ void ControlNode::run_control_thread() {
       this->motor_control_target_val_.header.frame_id = "kinematics_motor_target_position";
       this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
       this->motor_control_target_val_.target_position[1] = DIRECTION_COUPLER * f_val[1] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+
+      #if MOTOR_CONTROL_SAME_DURATION
+        /**
+         * @brief find max value and make it max_velocity_profile 100 (%),
+         *        other value have values proportional to 100 (%) each
+         */
+        static double prev_f_val[NUM_OF_MOTORS];  // for delta length
+
+        std::vector<double> abs_f_val(NUM_OF_MOTORS-1, 0);  // 5th DOF is a forceps
+        for (int i=0; i<NUM_OF_MOTORS-1; i++) { abs_f_val[i] = std::abs(this->motor_control_target_val_.target_position[i] - this->motor_state_.actual_position[i]); }
+
+        double max_val = *std::max_element(abs_f_val.begin(), abs_f_val.end()) + 0.00001; // 0.00001 is protection for 0/0 (0 divided by 0)
+        int max_val_index = std::max_element(abs_f_val.begin(), abs_f_val.end()) - abs_f_val.begin();
+        for (int i=0; i<(NUM_OF_MOTORS-1); i++) { 
+          this->motor_control_target_val_.target_velocity_profile[i] = (abs_f_val[i] / max_val) * PERCENT_100 * 0.5;
+        }
+        // last index means forceps. It doesn't need velocity profile
+        this->motor_control_target_val_.target_velocity_profile[NUM_OF_MOTORS-1] = PERCENT_100 * 0.5;
+        
+      #else
+        for (int i=0; i<NUM_OF_MOTORS; i++) { 
+          this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.01;
+        }
+      #endif
+      
+      this->motor_control_publisher_->publish(this->motor_control_target_val_);
+      this->surgical_tool_pose_publisher_->publish(this->surgical_tool_pose_);
 
       loop_rate_.sleep();
     } else {  // kinematics

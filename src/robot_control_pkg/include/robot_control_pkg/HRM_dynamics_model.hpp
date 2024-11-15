@@ -41,10 +41,14 @@ public:
                                       double theta_dot
   );
 
-private:
   double inertia_;
   double damping_coef_;
   double stiffness_;
+
+private:
+  // double inertia_;
+  // double damping_coef_;
+  // double stiffness_;
 
   std::vector<double> theta_;
 };

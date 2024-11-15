@@ -32,8 +32,14 @@ int main(int argc, char * argv[])
   rclcpp::init(argc, argv);
   signal(SIGINT, signal_callback_handler);
   auto node = std::make_shared<TCPClientNode>();
-  std::cout << "ros spin() start" << std::endl;
-  rclcpp::spin(node);
+
+  // if use
+  // rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+  // it has limitation of thread --> poor performance
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node);
+  executor.spin();
+
   rclcpp::shutdown();
 
   std::cout << "ROS node Shutdown" << std::endl;

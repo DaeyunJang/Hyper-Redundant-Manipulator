@@ -25,13 +25,15 @@
 #define INC_PER_ROT_3_9     GEAR_RATIO_3_9 * ENCODER_CHANNEL * ENCODER_RESOLUTION
 #define DIRECTION_COUPLER   1      // if not, use 1
 
+#define MOTOR_SOFTWARE_LIMIT 400000
+
 /** Motor control mode **/
 /**
  * @brief It means that the ETA(Estimation Time Arrive) is same for all motors (arrive at same time)
  *        If not use it, just each motors move same velocity (not arrive at same time)
 */
 #define MOTOR_CONTROL_SAME_DURATION 1
-#define PERCENT_100 50
+#define PERCENT_100 100
 
 //===============================
 // Continuum Manipulator Paremeters
@@ -42,6 +44,7 @@
 #define SEGMENT_ARC       5.0  // mm
 #define SEGMENT_DIAMETER  9     // mm
 #define WIRE_DISTANCE     3.63   // mm
+#define TOTAL_LENGTH      9     // mm
 // #define NUM_OF_JOINT      8     // ea
 // #define SEGMENT_ARC       6.92  // mm
 // #define SEGMENT_DIAMETER  3     // mm

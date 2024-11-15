@@ -10,6 +10,14 @@ void PIDController::set_PID_gains(double kp, double ki, double kd) {
   kd_ = kd;
 }
 
+double PIDController::get_integral() {
+  return integral_;
+}
+double PIDController::get_previous_error() {
+  return previous_error_;
+}
+
+
 double PIDController::compute_output(double desired_value, double measured_value, double dt) {
   // 오차 계산 (목표값 - 측정값)
   double error = desired_value - measured_value;

@@ -25,7 +25,8 @@ DampingFrictionModel::~DampingFrictionModel() {}
  * std::pair<double, double> results = compute_dampingCoeff_and_friction(...);
  * std::cout << results.first << | << results.second << std::endl;
  */
-std::pair<double, double> DampingFrictionModel::compute_dampingCoeff_and_friction(
+// std::pair<double, double> DampingFrictionModel::compute_dampingCoeff_and_friction(
+std::vector<double> DampingFrictionModel::compute_dampingCoeff_and_friction(
     const std::vector<double>& q,
     const std::vector<double>& dq,
     const std::vector<double>& q_prev,
@@ -112,5 +113,7 @@ std::pair<double, double> DampingFrictionModel::compute_dampingCoeff_and_frictio
     q_prev_ = q;
     dq_prev_ = dq;
 
-    return std::make_pair(B, res_friction);
+	std::vector<double> results = {B, res_friction};
+    return results;
+    // return std::make_pair(B, res_friction);
 }

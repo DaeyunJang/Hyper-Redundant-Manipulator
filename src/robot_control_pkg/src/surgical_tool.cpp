@@ -89,3 +89,8 @@ float SurgicalTool::torad()
 {
 	return this->deg_;
 }
+
+float SurgicalTool::todeg()
+{
+	return 1.0/this->deg_;
+}

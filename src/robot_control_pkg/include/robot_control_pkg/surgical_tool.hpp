@@ -131,6 +131,12 @@ public:
    * @return float 
    */
   float torad();
+  
+  /**
+   * @brief make input variable to 'rad' unit
+   * @return float 
+   */
+  float todeg();
 
 private:
   // const double PI = acos(-1);

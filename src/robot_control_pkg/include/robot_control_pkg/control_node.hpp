@@ -39,6 +39,7 @@
 #include <stdexcept>
 #include <thread>
 #include <numeric>
+#include <iterator>
 
 // Surgical Tool Class
 #include "hw_definition.hpp"
@@ -211,7 +212,7 @@ private:
    * @author DY
    * @brief Service server for motion
    */
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr dynamics_mode_server_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr control_mode_service_server_;
   rclcpp::Service<MoveMotorDirect>::SharedPtr move_motor_direct_service_server_;
   rclcpp::Service<MoveToolAngle>::SharedPtr kinematics_move_tool_angle_service_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr kinematics_move_sine_wave_server_;
