@@ -4,7 +4,7 @@ HRM(Hyper-Redundant-Manipulator) motion control on ROS system
 ## Download the project
 ```
 # clone repository with the submodule
-git clone --recurse-submodeuls https://github.com/DaeyunJang/Hyper-Redundant-Manipulator.git
+git clone --recurse-submodules https://github.com/DaeyunJang/Hyper-Redundant-Manipulator.git
 ```
 
 ## python environments (virtual env with ROS2)
