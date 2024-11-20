@@ -31,7 +31,8 @@ std::vector<double> DampingFrictionModel::compute_dampingCoeff_and_friction(
     const std::vector<double>& dq,
     const std::vector<double>& q_prev,
     const std::vector<double>& dq_prev,
-    int mode=1)
+    const std::vector<double>& tension,
+    int mode=2)
 {   
     /**
      * @brief Check the vetors size are equal.
@@ -44,9 +45,11 @@ std::vector<double> DampingFrictionModel::compute_dampingCoeff_and_friction(
 
     int n = q.size();
     std::vector<double> Tl(n, 0.0), Tr(n, 0.0), tau_j(n, 0.0), th_seg_dot(n, 0.0), B_seg(n, 0.0);
-    Tl[0] = 2.0;
-    Tr[0] = 1.5;
-    
+    // Tl[0] = 2.0;
+    // Tr[0] = 1.5;
+    Tl[0] = tension[0];
+    Tr[0] = tension[1];
+
     double th_b = 0.451;
     double R = 0.05;
     double mu_s = 0.6, mu_v = 0.3, vs = 0.1, vd = 1.1;
@@ -93,7 +96,7 @@ std::vector<double> DampingFrictionModel::compute_dampingCoeff_and_friction(
         th_seg_dot[j] = dq[j] - dq_prev[j];
 
         if (th_seg_dot[j] != 0) {
-            B_seg[j] = std::abs(tau_j[j] / th_seg_dot[j]);
+            B_seg[j] = std::abs((tau_j[j] / th_seg_dot[j])/2.0);
         } else {
             B_seg[j] = 0.0;
         }

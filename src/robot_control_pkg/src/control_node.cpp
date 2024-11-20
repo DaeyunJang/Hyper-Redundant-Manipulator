@@ -599,83 +599,82 @@ void ControlNode::run_control_thread() {
 
   while (rclcpp::ok()) {
     if (control_mode_ == ControlMode::kDynamics) {
-      // run dynamics() code
-      /***
-       * @todo
-       * optimazation for memory based on avoiding memory copy
-       * Y.J. Kim's kinematics is defined that CW direction is positive and CCW is negative.
-       * But DY defined opposite.
-       */
-      double theta_desired = (-1) * this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
-
-      // if using std::vector<double> a = msg.data
-      // The type must be conversion from float(msg.data) to double
-      std::vector<double> theta_actual(this->segment_angle_.data.begin(), this->segment_angle_.data.end());
-      std::vector<double> dtheta_dt_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
-      double dt = DT;
-      std::vector<double> force_external = {this->external_force_.x, this->external_force_.y};
-
-      force_external[0] = 0;
-      force_external[1] = 0;
-
-      // std::cout << "[NODE] theta_actual: " << theta_actual[0] << std::endl;
-      // std::cout << "[NODE] dtheta_dt_actual: " << dtheta_dt_actual[0] << std::endl;
-      // std::cout << "[NODE] theta_actual: ";
-      // std::copy(theta_actual.begin(), theta_actual.end(), 
-      //           std::ostream_iterator<double>(std::cout, " "));
-      // std::cout << std::endl;
-      // std::cout << "dtheta_dt_actual: ";
-      // std::copy(dtheta_dt_actual.begin(), dtheta_dt_actual.end(), 
-      //           std::ostream_iterator<double>(std::cout, " "));
-      // std::cout << std::endl;
-
-      auto wire_length_to_move = this->HRM_controller_.compute(
-        theta_desired,
-        theta_actual,
-        dtheta_dt_actual,
-        dt,
-        force_external);
-
-      double f_val[5];
-      f_val[0] = wire_length_to_move[0];  // East
-      f_val[1] = wire_length_to_move[1];  // West
-      f_val[2] = wire_length_to_move[2];  // South
-      f_val[3] = wire_length_to_move[3];  // North
-      f_val[4] = wire_length_to_move[4];  // grip
-
-      this->motor_control_target_val_.header.stamp = this->now();
-      this->motor_control_target_val_.header.frame_id = "kinematics_motor_target_position";
-      this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
-      this->motor_control_target_val_.target_position[1] = DIRECTION_COUPLER * f_val[1] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
-
-      #if MOTOR_CONTROL_SAME_DURATION
-        /**
-         * @brief find max value and make it max_velocity_profile 100 (%),
-         *        other value have values proportional to 100 (%) each
+      try {
+        // run dynamics() code
+        /***
+         * @todo
+         * optimazation for memory based on avoiding memory copy
+         * Y.J. Kim's kinematics is defined that CW direction is positive and CCW is negative.
+         * But DY defined opposite.
+         * affect to 'theta_desired', 'tension'
          */
-        static double prev_f_val[NUM_OF_MOTORS];  // for delta length
+        // double theta_desired = this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
+        double theta_desired = (-1) * this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
 
-        std::vector<double> abs_f_val(NUM_OF_MOTORS-1, 0);  // 5th DOF is a forceps
-        for (int i=0; i<NUM_OF_MOTORS-1; i++) { abs_f_val[i] = std::abs(this->motor_control_target_val_.target_position[i] - this->motor_state_.actual_position[i]); }
+        // if using std::vector<double> a = msg.data
+        // The type must be conversion from float(msg.data) to double
+        std::vector<double> theta_actual(this->segment_angle_.data.begin(), this->segment_angle_.data.end());
+        std::vector<double> dtheta_dt_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
+        double dt = DT;
+        std::vector<double> tension = {this->loadcell_data_.stress[1]*0.001, this->loadcell_data_.stress[0]*0.001}; // g -> kg, Y.J. kiniematics is positive on CW.
+        std::vector<double> force_external = {this->external_force_.x*0.001, this->external_force_.y*0.001};
 
-        double max_val = *std::max_element(abs_f_val.begin(), abs_f_val.end()) + 0.00001; // 0.00001 is protection for 0/0 (0 divided by 0)
-        int max_val_index = std::max_element(abs_f_val.begin(), abs_f_val.end()) - abs_f_val.begin();
-        for (int i=0; i<(NUM_OF_MOTORS-1); i++) { 
-          this->motor_control_target_val_.target_velocity_profile[i] = (abs_f_val[i] / max_val) * PERCENT_100 * 0.5;
-        }
-        // last index means forceps. It doesn't need velocity profile
-        this->motor_control_target_val_.target_velocity_profile[NUM_OF_MOTORS-1] = PERCENT_100 * 0.5;
+        // test -> no payload
+        force_external[0] = 0;
+        force_external[1] = 0;
+
+
+        auto wire_length_to_move = this->HRM_controller_.compute(
+          theta_desired,
+          theta_actual,
+          dtheta_dt_actual,
+          dt,
+          tension,
+          force_external);
+
+        double f_val[5];
+        f_val[0] = wire_length_to_move[0];  // East
+        f_val[1] = wire_length_to_move[1];  // West
+        f_val[2] = wire_length_to_move[2];  // South
+        f_val[3] = wire_length_to_move[3];  // North
+        f_val[4] = wire_length_to_move[4];  // grip
+
+        this->motor_control_target_val_.header.stamp = this->now();
+        this->motor_control_target_val_.header.frame_id = "kinematics_motor_target_position";
+        this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+        this->motor_control_target_val_.target_position[1] = DIRECTION_COUPLER * f_val[1] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+
+        #if MOTOR_CONTROL_SAME_DURATION
+          /**
+           * @brief find max value and make it max_velocity_profile 100 (%),
+           *        other value have values proportional to 100 (%) each
+           */
+          static double prev_f_val[NUM_OF_MOTORS];  // for delta length
+
+          std::vector<double> abs_f_val(NUM_OF_MOTORS-1, 0);  // 5th DOF is a forceps
+          for (int i=0; i<NUM_OF_MOTORS-1; i++) { abs_f_val[i] = std::abs(this->motor_control_target_val_.target_position[i] - this->motor_state_.actual_position[i]); }
+
+          double max_val = *std::max_element(abs_f_val.begin(), abs_f_val.end()) + 0.00001; // 0.00001 is protection for 0/0 (0 divided by 0)
+          int max_val_index = std::max_element(abs_f_val.begin(), abs_f_val.end()) - abs_f_val.begin();
+          for (int i=0; i<(NUM_OF_MOTORS-1); i++) { 
+            this->motor_control_target_val_.target_velocity_profile[i] = (abs_f_val[i] / max_val) * PERCENT_100 * 0.5;
+          }
+          // last index means forceps. It doesn't need velocity profile
+          this->motor_control_target_val_.target_velocity_profile[NUM_OF_MOTORS-1] = PERCENT_100 * 0.5;
+          
+        #else
+          for (int i=0; i<NUM_OF_MOTORS; i++) { 
+            this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.01;
+          }
+        #endif
         
-      #else
-        for (int i=0; i<NUM_OF_MOTORS; i++) { 
-          this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.01;
-        }
-      #endif
-      
-      this->motor_control_publisher_->publish(this->motor_control_target_val_);
-      this->surgical_tool_pose_publisher_->publish(this->surgical_tool_pose_);
+        this->motor_control_publisher_->publish(this->motor_control_target_val_);
+        this->surgical_tool_pose_publisher_->publish(this->surgical_tool_pose_);
 
-      loop_rate_.sleep();
+        loop_rate_.sleep();
+      } catch (const std::runtime_error & e) {
+        RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+      }
     } else {  // kinematics
       //
     }

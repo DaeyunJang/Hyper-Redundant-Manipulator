@@ -20,13 +20,14 @@ std::vector<double> Controller::compute(
     const std::vector<double>& theta_actual,
     const std::vector<double>& dtheta_dt_actual,
     const double& dt,
+    const std::vector<double>& tension,
     const std::vector<double>& force_external
 ) {
     /**
      * @todo length of manipulator should be calculated from the segment_estimation_package
      */
-    double kLength = TOTAL_LENGTH;    // temp
-    double kCenterToHole = WIRE_DISTANCE;    // mm
+    double kLength = TOTAL_LENGTH * 0.001;    // temp
+    double kCenterToHole = WIRE_DISTANCE * 0.001;    // mm
     // data initializing
     if (theta_actual_prev_.empty()) {
         theta_actual_prev_ = theta_actual;
@@ -48,7 +49,8 @@ std::vector<double> Controller::compute(
         dtheta_dt_actual,
         theta_actual_prev_,
         dtheta_dt_actual_prev_,
-        1);
+        tension,
+        2);
     
     // hrm_dynamics_model_.update_inertia(0.02);
     hrm_dynamics_model_.update_damping_coefficient(dandf[0]);
@@ -65,6 +67,9 @@ std::vector<double> Controller::compute(
      * conversion forces to torques (external, frction)
      * @note
      * (-1) is multiplied, because the fx and fy calculated from "LSTM force estimation" has the F/T sensor coordinate
+     * @param tau_ext : N-m
+     * @param force_external : N-m
+     * @param tau_friction : N-m
      */
     double tau_ext = (-1) * kLength * (force_external[0]*cos(end_effector_theta_actual) - force_external[1]*sin(end_effector_theta_actual));
     double tau_friction = kCenterToHole * dandf[1];
@@ -102,12 +107,13 @@ std::vector<double> Controller::compute(
     std::cout << "theta_actual: ";
     std::copy(theta_actual.begin(), theta_actual.end(), 
             std::ostream_iterator<double>(std::cout, " "));
-    // std::cout << std::endl;
+    std::cout << std::endl;
     // std::cout << "dtheta_dt_actual: ";
     // std::copy(dtheta_dt_actual.begin(), dtheta_dt_actual.end(), 
     //         std::ostream_iterator<double>(std::cout, " "));
     // std::cout << std::endl;
     std::cout <<  "dt: "               << dt               << std::endl;
+    std::cout <<  "tension: "   << tension[0] << tension[1] << std::endl;
     std::cout <<  "force_external: "   << force_external[0] << force_external[1] << std::endl;
     std::cout <<  "torque_input: "                    << torque_input                     << std::endl;
     std::cout <<  "tau_ext: "                         << tau_ext                          << std::endl;

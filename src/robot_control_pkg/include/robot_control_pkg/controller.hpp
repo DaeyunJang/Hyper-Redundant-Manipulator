@@ -57,6 +57,7 @@ public:
         const std::vector<double>& theta_actual,
         const std::vector<double>& dtheta_dt_actual,
         const double& dt,
+        const std::vector<double>& tension,
         const std::vector<double>& force_external
         );
 

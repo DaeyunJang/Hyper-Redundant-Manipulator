@@ -601,8 +601,8 @@ class MyGUI(QWidget):
         self.lc_sub_label_list = []
         self.lc_sub_line_edit_list = []
         self.lc_sub_layout_list = []
-        self.lc_sub_label_list.append(QLabel('loadcell #1 weight(kg)'))
-        self.lc_sub_label_list.append(QLabel('loadcell #2 weight(kg)'))
+        self.lc_sub_label_list.append(QLabel('loadcell #1 weight(g)'))
+        self.lc_sub_label_list.append(QLabel('loadcell #2 weight(g)'))
 
         for i in range (len(self.lc_sub_label_list)):  # 6 (force 3d, torque 3d)
             try:

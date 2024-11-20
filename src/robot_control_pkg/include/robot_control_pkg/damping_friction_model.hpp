@@ -43,6 +43,7 @@ public:
     const std::vector<double>& dq,
     const std::vector<double>& q_prev,
     const std::vector<double>& dq_prev,
+    const std::vector<double>& tension,
     int mode);  //
 
   std::vector<double> q_;

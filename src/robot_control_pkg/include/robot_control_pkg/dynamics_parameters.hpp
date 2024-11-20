@@ -13,17 +13,17 @@
 #define DYNAMICS_PARAMETERS_HPP_
 
 // PID controller
-#define KP  1
-#define KI  1
-#define KD  1
-#define SAMPLING_HZ  10.0    // Hz
+#define KP  10
+#define KI  0.1
+#define KD  0.1
+#define SAMPLING_HZ  30.0    // Hz
 #define DT  1/SAMPLING_HZ  // sec
 
 // HRM equation of motion parameters (I B K)
 // I: mass
 // B: damper
 // K: spring
-#define INERTIA 0.5
+#define INERTIA 0.01
 #define DAMPING_COEFFICIENT 0
 #define STIFFNESS 1
 
