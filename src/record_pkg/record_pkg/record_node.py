@@ -21,8 +21,11 @@ from sensor_msgs.msg import Imu
 from custom_interfaces.msg import LoadcellState
 from custom_interfaces.msg import MotorCommand
 from custom_interfaces.msg import MotorState
+from custom_interfaces.msg import DynamicMIMOValues
 from custom_interfaces.srv import MoveMotorDirect
 from custom_interfaces.srv import MoveToolAngle
+
+from rclpy.executors import MultiThreadedExecutor
 
 print("Python executable:", sys.executable)
 print("Python version:", sys.version)
@@ -39,6 +42,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from cv_bridge import CvBridge
 from datetime import datetime
+import PIL
 
 import csv
 import json
@@ -53,6 +57,7 @@ class RecordNode(Node):
         self.create_service(SetBool, '/data/record', self.record_callback)
         self.is_recording = False
         self.data_count = 0
+        self.data_count_dMv = 0
 
         # self.rosbag_writer = rosbag2_py.SequentialWriter()
         # storage_options = rosbag2_py._storage.StorageOptions(
@@ -154,6 +159,16 @@ class RecordNode(Node):
         )
         self.get_logger().info('wire_length subscriber is created.')
 
+        self.dynamic_MIMO_values_flag = False
+        self.dynamic_MIMO_values = DynamicMIMOValues()
+        self.dynamic_MIMO_values_subscriber = self.create_subscription(
+            DynamicMIMOValues,
+            'dynamic_MIMO_values',
+            self.read_dynamic_MIMO_values,
+            QOS_RKL10V
+        )
+        self.get_logger().info('dynamic_MIMO_values subscriber is created.')
+
 
         # self.realsense_subscriber = RealSenseSubscriber()
         # color rectified image. RGB format
@@ -164,7 +179,17 @@ class RecordNode(Node):
             "/camera/camera/color/image_raw",
             # "camera/color/image_rect_raw",
             self.color_image_rect_raw_callback,
-            QOS_RKL10V)
+            1)
+        self.get_logger().info('realsense-camera subscriber is created.')
+
+        # estimated image
+        self.segment_angle_image_flag = False
+        self.segment_angle_image = Image()
+        self.segment_angle_image_subscriber = self.create_subscription(
+            Image,
+            "estimated_segment_angle_image",
+            self.segment_angle_image_callback,
+            1)
         self.get_logger().info('realsense-camera subscriber is created.')
 
 
@@ -219,6 +244,7 @@ class RecordNode(Node):
                 # os.chdir(self.directory_path)
                 self.create_directory()
                 self.create_csv()
+                self.create_csv_dynamics_MIMO_values()
                 self.create_metadata_json()
 
 
@@ -242,11 +268,13 @@ class RecordNode(Node):
             elif self.is_recording == False:
                 # Subscribe to topics you want to record
                 self.get_logger().info('Stop recording')
-                self.bag_process.terminate()
                 self.csv_file.close()
+                self.csv_file_dMv.close()
+                self.bag_process.terminate()
                 response.success = True
                 response.message = 'Stop Recording.'
                 self.data_count = 0
+                self.data_count_dMv = 0
         except Exception as e:
             self.get_logger().info(f'Exception Error as {e}')
             response.success = False
@@ -279,7 +307,6 @@ class RecordNode(Node):
 
         if self.is_recording:
             self.data_count += 1
-            
             image_file = str(self.data_count) + '_' + str(self.capture_time.sec) + '-' + str(self.capture_time.nanosec) +'.png'
             cv2.imwrite(self.directory_path_image + '/' + image_file, self.current_frame)
             self.update_csv()
@@ -294,6 +321,11 @@ class RecordNode(Node):
         # )
 
         # return
+
+    def segment_angle_image_callback(self, data):
+        self.segment_angle_image_flag = True
+        self.segment_angle_image_capture_time = data.header.stamp
+        self.segment_angle_image = self.br_rgb.imgmsg_to_cv2(data, 'bgr8')
 
     def read_fts_data(self, msg):
         self.fts_data_flag = True
@@ -315,6 +347,17 @@ class RecordNode(Node):
         self.wire_length_flag = True
         self.wire_length = msg
 
+    def read_dynamic_MIMO_values(self, msg):
+        self.dynamic_MIMO_values_flag = True
+        self.dynamic_MIMO_values = msg
+
+        if self.is_recording:
+            self.data_count_dMv += 1
+            image_file = str(self.data_count_dMv) + '_' + str(self.dynamic_MIMO_values.header.stamp.sec) + '-' + str(self.dynamic_MIMO_values.header.stamp.nanosec) +'.png'
+            cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
+            self.update_csv_dynamics_MIMO_values()
+
+
     def create_directory(self):
         c_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         self.directory_path = os.path.join('./record', c_time)
@@ -322,10 +365,15 @@ class RecordNode(Node):
             os.makedirs(self.directory_path)
             self.get_logger().info(f'Directory is created => {self.directory_path}')
         self.directory_path_image = os.path.join(self.directory_path, 'images')
+        self.directory_path_image_with_estimated_angle = os.path.join(self.directory_path, 'images_with_estimated_angle')
         if not os.path.exists(self.directory_path_image):
             os.makedirs(self.directory_path_image)
+        if not os.path.exists(self.directory_path_image_with_estimated_angle):
+            os.makedirs(self.directory_path_image_with_estimated_angle)
         self.directory_path_csv = self.directory_path
+        self.directory_path_csv_dMv = self.directory_path
 
+    ##################################
     def create_csv(self):
         self.csv_file_name = os.path.join(self.directory_path_csv, 'data.csv')
         self.get_logger().info(f'CSV is created => name : {self.csv_file_name}')
@@ -376,8 +424,71 @@ class RecordNode(Node):
                                  + [str(torquexyz.x)]
                                  + [str(torquexyz.y)]
                                  + [str(torquexyz.z)])
-        self.csv_file.flush()    
+        self.csv_file.flush()
         pass
+
+    ##################################
+    def create_csv_dynamics_MIMO_values(self):
+        self.csv_file_name_dMv = os.path.join(self.directory_path_csv_dMv, 'data_DynamicMIMOValues.csv')
+        self.get_logger().info(f'CSV is created => name : {self.csv_file_name_dMv}')
+
+        self.csv_headers_dMv = {}
+        self.csv_headers_dMv['sec'] = []
+        self.csv_headers_dMv['nanosec'] = []
+        self.csv_headers_dMv['image'] = []
+        self.csv_headers_dMv['sampling_time'] = []
+        self.csv_headers_dMv['p_gain'] = []
+        self.csv_headers_dMv['i_gain'] = []
+        self.csv_headers_dMv['d_gain'] = []
+        self.csv_headers_dMv['theta_desired'] = []
+        self.csv_headers_dMv['theta_actual'] = []
+        self.csv_headers_dMv['omega_actual'] = []
+        # self.csv_headers_dMv['segment_theta_relative'] = []
+        # self.csv_headers_dMv['segment_omega_relative'] = []
+        for i in range(self.numofmotors):
+            self.csv_headers_dMv[f'tension #{i}'] = []
+        self.csv_headers_dMv[f'external_force_x'] = []
+        self.csv_headers_dMv[f'external_force_y'] = []
+        self.csv_headers_dMv['external_torque'] = []
+        self.csv_headers_dMv['friction_torque'] = []
+        self.csv_headers_dMv['damping_coefficient'] = []
+        self.csv_headers_dMv['input_alpha'] = []
+        self.csv_headers_dMv['input_omega'] = []
+        self.csv_headers_dMv['input_theta'] = []
+
+        self.csv_file_dMv = open(self.csv_file_name_dMv, mode='w')
+        self.csv_writer_dMv = csv.writer(self.csv_file_dMv)
+        self.csv_writer_dMv.writerow(self.csv_headers_dMv.keys())
+        self.csv_file_dMv.flush()
+    
+    def update_csv_dynamics_MIMO_values(self):
+        # if not self.image_flag and not self.fts_data_flag and not self.motor_state_flag and not self.loadcell_data_flag:
+        #     self.get_logger().warning(f'All data are not subscribed')
+        #     return
+        timestamp_sec = str(self.dynamic_MIMO_values.header.stamp.sec)
+        timestamp_nanosec = str(self.dynamic_MIMO_values.header.stamp.nanosec)
+        image_file = str(self.data_count_dMv) + '_' + str(timestamp_sec) + '-' + str(timestamp_nanosec) +'.png'
+        
+        self.csv_writer_dMv.writerow([timestamp_sec, timestamp_nanosec, image_file]
+                                 + [str(self.dynamic_MIMO_values.sampling_time)]
+                                 + [str(self.dynamic_MIMO_values.p_gain)]
+                                 + [str(self.dynamic_MIMO_values.i_gain)]
+                                 + [str(self.dynamic_MIMO_values.d_gain)]
+                                 + [str(self.dynamic_MIMO_values.theta_desired)]
+                                 + [str(self.dynamic_MIMO_values.theta_actual)]
+                                 + [str(self.dynamic_MIMO_values.omega_actual)]
+                                 + [str(value) for value in self.dynamic_MIMO_values.tension]
+                                 + [str(value) for value in self.dynamic_MIMO_values.external_force]
+                                 + [str(self.dynamic_MIMO_values.external_torque)]
+                                 + [str(self.dynamic_MIMO_values.friction_torque)]
+                                 + [str(self.dynamic_MIMO_values.damping_coefficient)]
+                                 + [str(self.dynamic_MIMO_values.input_alpha)]
+                                 + [str(self.dynamic_MIMO_values.input_omega)]
+                                 + [str(self.dynamic_MIMO_values.input_theta)])
+        self.csv_file_dMv.flush()
+        pass
+
+    #######################################
 
     def create_metadata_json(self):
         # declare dictionary of metadata
@@ -449,13 +560,30 @@ class RecordNode(Node):
         return constants
     
 def main(args=None):
+    # rclpy.init(args=args)
+    # record_node = RecordNode()
+    # rclpy.spin(record_node)
+    # record_node.destroy_node()
+    # print('record node is destroyed')
+    # rclpy.shutdown()
+    # print('rclpy shutdonw')
+
     rclpy.init(args=args)
-    record_node = RecordNode()
-    rclpy.spin(record_node)
-    record_node.destroy_node()
-    print('record node is destroyed')
-    rclpy.shutdown()
-    print('rclpy shutdonw')
+    try:
+        record_node = RecordNode()
+        executor = MultiThreadedExecutor()
+        #  executor = MultiThreadedExecutor(num_threads=4)
+        executor.add_node(record_node)
+        try:
+            executor.spin()
+        except KeyboardInterrupt:
+            record_node.get_logger().warning('Keyboard Interrupt (SIGINT)')
+        finally:
+            executor.shutdown()
+            record_node.destroy_node()
+            print('record node is destroyed')
+    finally:
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

@@ -59,6 +59,7 @@
 #include "custom_interfaces/msg/motor_state.hpp"
 #include "custom_interfaces/msg/motor_command.hpp"
 #include "custom_interfaces/msg/loadcell_state.hpp"
+#include "custom_interfaces/msg/dynamic_mimo_values.hpp"
 #include "custom_interfaces/srv/move_motor_direct.hpp"
 #include "custom_interfaces/srv/move_tool_angle.hpp"
 // #include "tcp_node.hpp"   // using #define NUM_OF_MOTRS
@@ -88,6 +89,7 @@ class ControlNode : public rclcpp::Node
 public:
   using MotorState = custom_interfaces::msg::MotorState;
   using MotorCommand = custom_interfaces::msg::MotorCommand;
+  using DynamicMIMOValues = custom_interfaces::msg::DynamicMIMOValues;
   using MoveMotorDirect = custom_interfaces::srv::MoveMotorDirect;
   using MoveToolAngle = custom_interfaces::srv::MoveToolAngle;
 
@@ -167,6 +169,14 @@ private:
    */
   MotorCommand motor_control_target_val_;
   rclcpp::Publisher<MotorCommand>::SharedPtr motor_control_publisher_;
+
+  /**
+   * @author DY
+   * @brief  Dynamics parameters of input and output
+   * 
+   */
+  DynamicMIMOValues dynamic_MIMO_values_;
+  rclcpp::Publisher<DynamicMIMOValues>::SharedPtr dynamic_MIMO_values_publisher_;
 
   /**
    * @author DY

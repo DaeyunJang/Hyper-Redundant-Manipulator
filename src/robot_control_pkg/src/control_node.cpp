@@ -34,6 +34,18 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   }
   motor_control_publisher_ = this->create_publisher<MotorCommand>("motor_command", QoS_RKL10V);
   RCLCPP_INFO(this->get_logger(), "Publisher 'motor_command' is created.");
+  
+  //===============================
+  // dynamics parameters publisher
+  //===============================
+  // this->motor_control_target_val_.target_position.resize(NUM_OF_MOTORS);
+  // this->motor_control_target_val_.target_velocity_profile.resize(NUM_OF_MOTORS);
+  // for(int i=0; i<NUM_OF_MOTORS; i++) {
+  //   this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100/10;
+  // }
+  dynamic_MIMO_values_publisher_ = this->create_publisher<DynamicMIMOValues>("dynamic_MIMO_values", QoS_RKL10V);
+  RCLCPP_INFO(this->get_logger(), "Publisher 'dynamic_MIMO_values' is created.");
+
   //===============================
   // surgical tool pose(degree) publisher
   //===============================
@@ -716,23 +728,48 @@ void ControlNode::run_dynamic_control_thread() {
         // if using std::vector<double> a = msg.data
         // The type must be conversion from float(msg.data) to double
         std::vector<double> theta_actual(this->segment_angle_.data.begin(), this->segment_angle_.data.end());
-        std::vector<double> dtheta_dt_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
+        std::vector<double> omega_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
         double dt = DT;
         std::vector<double> tension = {this->loadcell_data_.stress[1]*0.001, this->loadcell_data_.stress[0]*0.001}; // g -> kg, Y.J. kiniematics is positive on CW.
-        std::vector<double> force_external = {this->external_force_.x*0.001, this->external_force_.y*0.001};
+        std::vector<double> external_force = {this->external_force_.x*0.001, this->external_force_.y*0.001};
 
         // test -> no payload
-        force_external[0] = 0;
-        force_external[1] = 0;
+        external_force[0] = 0;
+        external_force[1] = 0;
 
 
         auto wire_length_to_move = this->HRM_controller_.compute(
           theta_desired,
           theta_actual,
-          dtheta_dt_actual,
+          omega_actual,
           dt,
           tension,
-          force_external);
+          external_force);
+
+        // publish dynamic MIMO values
+        if (this->segment_angle_op_flag_ == true) {
+          // 데이터 생성
+          dynamic_MIMO_values_.header.stamp = this->get_clock()->now();
+          dynamic_MIMO_values_.header.frame_id = "dynamics_MIMO_values";
+          dynamic_MIMO_values_.sampling_time = dt; // 초 단위 변환
+          dynamic_MIMO_values_.p_gain = HRM_controller_.pid_controller_.kp_;
+          dynamic_MIMO_values_.i_gain = HRM_controller_.pid_controller_.ki_;
+          dynamic_MIMO_values_.d_gain = HRM_controller_.pid_controller_.kd_;
+          dynamic_MIMO_values_.theta_desired = theta_desired; // 예제 데이터
+          dynamic_MIMO_values_.theta_actual = HRM_controller_.end_effector_theta_actual_;    // 약간의 오차 추가
+          dynamic_MIMO_values_.omega_actual = HRM_controller_.end_effector_dtheta_dt_actual_;  // 예제 데이터
+          dynamic_MIMO_values_.tension = tension;                          // 예제 데이터
+          dynamic_MIMO_values_.external_force = external_force;                   // 예제 데이터
+          dynamic_MIMO_values_.external_torque = HRM_controller_.tau_ext_;
+          dynamic_MIMO_values_.friction_torque = HRM_controller_.tau_friction_;
+          dynamic_MIMO_values_.damping_coefficient = HRM_controller_.dandf_[0];
+          dynamic_MIMO_values_.input_alpha = HRM_controller_.theta_ddot_input_;
+          dynamic_MIMO_values_.input_omega = HRM_controller_.theta_dot_input_;
+          dynamic_MIMO_values_.input_theta = HRM_controller_.theta_input_;
+
+          dynamic_MIMO_values_publisher_->publish(dynamic_MIMO_values_);
+          this->segment_angle_op_flag_ = false;
+        }
 
         double f_val[5];
         f_val[0] = wire_length_to_move[0];  // East
@@ -773,9 +810,12 @@ void ControlNode::run_dynamic_control_thread() {
         this->motor_control_publisher_->publish(this->motor_control_target_val_);
 
         geometry_msgs::msg::Twist surgical_tool_pose;
-        surgical_tool_pose.angular.x = this->HRM_controller_.surgical_tool_.pAngle_ * M_PI/180;
-        surgical_tool_pose.angular.y = this->HRM_controller_.surgical_tool_.tAngle_ * M_PI/180;
+        surgical_tool_pose.angular.z = theta_desired;
+        // surgical_tool_pose.angular.y = theta_desired;
         this->surgical_tool_pose_publisher_->publish(surgical_tool_pose);
+
+        
+
 
         loop_rate_.sleep();
       } catch (const std::runtime_error & e) {

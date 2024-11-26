@@ -19,6 +19,7 @@ set(msg_files
   "msg/MotorCommandCSV.msg"
   "msg/LoadcellState.msg"
   "msg/DataFilterSetting.msg"
+  "msg/DynamicMIMOValues.msg"
 )
 
 set(srv_files

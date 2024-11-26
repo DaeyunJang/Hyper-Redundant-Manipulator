@@ -37,14 +37,14 @@ std::vector<double> Controller::compute(
     }
 
     // theta_actual and angular velocity of tip
-    double end_effector_theta_actual = std::accumulate(theta_actual.begin(), theta_actual.end(), 0.0);
-    double end_effector_dtheta_dt_actual = std::accumulate(dtheta_dt_actual.begin(), dtheta_dt_actual.end(), 0.0);
+    end_effector_theta_actual_ = std::accumulate(theta_actual.begin(), theta_actual.end(), 0.0);
+    end_effector_dtheta_dt_actual_ = std::accumulate(dtheta_dt_actual.begin(), dtheta_dt_actual.end(), 0.0);
 
     // get torques_input by PID controller
-    double torque_input = pid_controller_.compute_output(theta_desired, end_effector_theta_actual, dt);
+    torque_input_ = pid_controller_.compute_output(theta_desired, end_effector_theta_actual_, dt);
 
     // Find B and F_friction
-    std::vector<double> dandf = damping_friction_model_.compute_dampingCoeff_and_friction(
+    dandf_ = damping_friction_model_.compute_dampingCoeff_and_friction(
         theta_actual,
         dtheta_dt_actual,
         theta_actual_prev_,
@@ -53,7 +53,7 @@ std::vector<double> Controller::compute(
         2);
     
     // hrm_dynamics_model_.update_inertia(0.02);
-    hrm_dynamics_model_.update_damping_coefficient(dandf[0]);
+    hrm_dynamics_model_.update_damping_coefficient(dandf_[0]);
     // std::cout << "<<<<<<<<<<<<<<<<<<<<<<" << std::endl;
     // std::copy(dandf.begin(), dandf.end(), 
     //         std::ostream_iterator<double>(std::cout, " "));
@@ -71,65 +71,59 @@ std::vector<double> Controller::compute(
      * @param force_external : N-m
      * @param tau_friction : N-m
      */
-    double tau_ext = (-1) * kLength * (force_external[0]*cos(end_effector_theta_actual) - force_external[1]*sin(end_effector_theta_actual));
-    double tau_friction = kCenterToHole * dandf[1];
+    tau_ext_ = (-1) * kLength * (force_external[0]*cos(end_effector_theta_actual_) - force_external[1]*sin(end_effector_theta_actual_));
+    tau_friction_ = kCenterToHole * dandf_[1];
 
     // calculate angular acceleration
-    double theta_ddot_input = hrm_dynamics_model_.compute_angular_acceleration(
-        torque_input,
-        tau_ext,
-        tau_friction,
-        end_effector_theta_actual,
-        end_effector_dtheta_dt_actual);
+    theta_ddot_input_ = hrm_dynamics_model_.compute_angular_acceleration(
+        torque_input_,
+        tau_ext_,
+        tau_friction_,
+        end_effector_theta_actual_,
+        end_effector_dtheta_dt_actual_);
 
     // calculate angular velocity
-    double theta_dot_input = theta_ddot_input * dt;
+    theta_dot_input_ = theta_ddot_input_ * dt;
     // calculate angle
-    double theta_input = theta_dot_input * dt;
+    theta_input_ = theta_dot_input_ * dt;
     // calibration DY definition to Y.J. Kim kinematics definition
-    theta_input *= -1 * surgical_tool_.todeg();
+    theta_input_ *= -1 * surgical_tool_.todeg();
     // innverse kinematics for moving the wire
-    auto wire_length_to_move = surgical_tool_.get_IK_result(theta_input, 0, 0);
+    auto wire_length_to_move = surgical_tool_.get_IK_result(theta_input_, 0, 0);
 
     theta_actual_prev_ = theta_actual;
     dtheta_dt_actual_prev_ = dtheta_dt_actual;
 
-    std::cout <<  "===========================================================" << std::endl;
-    std::cout << "KP: " << pid_controller_.kp_ << std::endl;
-    std::cout << "KI: " << pid_controller_.ki_ << std::endl;
-    std::cout << "KD: " << pid_controller_.kd_ << std::endl;
-    std::cout << "dt: " << dt << std::endl;
-    std::cout << "integral: " << pid_controller_.get_integral() << std::endl;
-    std::cout << "prev_error: " << pid_controller_.get_previous_error() << std::endl;
-    // std::cout <<  "theta_actual"     << theta_actual     << std::endl;
-    // std::cout <<  "dtheta_dt_actual" << dtheta_dt_actual << std::endl;
-    std::cout << "theta_desired: "    << theta_desired    << std::endl;
-    std::cout << "theta_actual: ";
-    std::copy(theta_actual.begin(), theta_actual.end(), 
-            std::ostream_iterator<double>(std::cout, " "));
-    std::cout << std::endl;
-    // std::cout << "dtheta_dt_actual: ";
-    // std::copy(dtheta_dt_actual.begin(), dtheta_dt_actual.end(), 
+    // std::cout <<  "===========================================================" << std::endl;
+    // std::cout << "KP: " << pid_controller_.kp_ << std::endl;
+    // std::cout << "KI: " << pid_controller_.ki_ << std::endl;
+    // std::cout << "KD: " << pid_controller_.kd_ << std::endl;
+    // std::cout << "dt: " << dt << std::endl;
+    // std::cout << "integral: " << pid_controller_.get_integral() << std::endl;
+    // std::cout << "prev_error: " << pid_controller_.get_previous_error() << std::endl;
+    // std::cout << "theta_desired: "    << theta_desired    << std::endl;
+    // std::cout << "theta_actual: ";
+    // std::copy(theta_actual.begin(), theta_actual.end(), 
     //         std::ostream_iterator<double>(std::cout, " "));
     // std::cout << std::endl;
-    std::cout <<  "dt: "               << dt               << std::endl;
-    std::cout <<  "tension: "   << tension[0] << " " << tension[1] << std::endl;
-    std::cout <<  "force_external: "   << force_external[0] << force_external[1] << std::endl;
-    std::cout <<  "torque_input: "                    << torque_input                     << std::endl;
-    std::cout <<  "tau_ext: "                         << tau_ext                          << std::endl;
-    std::cout <<  "tau_friction: "                    << tau_friction                     << std::endl;
-    std::cout <<  "end_effector_theta_actual: "       << end_effector_theta_actual        << std::endl;
-    std::cout <<  "end_effector_dtheta_dt_actual: "   << end_effector_dtheta_dt_actual    << std::endl;
-    std::cout <<  "theta_ddot_input: "                << theta_ddot_input                 << std::endl;
-    std::cout <<  "theta_dot_input: "                 << theta_dot_input                  << std::endl;
-    std::cout <<  "theta_input: "                     << theta_input                      << std::endl;
+    // std::cout <<  "dt: "               << dt               << std::endl;
+    // std::cout <<  "tension: "   << tension[0] << " " << tension[1] << std::endl;
+    // std::cout <<  "force_external: "   << force_external[0] << force_external[1] << std::endl;
+    // std::cout <<  "torque_input: "                    << torque_input                     << std::endl;
+    // std::cout <<  "tau_ext: "                         << tau_ext                          << std::endl;
+    // std::cout <<  "tau_friction: "                    << tau_friction                     << std::endl;
+    // std::cout <<  "end_effector_theta_actual: "       << end_effector_theta_actual        << std::endl;
+    // std::cout <<  "end_effector_dtheta_dt_actual: "   << end_effector_dtheta_dt_actual    << std::endl;
+    // std::cout <<  "theta_ddot_input: "                << theta_ddot_input                 << std::endl;
+    // std::cout <<  "theta_dot_input: "                 << theta_dot_input                  << std::endl;
+    // std::cout <<  "theta_input: "                     << theta_input                      << std::endl;
 
     // std::cout <<  "wire_length_to_move: "             << wire_length_to_move              << std::endl;
-    std::cout << "wire_length_to_move: ";
-    for (const auto& value : wire_length_to_move) {
-        std::cout << value << " ";
-    }
-    std::cout << std::endl;
+    // std::cout << "wire_length_to_move: ";
+    // for (const auto& value : wire_length_to_move) {
+    //     std::cout << value << " ";
+    // }
+    // std::cout << std::endl;
 
     return wire_length_to_move;
 }

@@ -61,7 +61,17 @@ public:
         const std::vector<double>& force_external
         );
 
-    double compute_;
+    double end_effector_theta_actual_;
+    double end_effector_dtheta_dt_actual_;
+    double torque_input_;
+    std::vector<double> dandf_;
+
+    double tau_ext_;
+    double tau_friction_;
+    double theta_ddot_input_;
+    double theta_dot_input_;
+    double theta_input_;
+
     std::vector<double> theta_actual_;
     std::vector<double> theta_actual_prev_;
     std::vector<double> dtheta_dt_actual_;
