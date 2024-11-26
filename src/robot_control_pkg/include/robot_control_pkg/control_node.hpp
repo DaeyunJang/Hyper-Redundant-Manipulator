@@ -152,6 +152,7 @@ private:
    * @brief Sine wave publish function
    */
   void publish_sine_wave();
+  void publish_sine_wave_1time();
   void publish_circle_motion();
   void publish_moebius_motion();
 
@@ -215,7 +216,8 @@ private:
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr control_mode_service_server_;
   rclcpp::Service<MoveMotorDirect>::SharedPtr move_motor_direct_service_server_;
   rclcpp::Service<MoveToolAngle>::SharedPtr kinematics_move_tool_angle_service_server_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr kinematics_move_sine_wave_server_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr move_sine_wave_server_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr move_sine_wave_1time_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr kinematics_move_circle_motion_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr kinematics_move_moebius_motion_server_;
 
@@ -229,9 +231,9 @@ private:
   float count_add_ = timer_period_ms_ / 1000.0;
   float angle_ = 0;
 
-  std::thread control_thread_;
+  std::thread dynamic_control_thread_;
   rclcpp::Rate loop_rate_;  // DY == initialize in the constructor of .cpp file (unit. Hz)
-  void run_control_thread();
+  void run_dynamic_control_thread();
 };
 
 #endif

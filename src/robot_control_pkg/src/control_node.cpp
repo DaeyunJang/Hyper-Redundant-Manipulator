@@ -240,13 +240,14 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   {
     try {
       // run
-      if (control_mode_ != ControlMode::kKinematics) {
-        RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
-        return;
-      }
+      // if (control_mode_ != ControlMode::kKinematics) {
+      //   RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
+      //   return;
+      // }
 
       if(request->data) {
         // True --> Start timer
+        count_ = 0;
         RCLCPP_INFO(this->get_logger(), "Starting sine wave publishing.");
         if (timer_ == nullptr) {
           timer_ = this->create_wall_timer(
@@ -259,6 +260,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         response->message = "Sine wave publishing started.";
       } else {
         // 서비스 요청이 False일 때 타이머 중지
+        count_ = 0;
         if (timer_ != nullptr) {
             timer_->cancel();
             timer_ = nullptr;
@@ -267,13 +269,59 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         response->message = "Sine wave publishing stopped.";
       }
 
-      RCLCPP_INFO(this->get_logger(), "Service <kinematics/move_sine_wave> accept the request.");
+      RCLCPP_INFO(this->get_logger(), "Service <motion/move_sine_wave> accept the request.");
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
     }
   };
-  kinematics_move_sine_wave_server_ = 
-    create_service<std_srvs::srv::SetBool>("kinematics/move_sine_wave", sine_wave_callback);
+  move_sine_wave_server_ = 
+    create_service<std_srvs::srv::SetBool>("motion/move_sine_wave", sine_wave_callback);
+
+
+  auto sine_wave_1time_callback = 
+  [this](
+  const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+        std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
+  {
+    try {
+      // run
+      // if (control_mode_ != ControlMode::kKinematics) {
+      //   RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
+      //   return;
+      // }
+
+      if(request->data) {
+        // True --> Start timer
+        count_ = 0;
+        RCLCPP_INFO(this->get_logger(), "Starting sine wave publishing.");
+        if (timer_ == nullptr) {
+          count_ = 0;
+          timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(timer_period_ms_),
+            std::bind(&ControlNode::publish_sine_wave_1time, this));
+        } else {
+          RCLCPP_WARN(this->get_logger(), "Error: sine wave motion is operating. Please stop using [ros2 service call]");
+        }
+        response->success = true;
+        response->message = "Sine wave publishing started.";
+      } else {
+        // 서비스 요청이 False일 때 타이머 중지
+        count_ = 0;
+        if (timer_ != nullptr) {
+            timer_->cancel();
+            timer_ = nullptr;
+        }
+        response->success = true;
+        response->message = "Sine wave publishing stopped.";
+      }
+
+      RCLCPP_INFO(this->get_logger(), "Service <motion/move_sine_wave_1time> accept the request.");
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+    }
+  };
+  move_sine_wave_1time_server_ = 
+    create_service<std_srvs::srv::SetBool>("motion/move_sine_wave_1time", sine_wave_1time_callback);
 
 
   auto circle_motion_callback = 
@@ -290,6 +338,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       // run
       if(request->data) {
         // True --> Start timer
+        count_ = 0;
         RCLCPP_INFO(this->get_logger(), "Starting Circle-motion publishing.");
         if (timer_ == nullptr) {
           timer_ = this->create_wall_timer(
@@ -302,6 +351,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         response->message = "Circle-motion publishing started.";
       } else {
         // 서비스 요청이 False일 때 타이머 중지
+        count_ = 0;
         if (timer_ != nullptr) {
             timer_->cancel();
             timer_ = nullptr;
@@ -332,6 +382,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       // run
       if(request->data) {
         // True --> Start timer
+        count_ = 0;
         RCLCPP_INFO(this->get_logger(), "Starting Circle-motion publishing.");
         if (timer_ == nullptr) {
           timer_ = this->create_wall_timer(
@@ -345,6 +396,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         response->message = "Moebius-motion publishing started.";
       } else {
         // 서비스 요청이 False일 때 타이머 중지
+        count_ = 0;
         if (timer_ != nullptr) {
             timer_->cancel();
             timer_ = nullptr;
@@ -434,7 +486,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 
 
   // opertion thread which kinematics and dynamics
-  control_thread_ = std::thread(&ControlNode::run_control_thread, this);
+  dynamic_control_thread_ = std::thread(&ControlNode::run_dynamic_control_thread, this);
   /**
    * @brief homing
    */
@@ -442,8 +494,8 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 }
 
 ControlNode::~ControlNode() {
-  if (control_thread_.joinable()) {
-    control_thread_.join();
+  if (dynamic_control_thread_.joinable()) {
+    dynamic_control_thread_.join();
   }
 }
 
@@ -527,37 +579,84 @@ void ControlNode::publishall()
 
 void ControlNode::publish_sine_wave()
 {
-  double omega = 2.0 * M_PI / period_;
-  angle_ = amp_ * std::sin(omega * count_);
-  cal_inverse_kinematics(angle_, 0, 0);
-  motor_control_publisher_->publish(motor_control_target_val_);
-  surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
-  count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
-  std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
+  if (control_mode_ == ControlMode::kKinematics) {
+    double omega = 2.0 * M_PI / period_;
+    angle_ = amp_ * std::sin(omega * count_);
+    cal_inverse_kinematics(-angle_, 0, 0);
+    motor_control_publisher_->publish(motor_control_target_val_);
+    surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
+    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
+  }
+  else if (control_mode_ == ControlMode::kDynamics) {
+    double omega = 2.0 * M_PI / period_;
+    angle_ = amp_ * std::sin(omega * count_);
+    this->theta_desired_ = -angle_;
+    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    // std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
+  }
+}
+
+void ControlNode::publish_sine_wave_1time()
+{
+  if (control_mode_ == ControlMode::kKinematics) {
+    double omega = 2.0 * M_PI / period_;
+    angle_ = amp_ * std::sin(omega * count_);
+    cal_inverse_kinematics(-angle_, 0, 0);
+    motor_control_publisher_->publish(motor_control_target_val_);
+    surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
+    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
+    
+    if (count_ >= 2.0 * M_PI) {
+      count_ = 0;
+      timer_->cancel();
+      timer_ = nullptr;
+      RCLCPP_INFO(this->get_logger(), "Sine wave cycle completed. Timer stopped.");
+    }
+  }
+  else if (control_mode_ == ControlMode::kDynamics) {
+    double omega = 2.0 * M_PI / period_;
+    angle_ = amp_ * std::sin(omega * count_);
+    this->theta_desired_ = -angle_; // +90 ~ -90
+    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    // std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
+    
+    if (count_ >= period_) {
+      count_ = 0;
+      timer_->cancel();
+      timer_ = nullptr;
+      RCLCPP_INFO(this->get_logger(), "Sine wave cycle completed. Timer stopped.");
+    }
+  }
 }
 
 void ControlNode::publish_circle_motion()
 {
-  double omega = 2.0 * M_PI / period_;
-  double pan_deg = amp_ * std::sin(omega * count_);
-  double tilt_deg = amp_ * std::cos(omega * count_);
-  cal_inverse_kinematics(pan_deg, 0, 0);
-  motor_control_publisher_->publish(motor_control_target_val_);
-  surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
-  count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
-  std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
+  if (control_mode_ == ControlMode::kKinematics) {
+    double omega = 2.0 * M_PI / period_;
+    double pan_deg = amp_ * std::sin(omega * count_);
+    double tilt_deg = amp_ * std::cos(omega * count_);
+    cal_inverse_kinematics(pan_deg, 0, 0);
+    motor_control_publisher_->publish(motor_control_target_val_);
+    surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
+    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
+  }
 }
 
 void ControlNode::publish_moebius_motion()
 {
-  double omega = 2.0 * M_PI / period_;
-  double pan_deg = 0.5 * amp_ * std::sin((omega*2.0) * count_);
-  double tilt_deg = amp_ * std::sin(omega * count_);
-  cal_inverse_kinematics(pan_deg, tilt_deg, 0);
-  motor_control_publisher_->publish(motor_control_target_val_);
-  surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
-  count_ += count_add_;
-  std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
+  if (control_mode_ == ControlMode::kKinematics) {
+    double omega = 2.0 * M_PI / period_;
+    double pan_deg = 0.5 * amp_ * std::sin((omega*2.0) * count_);
+    double tilt_deg = amp_ * std::sin(omega * count_);
+    cal_inverse_kinematics(pan_deg, tilt_deg, 0);
+    motor_control_publisher_->publish(motor_control_target_val_);
+    surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
+    count_ += count_add_;
+    std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
+  }
 }
 
 rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const std::vector<rclcpp::Parameter> &parameters) {
@@ -594,7 +693,7 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
   return result;
 }
 
-void ControlNode::run_control_thread() {
+void ControlNode::run_dynamic_control_thread() {
   RCLCPP_INFO(this->get_logger(), "control_thread is started on [%s]", this->get_parameter("control_mode").as_string().c_str());
 
   while (rclcpp::ok()) {
@@ -602,11 +701,14 @@ void ControlNode::run_control_thread() {
       try {
         // run dynamics() code
         /***
-         * @todo
+         * @warning
          * optimazation for memory based on avoiding memory copy
          * Y.J. Kim's kinematics is defined that CW direction is positive and CCW is negative.
          * But DY defined opposite.
          * affect to 'theta_desired', 'tension'
+         * @param loop_late_
+         * loop_late_ is the sampling rate of the controller 
+         * loop_late = global variable SAMPLING_HZ @include '../include/dynamics_parameters.hpp' 
          */
         // double theta_desired = this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
         double theta_desired = (-1) * this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
@@ -669,7 +771,11 @@ void ControlNode::run_control_thread() {
         #endif
         
         this->motor_control_publisher_->publish(this->motor_control_target_val_);
-        this->surgical_tool_pose_publisher_->publish(this->surgical_tool_pose_);
+
+        geometry_msgs::msg::Twist surgical_tool_pose;
+        surgical_tool_pose.angular.x = this->HRM_controller_.surgical_tool_.pAngle_ * M_PI/180;
+        surgical_tool_pose.angular.y = this->HRM_controller_.surgical_tool_.tAngle_ * M_PI/180;
+        this->surgical_tool_pose_publisher_->publish(surgical_tool_pose);
 
         loop_rate_.sleep();
       } catch (const std::runtime_error & e) {

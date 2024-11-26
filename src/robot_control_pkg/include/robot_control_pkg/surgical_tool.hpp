@@ -81,6 +81,12 @@ public:
   double max_forceps_deg_ = MAX_FORCEPS_RAGNE_DEGREE;
 
   /**
+   * @brief target angle of the manipulator 
+   * @unit degree
+   */
+  double pAngle_ = 0;   // East * West
+	double tAngle_ = 0;   // South * North
+  /**
    * @brief target length for moving wire using motor 
    * @unit mm
    */
@@ -146,8 +152,6 @@ private:
 	double rad_ = 180 / M_PI;
 	double mm_ = 0.001;
 
-  double pAngle_ = 0;   // East * West
-	double tAngle_ = 0;   // South * North
   double target_forceps_angle_ = 30;
 
   double alpha_;

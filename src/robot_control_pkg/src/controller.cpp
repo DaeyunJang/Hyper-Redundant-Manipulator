@@ -113,7 +113,7 @@ std::vector<double> Controller::compute(
     //         std::ostream_iterator<double>(std::cout, " "));
     // std::cout << std::endl;
     std::cout <<  "dt: "               << dt               << std::endl;
-    std::cout <<  "tension: "   << tension[0] << tension[1] << std::endl;
+    std::cout <<  "tension: "   << tension[0] << " " << tension[1] << std::endl;
     std::cout <<  "force_external: "   << force_external[0] << force_external[1] << std::endl;
     std::cout <<  "torque_input: "                    << torque_input                     << std::endl;
     std::cout <<  "tau_ext: "                         << tau_ext                          << std::endl;
