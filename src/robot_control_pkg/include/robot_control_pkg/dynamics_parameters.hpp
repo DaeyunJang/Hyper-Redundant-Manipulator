@@ -13,9 +13,9 @@
 #define DYNAMICS_PARAMETERS_HPP_
 
 // PID controller
-#define KP  10
-#define KI  0.1
-#define KD  0.1
+#define KP  50.0
+#define KI  5.0
+#define KD  15.0
 #define SAMPLING_HZ  30.0    // Hz
 #define DT  1/SAMPLING_HZ  // sec
 
