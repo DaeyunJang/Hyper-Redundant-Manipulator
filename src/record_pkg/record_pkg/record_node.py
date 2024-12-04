@@ -159,6 +159,18 @@ class RecordNode(Node):
         )
         self.get_logger().info('wire_length subscriber is created.')
 
+        self.segment_angle_relative_flag = False
+        self.segment_angle_relative = Float32MultiArray()
+        self.end_effector_angle = 0
+        self.segment_angle_relative_subscriber = self.create_subscription(
+            Float32MultiArray,
+            'estimated_segment_angle/relative',
+            self.read_segment_angle_relative,
+            1
+        )
+        self.get_logger().info('wire_length subscriber is created.')
+
+        
         self.dynamic_MIMO_values_flag = False
         self.dynamic_MIMO_values = DynamicMIMOValues()
         self.dynamic_MIMO_values_subscriber = self.create_subscription(
@@ -252,7 +264,7 @@ class RecordNode(Node):
                 if record all topics excluding /camera/* data, use under line
                 """
                 cmd = 'ros2 bag record -a --exclude "/camera(.*)"'
-                self.bag_process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.directory_path)
+                # self.bag_process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.directory_path)
 
 
                 """
@@ -270,7 +282,7 @@ class RecordNode(Node):
                 self.get_logger().info('Stop recording')
                 self.csv_file.close()
                 self.csv_file_dMv.close()
-                self.bag_process.terminate()
+                # self.bag_process.terminate()
                 response.success = True
                 response.message = 'Stop Recording.'
                 self.data_count = 0
@@ -347,6 +359,11 @@ class RecordNode(Node):
         self.wire_length_flag = True
         self.wire_length = msg
 
+    def read_segment_angle_relative(self, msg):
+        self.segment_angle_relative_flag = True
+        self.segment_angle_relative = msg
+        self.end_effector_angle = sum(msg.data)
+
     def read_dynamic_MIMO_values(self, msg):
         self.dynamic_MIMO_values_flag = True
         self.dynamic_MIMO_values = msg
@@ -394,6 +411,8 @@ class RecordNode(Node):
         self.csv_headers['tx'] = []
         self.csv_headers['ty'] = []
         self.csv_headers['tz'] = []
+        self.csv_headers['tz'] = []
+        self.csv_headers['theta_actual'] = []
 
         self.csv_file = open(self.csv_file_name, mode='w')
         self.csv_writer = csv.writer(self.csv_file)
@@ -423,7 +442,8 @@ class RecordNode(Node):
                                  + [str(forcexyz.z)]
                                  + [str(torquexyz.x)]
                                  + [str(torquexyz.y)]
-                                 + [str(torquexyz.z)])
+                                 + [str(torquexyz.z)]
+                                 + [str(self.end_effector_angle)])
         self.csv_file.flush()
         pass
 
@@ -447,9 +467,14 @@ class RecordNode(Node):
         # self.csv_headers_dMv['segment_omega_relative'] = []
         for i in range(self.numofmotors):
             self.csv_headers_dMv[f'tension #{i}'] = []
-        self.csv_headers_dMv[f'external_force_x'] = []
-        self.csv_headers_dMv[f'external_force_y'] = []
-        self.csv_headers_dMv['external_torque'] = []
+        self.csv_headers_dMv[f'torque_input'] = []
+        self.csv_headers_dMv[f'estimated_force_x'] = []
+        self.csv_headers_dMv[f'estimated_force_y'] = []
+        self.csv_headers_dMv[f'actual_force_x'] = []
+        self.csv_headers_dMv[f'actual_force_y'] = []
+        self.csv_headers_dMv['estimated_torque'] = []
+        self.csv_headers_dMv['actual_torque'] = []
+        self.csv_headers_dMv['friction_mode'] = []
         self.csv_headers_dMv['friction_torque'] = []
         self.csv_headers_dMv['damping_coefficient'] = []
         self.csv_headers_dMv['input_alpha'] = []
@@ -468,7 +493,12 @@ class RecordNode(Node):
         timestamp_sec = str(self.dynamic_MIMO_values.header.stamp.sec)
         timestamp_nanosec = str(self.dynamic_MIMO_values.header.stamp.nanosec)
         image_file = str(self.data_count_dMv) + '_' + str(timestamp_sec) + '-' + str(timestamp_nanosec) +'.png'
+        actual_force = self.fts_data.wrench.force   # mN
         
+        # N-m
+        actual_torque = (-1) * (10.125*0.001) * (actual_force.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
+
+
         self.csv_writer_dMv.writerow([timestamp_sec, timestamp_nanosec, image_file]
                                  + [str(self.dynamic_MIMO_values.sampling_time)]
                                  + [str(self.dynamic_MIMO_values.p_gain)]
@@ -478,8 +508,13 @@ class RecordNode(Node):
                                  + [str(self.dynamic_MIMO_values.theta_actual)]
                                  + [str(self.dynamic_MIMO_values.omega_actual)]
                                  + [str(value) for value in self.dynamic_MIMO_values.tension]
+                                 + [str(self.dynamic_MIMO_values.torque_input)]
                                  + [str(value) for value in self.dynamic_MIMO_values.external_force]
+                                 + [str(actual_force.x * 0.001)]
+                                 + [str(actual_force.y * 0.001)]
                                  + [str(self.dynamic_MIMO_values.external_torque)]
+                                 + [str(actual_torque)]
+                                 + [str(self.dynamic_MIMO_values.friction_mode)]
                                  + [str(self.dynamic_MIMO_values.friction_torque)]
                                  + [str(self.dynamic_MIMO_values.damping_coefficient)]
                                  + [str(self.dynamic_MIMO_values.input_alpha)]
@@ -512,7 +547,7 @@ class RecordNode(Node):
                 "fz": "mN",
                 "tx": "mNm",
                 "ty": "mNm",
-                "tz": "mNm"
+                "tz": "mNm",
             },
             "offsets": {
                 "fx": self.fts_data_offset.wrench.force.x,

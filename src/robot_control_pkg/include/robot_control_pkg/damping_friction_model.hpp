@@ -37,6 +37,8 @@ public:
   DampingFrictionModel();
   ~DampingFrictionModel();
 
+  int mode_ = 2;
+
   // std::pair<double, double> compute_dampingCoeff_and_friction(
   std::vector<double> compute_dampingCoeff_and_friction(
     const std::vector<double>& q,

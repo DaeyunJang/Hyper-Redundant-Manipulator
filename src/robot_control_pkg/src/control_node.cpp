@@ -5,7 +5,9 @@ using MotorCommand = custom_interfaces::msg::MotorCommand;
 using namespace std::chrono_literals;
 
 ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
-: Node("ControlNode", node_options), control_mode_(ControlMode::kKinematics), loop_rate_(SAMPLING_HZ)
+: Node("ControlNode", node_options),
+  control_mode_(ControlMode::kKinematics),
+  loop_rate_(SAMPLING_HZ)
 {
   this->declare_parameter("qos_depth", 10);
   int8_t qos_depth = this->get_parameter("qos_depth", qos_depth);
@@ -14,6 +16,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   this->declare_parameter<double>("dynamics/p_gain", KP);
   this->declare_parameter<double>("dynamics/i_gain", KI);
   this->declare_parameter<double>("dynamics/d_gain", KD);
+  this->declare_parameter<double>("dynamics/friction_mode", FRICTION_MODE);
   // 파라미터 변경 콜백 등록
   param_callback_handle_ = this->add_on_set_parameters_callback(
     std::bind(&ControlNode::parameter_callback, this, std::placeholders::_1)
@@ -696,6 +699,10 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       double d_gain = param.as_double();
       HRM_controller_.pid_controller_.kd_ = d_gain;
       RCLCPP_INFO(this->get_logger(), "Updated D gain: %f", d_gain);
+    } else if (param.get_name() == "dynamics/friction_mode") {
+      int friction_mode = param.as_int();
+      HRM_controller_.damping_friction_model_.mode_ = friction_mode;
+      RCLCPP_INFO(this->get_logger(), "Updated friction mode: %d", HRM_controller_.damping_friction_model_.mode_);
     }
 
 
@@ -734,8 +741,8 @@ void ControlNode::run_dynamic_control_thread() {
         std::vector<double> external_force = {this->external_force_.x*0.001, this->external_force_.y*0.001};
 
         // test -> no payload
-        external_force[0] = 0;
-        external_force[1] = 0;
+        // external_force[0] = 0;
+        // external_force[1] = 0;
 
 
         auto wire_length_to_move = this->HRM_controller_.compute(
@@ -759,8 +766,10 @@ void ControlNode::run_dynamic_control_thread() {
           dynamic_MIMO_values_.theta_actual = HRM_controller_.end_effector_theta_actual_;    // 약간의 오차 추가
           dynamic_MIMO_values_.omega_actual = HRM_controller_.end_effector_dtheta_dt_actual_;  // 예제 데이터
           dynamic_MIMO_values_.tension = tension;                          // 예제 데이터
+          dynamic_MIMO_values_.torque_input = HRM_controller_.torque_input_;
           dynamic_MIMO_values_.external_force = external_force;                   // 예제 데이터
           dynamic_MIMO_values_.external_torque = HRM_controller_.tau_ext_;
+          dynamic_MIMO_values_.friction_mode = HRM_controller_.damping_friction_model_.mode_;
           dynamic_MIMO_values_.friction_torque = HRM_controller_.tau_friction_;
           dynamic_MIMO_values_.damping_coefficient = HRM_controller_.dandf_[0];
           dynamic_MIMO_values_.input_alpha = HRM_controller_.theta_ddot_input_;

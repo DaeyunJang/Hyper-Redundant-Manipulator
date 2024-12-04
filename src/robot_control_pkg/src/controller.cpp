@@ -49,8 +49,8 @@ std::vector<double> Controller::compute(
         dtheta_dt_actual,
         theta_actual_prev_,
         dtheta_dt_actual_prev_,
-        tension,
-        2);
+        tension.
+        damping_friction_model_.mode_);
     
     // hrm_dynamics_model_.update_inertia(0.02);
     hrm_dynamics_model_.update_damping_coefficient(dandf_[0]);
@@ -74,6 +74,8 @@ std::vector<double> Controller::compute(
     tau_ext_ = (-1) * kLength * (force_external[0]*cos(end_effector_theta_actual_) - force_external[1]*sin(end_effector_theta_actual_));
     tau_friction_ = kCenterToHole * dandf_[1];
 
+    // tau_friction_ = 0;
+    
     // calculate angular acceleration
     theta_ddot_input_ = hrm_dynamics_model_.compute_angular_acceleration(
         torque_input_,

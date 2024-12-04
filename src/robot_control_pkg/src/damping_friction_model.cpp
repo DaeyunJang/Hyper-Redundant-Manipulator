@@ -32,8 +32,9 @@ std::vector<double> DampingFrictionModel::compute_dampingCoeff_and_friction(
     const std::vector<double>& q_prev,
     const std::vector<double>& dq_prev,
     const std::vector<double>& tension,
-    int mode=2)
+    int mode)
 {   
+
     /**
      * @brief Check the vetors size are equal.
      * @author DY
@@ -70,11 +71,7 @@ std::vector<double> DampingFrictionModel::compute_dampingCoeff_and_friction(
     for (int j = 0; j < n; ++j) {
         double c1 = mu_v;
         if (mode == 1) {
-            if (del_v[j] < vs) {
-                c1 = 0.5 * mu_s * (2 * vs - del_v[j]) * std::pow(del_v[j] + vs, 2) * std::pow(vs, -3) + mu_s;
-            } else if (del_v[j] < vd) {
-                c1 = mu_v + del_v[j] * (del_v_hat + 2 * del_v[j]) * std::pow(vd - del_v[j], 2) / std::pow(del_v_u, 3);
-            } 
+            c1 = mu_v;
         } else if (mode == 2) {
             c1 = mu_v + (mu_s - mu_v) * std::exp(-std::pow(del_v[j] / vs, 2));
         }
@@ -117,6 +114,9 @@ std::vector<double> DampingFrictionModel::compute_dampingCoeff_and_friction(
     dq_prev_ = dq;
 
 	std::vector<double> results = {B, res_friction};
+    if (mode == 0) {
+        results[1] = 0;
+    }
     return results;
     // return std::make_pair(B, res_friction);
 }

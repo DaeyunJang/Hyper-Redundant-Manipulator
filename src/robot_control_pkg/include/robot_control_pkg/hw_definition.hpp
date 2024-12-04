@@ -25,7 +25,7 @@
 #define INC_PER_ROT_3_9     GEAR_RATIO_3_9 * ENCODER_CHANNEL * ENCODER_RESOLUTION
 #define DIRECTION_COUPLER   1      // if not, use 1
 
-#define MOTOR_SOFTWARE_LIMIT 400000
+#define MOTOR_SOFTWARE_LIMIT 1000000
 
 /** Motor control mode **/
 /**
