@@ -123,7 +123,7 @@ class SerialNode(Node):
         self.torque3d = np.zeros((1,3))   # empty list [0, 0, 0]
         self.force3d_kf = np.zeros((1,3)) # empty list [0, 0, 0]
         self.torque3d_kf = np.zeros((1,3))# empty list [0, 0, 0]
-        self.kalman_filters = [self.create_kalman_filter() for _ in range(6)]
+        self.kalman_filters = [self.create_kalman_filter(dim_x=1, dim_z=1) for _ in range(6)]
 
         self.offset_force3d = np.zeros((1,3))
         self.offset_torque3d = np.zeros((1,3))
@@ -219,7 +219,7 @@ class SerialNode(Node):
         self.loadcell_offset_publisher.publish(offset_msg)
     
     # Function of creating 'Kalman filter' - filterpy
-    def create_kalman_filter(dim_x=1, dim_z=1, F=1, H=1, x_init=0, P=1, Q=1e0, R=1e2):
+    def create_kalman_filter(self, dim_x=1, dim_z=1, F=1, H=1, x_init=0, P=1, Q=1e0, R=1e2):
         kf = KalmanFilter(dim_x=dim_x, dim_z=dim_z)
         kf.F = np.array([[F]])  # 상태 전이 행렬 (단위 행렬)
         kf.H = np.array([[H]])  # 측정 행렬 (단위 행렬)
