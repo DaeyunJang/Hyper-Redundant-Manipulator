@@ -113,6 +113,14 @@ class RecordNode(Node):
             self.read_fts_data,
             QOS_RKL10V
         )
+        self.fts_data_kalman_filter_flag = False
+        self.fts_data_kalman_filter = WrenchStamped()
+        self.fts_data_kalman_filter_subscriber = self.create_subscription(
+            WrenchStamped,
+            'fts_data_kalman_filter',
+            self.read_fts_data_kalman_filter,
+            QOS_RKL10V
+        )
         self.fts_data_offset = WrenchStamped()
         self.fts_offset_subscriber = self.create_subscription(
             WrenchStamped,
@@ -342,6 +350,9 @@ class RecordNode(Node):
     def read_fts_data(self, msg):
         self.fts_data_flag = True
         self.fts_data = msg
+    def read_fts_data_kalman_filter(self, msg):
+        self.fts_data_kalman_filter_flag = True
+        self.fts_data_kalman_filter = msg
     def read_fts_data_offset(self, msg):
         self.fts_data_offset = msg
 
@@ -413,6 +424,13 @@ class RecordNode(Node):
         self.csv_headers['tz'] = []
         self.csv_headers['tz'] = []
         self.csv_headers['theta_actual'] = []
+        self.csv_headers['fx_kalman'] = []
+        self.csv_headers['fy_kalman'] = []
+        self.csv_headers['fz_kalman'] = []
+        self.csv_headers['tx_kalman'] = []
+        self.csv_headers['ty_kalman'] = []
+        self.csv_headers['tz_kalman'] = []
+        self.csv_headers['tz_kalman'] = []
 
         self.csv_file = open(self.csv_file_name, mode='w')
         self.csv_writer = csv.writer(self.csv_file)
@@ -432,6 +450,8 @@ class RecordNode(Node):
         loadcell_stress = self.loadcell_data.stress
         forcexyz = self.fts_data.wrench.force
         torquexyz = self.fts_data.wrench.torque
+        forcexyz_kalman = self.fts_data_kalman_filter.wrench.force
+        torquexyz_kalman = self.fts_data_kalman_filter.wrench.torque
         
         self.csv_writer.writerow([timestamp_sec, timestamp_nanosec, image_file]
                                  + [str(value) for value in actual_position]
@@ -443,7 +463,13 @@ class RecordNode(Node):
                                  + [str(torquexyz.x)]
                                  + [str(torquexyz.y)]
                                  + [str(torquexyz.z)]
-                                 + [str(self.end_effector_angle)])
+                                 + [str(self.end_effector_angle)]
+                                 + [str(forcexyz_kalman.x)]
+                                 + [str(forcexyz_kalman.y)]
+                                 + [str(forcexyz_kalman.z)]
+                                 + [str(torquexyz_kalman.x)]
+                                 + [str(torquexyz_kalman.y)]
+                                 + [str(torquexyz_kalman.z)])
         self.csv_file.flush()
         pass
 
@@ -470,10 +496,13 @@ class RecordNode(Node):
         self.csv_headers_dMv[f'torque_input'] = []
         self.csv_headers_dMv[f'estimated_force_x'] = []
         self.csv_headers_dMv[f'estimated_force_y'] = []
-        self.csv_headers_dMv[f'actual_force_x'] = []
-        self.csv_headers_dMv[f'actual_force_y'] = []
+        self.csv_headers_dMv[f'actual_force_x (raw)'] = []
+        self.csv_headers_dMv[f'actual_force_y (raw)'] = []
+        self.csv_headers_dMv[f'actual_force_x (kalman)'] = []
+        self.csv_headers_dMv[f'actual_force_y (kalman)'] = []
         self.csv_headers_dMv['estimated_torque'] = []
-        self.csv_headers_dMv['actual_torque'] = []
+        self.csv_headers_dMv['actual_torque (raw)'] = []
+        self.csv_headers_dMv['actual_torque (kalman)'] = []
         self.csv_headers_dMv['friction_mode'] = []
         self.csv_headers_dMv['friction_torque'] = []
         self.csv_headers_dMv['damping_coefficient'] = []
@@ -494,10 +523,10 @@ class RecordNode(Node):
         timestamp_nanosec = str(self.dynamic_MIMO_values.header.stamp.nanosec)
         image_file = str(self.data_count_dMv) + '_' + str(timestamp_sec) + '-' + str(timestamp_nanosec) +'.png'
         actual_force = self.fts_data.wrench.force   # mN
-        
+        actual_force_kalman = self.fts_data_kalman_filter.wrench.force
         # N-m
         actual_torque = (-1) * (10.125*0.001) * (actual_force.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
-
+        actual_torque_kalman = (-1) * (10.125*0.001) * (actual_force_kalman.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force_kalman.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
 
         self.csv_writer_dMv.writerow([timestamp_sec, timestamp_nanosec, image_file]
                                  + [str(self.dynamic_MIMO_values.sampling_time)]
@@ -512,8 +541,11 @@ class RecordNode(Node):
                                  + [str(value) for value in self.dynamic_MIMO_values.external_force]
                                  + [str(actual_force.x * 0.001)]
                                  + [str(actual_force.y * 0.001)]
+                                 + [str(actual_force_kalman.x * 0.001)]
+                                 + [str(actual_force_kalman.y * 0.001)]
                                  + [str(self.dynamic_MIMO_values.external_torque)]
                                  + [str(actual_torque)]
+                                 + [str(actual_torque_kalman)]
                                  + [str(self.dynamic_MIMO_values.friction_mode)]
                                  + [str(self.dynamic_MIMO_values.friction_torque)]
                                  + [str(self.dynamic_MIMO_values.damping_coefficient)]

@@ -44,13 +44,14 @@ std::vector<double> Controller::compute(
     torque_input_ = pid_controller_.compute_output(theta_desired, end_effector_theta_actual_, dt);
 
     // Find B and F_friction
+    int mode = damping_friction_model_.mode_;
     dandf_ = damping_friction_model_.compute_dampingCoeff_and_friction(
         theta_actual,
         dtheta_dt_actual,
         theta_actual_prev_,
         dtheta_dt_actual_prev_,
-        tension.
-        damping_friction_model_.mode_);
+        tension,
+        mode);
     
     // hrm_dynamics_model_.update_inertia(0.02);
     hrm_dynamics_model_.update_damping_coefficient(dandf_[0]);

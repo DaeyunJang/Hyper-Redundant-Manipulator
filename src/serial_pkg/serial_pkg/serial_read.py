@@ -3,6 +3,8 @@ import time
 import sys, os
 import numpy as np
 import threading
+from filterpy.kalman import KalmanFilter
+# from filterpy.common import Q_discrete_white_noise
 
 import rclpy
 from rclpy.node import Node
@@ -46,6 +48,11 @@ class SerialNode(Node):
         self.fts_publisher = self.create_publisher(
             WrenchStamped,
             'fts_data',
+            QOS_RKL10V
+        )
+        self.fts_kalman_publisher = self.create_publisher(
+            WrenchStamped,
+            'fts_data_kalman_filter',
             QOS_RKL10V
         )
         self.fts_offset_publisher = self.create_publisher(
@@ -111,21 +118,18 @@ class SerialNode(Node):
                 print(f"Connection failed: {e}. Retrying in 2 seconds...")
                 time.sleep(2)  # 2초 후 재시도
 
-        # self.ser = serial.Serial(self.serial_port, self.baudrate, timeout=1)
         self.get_logger().info(f'Serial status: {self.ser}')
-
-        # self.force3d = [0 for i in range(3)]   # empty list [0, 0, 0]
-        # self.torque3d = [0 for i in range(3)]   # empty list [0, 0, 0]
-        # self.loadcell_weight = [0 for i in range(2)]
-        
-        self.force3d = np.zeros((1,3))   # empty list [0, 0, 0]
+        self.force3d = np.zeros((1,3))    # empty list [0, 0, 0]
         self.torque3d = np.zeros((1,3))   # empty list [0, 0, 0]
-        self.loadcell_weight = np.zeros((1,2))
-        # self.get_logger().info(f'shape={self.force3d.shape}')
+        self.force3d_kf = np.zeros((1,3)) # empty list [0, 0, 0]
+        self.torque3d_kf = np.zeros((1,3))# empty list [0, 0, 0]
+        self.kalman_filters = [self.create_kalman_filter() for _ in range(6)]
 
         self.offset_force3d = np.zeros((1,3))
         self.offset_torque3d = np.zeros((1,3))
         self.offset_loadcell_weight = np.zeros((1,2))
+
+        self.loadcell_weight = np.zeros((1,2))
 
         self.data_filter_setting = DataFilterSetting()
         self.filter_weight_sensitivity = 0.3
@@ -166,8 +170,9 @@ class SerialNode(Node):
     #     # self.get_logger().info(f'MAF_state: {self.MAF_state.data}')
 
     def publishall(self):
+        stamp = self.get_clock().now().to_msg()
         msg1 = WrenchStamped()
-        msg1.header.stamp = self.get_clock().now().to_msg()
+        msg1.header.stamp = stamp
         msg1.header.frame_id = 'fts_data'
         msg1.wrench.force.x = self.force3d.squeeze()[0]
         msg1.wrench.force.y = self.force3d.squeeze()[1]
@@ -177,8 +182,19 @@ class SerialNode(Node):
         msg1.wrench.torque.z = self.torque3d.squeeze()[2]
         self.fts_publisher.publish(msg1)
 
+        msg_kf = WrenchStamped()
+        msg_kf.header.stamp = stamp
+        msg_kf.header.frame_id = 'fts_data_kalman_filter'
+        msg_kf.wrench.force.x = self.force3d_kf.squeeze()[0]
+        msg_kf.wrench.force.y = self.force3d_kf.squeeze()[1]
+        msg_kf.wrench.force.z = self.force3d_kf.squeeze()[2]
+        msg_kf.wrench.torque.x = self.torque3d_kf.squeeze()[0]
+        msg_kf.wrench.torque.y = self.torque3d_kf.squeeze()[1]
+        msg_kf.wrench.torque.z = self.torque3d_kf.squeeze()[2]
+        self.fts_kalman_publisher.publish(msg_kf)
+
         offset_msg1 = WrenchStamped()
-        offset_msg1.header.stamp = self.get_clock().now().to_msg()
+        offset_msg1.header.stamp = stamp
         offset_msg1.header.frame_id = 'fts_data_offset'
         offset_msg1.wrench.force.x = float(self.offset_force3d.squeeze()[0])
         offset_msg1.wrench.force.y = float(self.offset_force3d.squeeze()[1])
@@ -189,19 +205,30 @@ class SerialNode(Node):
         self.fts_offset_publisher.publish(offset_msg1)
 
         msg = LoadcellState()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp = stamp
         msg.header.frame_id = 'loadcell_state'
         msg.stress.append(self.loadcell_weight.squeeze()[0])
         msg.stress.append(self.loadcell_weight.squeeze()[1])
         self.loadcell_publisher.publish(msg)
 
         offset_msg = LoadcellState()
-        offset_msg.header.stamp = self.get_clock().now().to_msg()
+        offset_msg.header.stamp = stamp
         offset_msg.header.frame_id = 'loadcell_state_offset'
         offset_msg.stress.append(self.offset_loadcell_weight.squeeze()[0])
         offset_msg.stress.append(self.offset_loadcell_weight.squeeze()[1])
         self.loadcell_offset_publisher.publish(offset_msg)
-        
+    
+    # Function of creating 'Kalman filter' - filterpy
+    def create_kalman_filter(dim_x=1, dim_z=1, F=1, H=1, x_init=0, P=1, Q=1e0, R=1e2):
+        kf = KalmanFilter(dim_x=dim_x, dim_z=dim_z)
+        kf.F = np.array([[F]])  # 상태 전이 행렬 (단위 행렬)
+        kf.H = np.array([[H]])  # 측정 행렬 (단위 행렬)
+        kf.x = np.array([x_init])  # 초기 상태 추정
+        kf.P = np.array([[P]])  # 초기 공분산
+        kf.Q = np.array([[Q]])  # 프로세스 노이즈
+        kf.R = np.array([[R]])  # 측정 노이즈
+        return kf
+
     def read_serial_data(self):
         try:
             self.get_logger().info('Start serial reading')
@@ -238,9 +265,6 @@ class SerialNode(Node):
                             self.force3d = np.reshape(self.force3d, (1,3))
                             self.torque3d = np.reshape(self.torque3d, (1,3))
                             self.loadcell_weight = np.reshape(self.loadcell_weight, (1,2))
-                            # self.force3d = np.expand_dims(np.reshape(self.force3d, (1,3)), axis=0)
-                            # self.torque3d = np.expand_dims(np.reshape(self.torque3d, (1,3)), axis=0)
-                            # self.loadcell_weight = np.expand_dims(np.reshape(self.loadcell_weight, (1,2)), axis=0)
                             
 
                             ############################################################################################
@@ -266,6 +290,19 @@ class SerialNode(Node):
                                 self.torque3d_buffer = np.append(self.torque3d_buffer, self.torque3d, axis=0)
                                 self.loadcell_weight_buffer = np.delete(self.loadcell_weight_buffer, 0, axis=0)
                                 self.loadcell_weight_buffer = np.append(self.loadcell_weight_buffer, self.loadcell_weight, axis=0)
+
+                            self.force3d_kf = np.zeros((1,3)) # empty list [0, 0, 0]
+                            self.torque3d_kf = np.zeros((1,3))# empty list [0, 0, 0]
+
+                            self.forcetorque6d = np.concatenate((self.force3d, self.torque3d), axis=1).flatten()
+                            for ft_sensor_id in range(6):
+                                kf = self.kalman_filters[ft_sensor_id]  # object reference
+                                kf.predict()
+                                kf.update(self.forcetorque6d[ft_sensor_id])
+                            
+                            self.force3d_kf = self.forcetorque6d[:3].reshape(1, 3)
+                            self.torque3d_kf = self.forcetorque6d[:3].reshape(1, 3)
+                            
 
                             # self.get_logger().info(f'Final: {self.force3d}')
                             # self.get_logger().info(f'==========================================')

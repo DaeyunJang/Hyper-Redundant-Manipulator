@@ -32,7 +32,7 @@ std::vector<double> DampingFrictionModel::compute_dampingCoeff_and_friction(
     const std::vector<double>& q_prev,
     const std::vector<double>& dq_prev,
     const std::vector<double>& tension,
-    int mode)
+    const int mode)
 {   
 
     /**

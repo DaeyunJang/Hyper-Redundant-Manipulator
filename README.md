@@ -20,7 +20,8 @@ pip install -r requirements.txt
 ```
 
 ## Package ingoring
-submodule (LSTM-force-estimation) has same package (custom_interfaces), so make COLCON_IGNORE in that package
+submodule (LSTM-force-estimation) has same package (custom_interfaces)  
+Make COLCON_IGNORE in that package if COLCON_IGNORE file doesn't exist in directory './src/LSTM-force-estimation/src/custom_interfaces'
 ```
 cd {PATH_TO_PROJECT_DIRECTORY}/src/LSTM-force-estimation/src/custom_interfaces
 
@@ -29,18 +30,25 @@ touch COLCON_IGNORE
 
 ## colcon build
 ```
-# please build 'custom_interfaces' first with deactivation of virtual env
 
 deactivate
 
 cd {PATH_TO_PROJECT_DIRECTORY}  # e.g. cd ~/Hyper-Redundant-Manipulator
 
-colcon build --packages-select custom_interfaces
+~~colcon build --packages-select custom_interfaces~~
 
 source {env_name}/bin/activate
 
-colcon build  (not use --symlink-install option, TBD)
+colcon build --symlink-install
 ```
+~~# please build 'custom_interfaces' first with deactivation of virtual env~~  
+~~colcon build --packages-select custom_interfaces~~
+
+> **Note** If you face the build error as  
+AttributeError: 'NoneType' object has no attribute 'shutdown'  
+&rightarrow **Check the version of module 'empy' is 3.3.4 on requirements.txt (not 'em')**
+
+
 
 # Implementation
 ### prerequisition

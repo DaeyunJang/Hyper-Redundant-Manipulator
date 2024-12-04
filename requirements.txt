@@ -151,7 +151,7 @@ systemd-python==234
 tifffile==2024.8.10
 toml==0.10.2
 tqdm==4.66.5
-ufoLib2==0.13.1F
+ufoLib2==0.13.1
 ufw==0.36.1
 unicodedata2==14.0.0
 urllib3==1.26.5
