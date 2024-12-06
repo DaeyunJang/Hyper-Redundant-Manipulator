@@ -124,7 +124,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       }
     );
   
-  segment_angle_subscriber =
+  segment_angle_subscriber_ =
     this->create_subscription<std_msgs::msg::Float32MultiArray>(
       "estimated_segment_angle/relative",
       QoS_RKL10V,
@@ -140,8 +140,24 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         }
       }
     );
-  
-  segment_angular_velocity_subscriber =
+  segment_angle_absolute_subscriber_ =
+    this->create_subscription<std_msgs::msg::Float32MultiArray>(
+      "estimated_segment_angle/absolute",
+      QoS_RKL10V,
+      [this] (const std_msgs::msg::Float32MultiArray::SharedPtr msg) -> void
+      {
+        try {
+          this->segment_angle_op_flag_ = true;
+          this->segment_angle_absolute_.data = msg->data;
+
+          RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/absolute.");
+        } catch (const std::runtime_error & e) {
+          RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+        }
+      }
+    );
+
+  segment_angular_velocity_subscriber_ =
     this->create_subscription<std_msgs::msg::Float32MultiArray>(
       "estimated_segment_angular_velocity/relative",
       QoS_RKL10V,
@@ -152,6 +168,23 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
           this->segment_angular_velocity_.data = msg->data;
 
           RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/relative.");
+        } catch (const std::runtime_error & e) {
+          RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+        }
+      }
+    );
+
+  segment_angular_velocity_absolute_subscriber_ =
+    this->create_subscription<std_msgs::msg::Float32MultiArray>(
+      "estimated_segment_angular_velocity/absolute",
+      QoS_RKL10V,
+      [this] (const std_msgs::msg::Float32MultiArray::SharedPtr msg) -> void
+      {
+        try {
+          this->segment_angular_velocity_op_flag_ = true;
+          this->segment_angular_velocity_absolute_.data = msg->data;
+
+          RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/absolute.");
         } catch (const std::runtime_error & e) {
           RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
         }
@@ -623,7 +656,7 @@ void ControlNode::publish_sine_wave_1time()
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
     std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
     
-    if (count_ >= 2.0 * M_PI) {
+    if (count_ >= period_) {
       count_ = 0;
       timer_->cancel();
       timer_ = nullptr;
@@ -734,8 +767,28 @@ void ControlNode::run_dynamic_control_thread() {
 
         // if using std::vector<double> a = msg.data
         // The type must be conversion from float(msg.data) to double
-        std::vector<double> theta_actual(this->segment_angle_.data.begin(), this->segment_angle_.data.end());
-        std::vector<double> omega_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
+
+        //************************** */
+        // relative
+        // std::vector<double> theta_actual(this->segment_angle_.data.begin(), this->segment_angle_.data.end());
+        // std::vector<double> omega_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
+
+        // absolute
+        std::vector<double> theta_actual;
+        std::vector<double> omega_actual;
+
+        double alpha = 0.5;
+        double angle_filtered = 0;
+        if (!segment_angle_absolute_.data.empty() && !segment_angle_absolute_prev_.data.empty()) {
+          angle_filtered = alpha*segment_angle_absolute_.data.back() + (1-alpha)*segment_angle_absolute_prev_.data.back();
+        } else {
+          segment_angle_absolute_prev_.data = segment_angle_absolute_.data;
+        }
+        theta_actual.push_back(static_cast<double>(angle_filtered));
+        omega_actual.push_back(static_cast<double>(segment_angular_velocity_absolute_.data.back()));
+        RCLCPP_INFO(this->get_logger(), "2 angle:%f angle_prev:%f angle_filtered:%f", segment_angle_absolute_.data.back(), segment_angle_absolute_prev_.data.back(), angle_filtered);
+        segment_angle_absolute_prev_.data = segment_angle_absolute_.data;
+        //************************** */
         double dt = DT;
         std::vector<double> tension = {this->loadcell_data_.stress[1]*0.001, this->loadcell_data_.stress[0]*0.001}; // g -> kg, Y.J. kiniematics is positive on CW.
         std::vector<double> external_force = {this->external_force_.x*0.001, this->external_force_.y*0.001};

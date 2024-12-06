@@ -12,17 +12,19 @@
 #ifndef DYNAMICS_PARAMETERS_HPP_
 #define DYNAMICS_PARAMETERS_HPP_
 
-// PID controller
-#define KP  150.0
-#define KI  3.0
-#define KD  5.0
+// PID controller ================
+// slow version MasterMACS 1000-100 - double of upper values
+// #define KP  150.0
+// #define KI  3.0
+// #define KD  5.0
 
 // fast version MasterMACS 2000-100 - double of upper values
-// #define KP  150.0
-// #define KI  10.0
-// #define KD  20.0
+#define KP  150.0
+#define KI  10.0
+#define KD  20.0
 #define SAMPLING_HZ  30.0    // Hz
 #define DT  1/SAMPLING_HZ  // sec
+// END - PID controller ================
 
 // HRM equation of motion parameters (I B K)
 // I: mass

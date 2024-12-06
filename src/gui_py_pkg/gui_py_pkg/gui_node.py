@@ -169,7 +169,7 @@ class GUINode(Node):
             SetBool,
             'control/control_mode'
         )
-        while not self.move_tool_angle_dynamics_service_client.wait_for_service(timeout_sec=2.0):
+        while not self.control_mode_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().warning('The "/dynamics/move_tool_angle" service server not available. Check the kinematics_control_node')
 
         self.recoder_service_client = self.create_client(
@@ -232,7 +232,7 @@ class GUINode(Node):
         # rclpy.spin_until_future_complete(self, future)
         return future.result()
     
-    def send_request_move_tool_angle_dynamics(self, pan=0.0, tilt=0.0, grip=0.0, mode=0):
+    def send_request_move_tool_angle_dynamics(self, pan=0.0, tilt=0.0, grip=0.0, mode=1):
         service_request = MoveToolAngle.Request()
         service_request.panangle = pan
         service_request.tiltangle = tilt

@@ -211,11 +211,17 @@ private:
 
   bool segment_angle_op_flag_ = false;
   std_msgs::msg::Float32MultiArray segment_angle_;
-  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angle_subscriber;
+  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angle_subscriber_;
+  std_msgs::msg::Float32MultiArray segment_angle_absolute_;
+  std_msgs::msg::Float32MultiArray segment_angle_absolute_prev_;
+  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angle_absolute_subscriber_;
 
   bool segment_angular_velocity_op_flag_ = false;
   std_msgs::msg::Float32MultiArray segment_angular_velocity_;
-  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angular_velocity_subscriber;
+  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angular_velocity_subscriber_;
+  std_msgs::msg::Float32MultiArray segment_angular_velocity_absolute_;
+  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angular_velocity_absolute_subscriber_;
+
 
   /**
    * @author DY
