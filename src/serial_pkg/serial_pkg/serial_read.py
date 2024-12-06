@@ -295,13 +295,16 @@ class SerialNode(Node):
                             self.torque3d_kf = np.zeros((1,3))# empty list [0, 0, 0]
 
                             self.forcetorque6d = np.concatenate((self.force3d, self.torque3d), axis=1).flatten()
+                            self.forcetorque6d_kalman = np.zeros(6)
                             for ft_sensor_id in range(6):
                                 kf = self.kalman_filters[ft_sensor_id]  # object reference
+                                # self.get_logger().info(f'kf class: {kf}')
                                 kf.predict()
                                 kf.update(self.forcetorque6d[ft_sensor_id])
+                                self.forcetorque6d_kalman[ft_sensor_id] = kf.x[0]
                             
-                            self.force3d_kf = self.forcetorque6d[:3].reshape(1, 3)
-                            self.torque3d_kf = self.forcetorque6d[:3].reshape(1, 3)
+                            self.force3d_kf = self.forcetorque6d_kalman[:3].reshape(1, 3)
+                            self.torque3d_kf = self.forcetorque6d_kalman[3:].reshape(1, 3)
                             
 
                             # self.get_logger().info(f'Final: {self.force3d}')
