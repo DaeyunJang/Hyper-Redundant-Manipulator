@@ -138,6 +138,7 @@ private:
    * @brief ROS2 parameters 
    */
   ControlMode control_mode_;
+  bool hrm_controller_enable_;
   rcl_interfaces::msg::SetParametersResult parameter_callback(const std::vector<rclcpp::Parameter> &parameters);
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 
@@ -196,6 +197,8 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr surgical_tool_pose_publisher_;
   std_msgs::msg::Float32MultiArray wire_length_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr wire_length_publisher_;
+  std_msgs::msg::Float32MultiArray wire_length_velocity_;
+  rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr wire_length_velocity_publisher_;
 
   /**
    * @author DY
@@ -240,7 +243,7 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;  // 타이머는 시작과 중지를 위해 nullptr로 관리
   int timer_period_ms_ = 10;
   float amp_ = 60;
-  float period_ = 60; // secs
+  float period_ = 30; // secs
   float count_ = 0;
   float count_add_ = timer_period_ms_ / 1000.0;
   float angle_ = 0;

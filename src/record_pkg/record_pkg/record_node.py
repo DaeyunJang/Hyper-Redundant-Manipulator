@@ -14,6 +14,7 @@ from rclpy.serialization import serialize_message
 from std_msgs.msg import String
 from std_msgs.msg import Float32MultiArray
 from geometry_msgs.msg import WrenchStamped
+from geometry_msgs.msg import Vector3
 from std_srvs.srv import SetBool
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import CameraInfo
@@ -178,6 +179,17 @@ class RecordNode(Node):
         )
         self.get_logger().info('wire_length subscriber is created.')
 
+        self.get_logger().info('wire_length subscriber is created.')
+
+        self.external_force_flag = False
+        self.external_force = Vector3()
+        self.external_force_subscriber = self.create_subscription(
+            Vector3,
+            'estimated_external_force',
+            self.read_external_force,
+            1
+        )
+        self.get_logger().info('wire_length subscriber is created.')
         
         self.dynamic_MIMO_values_flag = False
         self.dynamic_MIMO_values = DynamicMIMOValues()
@@ -375,6 +387,10 @@ class RecordNode(Node):
         self.segment_angle_relative = msg
         self.end_effector_angle = sum(msg.data)
 
+    def read_external_force(self, msg):
+        self.external_force_flag = True
+        self.external_force = msg
+
     def read_dynamic_MIMO_values(self, msg):
         self.dynamic_MIMO_values_flag = True
         self.dynamic_MIMO_values = msg
@@ -423,7 +439,6 @@ class RecordNode(Node):
         self.csv_headers['ty'] = []
         self.csv_headers['tz'] = []
         self.csv_headers['tz'] = []
-        self.csv_headers['theta_actual'] = []
         self.csv_headers['fx_kalman'] = []
         self.csv_headers['fy_kalman'] = []
         self.csv_headers['fz_kalman'] = []
@@ -431,6 +446,10 @@ class RecordNode(Node):
         self.csv_headers['ty_kalman'] = []
         self.csv_headers['tz_kalman'] = []
         self.csv_headers['tz_kalman'] = []
+        self.csv_headers['fx_estimated'] = []
+        self.csv_headers['fy_estimated'] = []
+        self.csv_headers['theta_actual'] = []
+
 
         self.csv_file = open(self.csv_file_name, mode='w')
         self.csv_writer = csv.writer(self.csv_file)
@@ -463,13 +482,15 @@ class RecordNode(Node):
                                  + [str(torquexyz.x)]
                                  + [str(torquexyz.y)]
                                  + [str(torquexyz.z)]
-                                 + [str(self.end_effector_angle)]
                                  + [str(forcexyz_kalman.x)]
                                  + [str(forcexyz_kalman.y)]
                                  + [str(forcexyz_kalman.z)]
                                  + [str(torquexyz_kalman.x)]
                                  + [str(torquexyz_kalman.y)]
-                                 + [str(torquexyz_kalman.z)])
+                                 + [str(torquexyz_kalman.z)]
+                                 + [str(self.external_force.x)]
+                                 + [str(self.external_force.y)]
+                                 + [str(self.end_effector_angle)])
         self.csv_file.flush()
         pass
 
@@ -493,6 +514,8 @@ class RecordNode(Node):
         # self.csv_headers_dMv['segment_omega_relative'] = []
         for i in range(self.numofmotors):
             self.csv_headers_dMv[f'tension #{i}'] = []
+        self.csv_headers_dMv[f'cable_velocity_left'] = []
+        self.csv_headers_dMv[f'cable_velocity_right'] = []
         self.csv_headers_dMv[f'torque_input'] = []
         self.csv_headers_dMv[f'estimated_force_x'] = []
         self.csv_headers_dMv[f'estimated_force_y'] = []
@@ -506,6 +529,8 @@ class RecordNode(Node):
         self.csv_headers_dMv['friction_mode'] = []
         self.csv_headers_dMv['friction_torque'] = []
         self.csv_headers_dMv['damping_coefficient'] = []
+        self.csv_headers_dMv['res_friction'] = []
+        self.csv_headers_dMv['cmode'] = []
         self.csv_headers_dMv['input_alpha'] = []
         self.csv_headers_dMv['input_omega'] = []
         self.csv_headers_dMv['input_theta'] = []
@@ -537,6 +562,8 @@ class RecordNode(Node):
                                  + [str(self.dynamic_MIMO_values.theta_actual)]
                                  + [str(self.dynamic_MIMO_values.omega_actual)]
                                  + [str(value) for value in self.dynamic_MIMO_values.tension]
+                                 + [str(self.dynamic_MIMO_values.cable_velocity_left)]
+                                 + [str(self.dynamic_MIMO_values.cable_velocity_right)]
                                  + [str(self.dynamic_MIMO_values.torque_input)]
                                  + [str(value) for value in self.dynamic_MIMO_values.external_force]
                                  + [str(actual_force.x * 0.001)]
@@ -549,6 +576,8 @@ class RecordNode(Node):
                                  + [str(self.dynamic_MIMO_values.friction_mode)]
                                  + [str(self.dynamic_MIMO_values.friction_torque)]
                                  + [str(self.dynamic_MIMO_values.damping_coefficient)]
+                                 + [str(self.dynamic_MIMO_values.res_friction)]
+                                 + [str(self.dynamic_MIMO_values.cmode)]
                                  + [str(self.dynamic_MIMO_values.input_alpha)]
                                  + [str(self.dynamic_MIMO_values.input_omega)]
                                  + [str(self.dynamic_MIMO_values.input_theta)])

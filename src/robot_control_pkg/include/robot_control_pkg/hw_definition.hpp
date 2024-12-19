@@ -25,14 +25,15 @@
 #define INC_PER_ROT_3_9     GEAR_RATIO_3_9 * ENCODER_CHANNEL * ENCODER_RESOLUTION
 #define DIRECTION_COUPLER   1      // if not, use 1
 
-#define MOTOR_SOFTWARE_LIMIT 600000
+#define MOTOR_SOFTWARE_LIMIT 700000
+#define TENSION_LIMIT 3000
 
 /** Motor control mode **/
 /**
  * @brief It means that the ETA(Estimation Time Arrive) is same for all motors (arrive at same time)
  *        If not use it, just each motors move same velocity (not arrive at same time)
 */
-#define MOTOR_CONTROL_SAME_DURATION 1
+#define MOTOR_CONTROL_SAME_DURATION 0
 #define PERCENT_100 100
 
 //===============================

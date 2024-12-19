@@ -7,6 +7,7 @@ using namespace std::chrono_literals;
 ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 : Node("ControlNode", node_options),
   control_mode_(ControlMode::kKinematics),
+  hrm_controller_enable_(true),
   loop_rate_(SAMPLING_HZ)
 {
   this->declare_parameter("qos_depth", 10);
@@ -16,7 +17,9 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   this->declare_parameter<double>("dynamics/p_gain", KP);
   this->declare_parameter<double>("dynamics/i_gain", KI);
   this->declare_parameter<double>("dynamics/d_gain", KD);
-  this->declare_parameter<double>("dynamics/friction_mode", FRICTION_MODE);
+  this->declare_parameter<int>("dynamics/friction_mode", FRICTION_MODE);
+  this->declare_parameter<bool>("dynamics/HRM_controller_enable", true);
+
   // 파라미터 변경 콜백 등록
   param_callback_handle_ = this->add_on_set_parameters_callback(
     std::bind(&ControlNode::parameter_callback, this, std::placeholders::_1)
@@ -54,9 +57,14 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   //===============================
   surgical_tool_pose_publisher_ =
     this->create_publisher<geometry_msgs::msg::Twist>("surgical_tool_pose", QoS_RKL10V);
+
   wire_length_publisher_ = 
     this->create_publisher<std_msgs::msg::Float32MultiArray>("wire_length", QoS_RKL10V);
+  wire_length_velocity_publisher_ = 
+    this->create_publisher<std_msgs::msg::Float32MultiArray>("wire_length_velocity", QoS_RKL10V);
   this->wire_length_.data.resize(NUM_OF_MOTORS);
+  this->wire_length_velocity_.data.resize(NUM_OF_MOTORS);
+
   //===============================
   // motor status subscriber
   //===============================
@@ -81,8 +89,10 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 
         for (int i=0; i<NUM_OF_MOTORS; i++) {
           this->wire_length_.data[i] = this->motor_state_.actual_position[i] * 2 / gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+          this->wire_length_velocity_.data[i] = this->motor_state_.actual_velocity[i] * 2 / gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
         }
         this->wire_length_publisher_->publish(this->wire_length_);
+        this->wire_length_velocity_publisher_->publish(this->wire_length_velocity_);
       }
     );
   
@@ -505,6 +515,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       if(this->op_mode_ == kEnable) {
         if(request->mode == 0) {
           // MOVE ABSOLUTELY
+          RCLCPP_INFO(this->get_logger(), "MODE: %d, tilt: %.2f, pan: %.2f, grip: %.2f", request->mode, request->tiltangle, request->panangle, request->gripangle);
           double pan_angle =  request->panangle;
           double tilt_angle = request->tiltangle;
           double grip_angle = request->gripangle;
@@ -513,10 +524,10 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         }
         else if (request->mode == 1) {
           // MOVE RELATIVELY
+          RCLCPP_INFO(this->get_logger(), "MODE: %d, tilt: %.2f, pan: %.2f, grip: %.2f", request->mode, request->tiltangle, request->panangle, request->gripangle);
           double pan_angle =  this->current_pan_angle_ + request->panangle;
           double tilt_angle = this->current_tilt_angle_ + request->tiltangle;
           double grip_angle = this->current_grip_angle_ + request->gripangle;
-
           this->theta_desired_ = pan_angle;
           RCLCPP_INFO(this->get_logger(), "Dynamics mode, target theta_desired: %.2f", this->theta_desired_);
         }
@@ -736,6 +747,10 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       int friction_mode = param.as_int();
       HRM_controller_.damping_friction_model_.mode_ = friction_mode;
       RCLCPP_INFO(this->get_logger(), "Updated friction mode: %d", HRM_controller_.damping_friction_model_.mode_);
+    } else if (param.get_name() == "dynamics/HRM_controller_enable") {
+      bool enable = param.as_bool();
+      HRM_controller_.hrm_controller_enable_ = enable;
+      RCLCPP_INFO(this->get_logger(), "Updated friction mode: %d", HRM_controller_.hrm_controller_enable_);
     }
 
 
@@ -764,19 +779,20 @@ void ControlNode::run_dynamic_control_thread() {
          */
         // double theta_desired = this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
         double theta_desired = (-1) * this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
-
+        
         // if using std::vector<double> a = msg.data
         // The type must be conversion from float(msg.data) to double
+        std::vector<double> theta_actual(this->segment_angle_.data.begin(), this->segment_angle_.data.end());
+        std::vector<double> omega_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
 
         //************************** */
+        // End-effector theta
+
         // relative
-        // std::vector<double> theta_actual(this->segment_angle_.data.begin(), this->segment_angle_.data.end());
-        // std::vector<double> omega_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
+        // double end_effector_theta_actual = std::accumulate(theta_actual.begin(), theta_actual.end(), 0.0);
+        // double end_effector_omega_actual = std::accumulate(omega_actual.begin(), omega_actual.end(), 0.0);
 
         // absolute
-        std::vector<double> theta_actual;
-        std::vector<double> omega_actual;
-
         double alpha = 0.5;
         double angle_filtered = 0;
         if (!segment_angle_absolute_.data.empty() && !segment_angle_absolute_prev_.data.empty()) {
@@ -784,10 +800,11 @@ void ControlNode::run_dynamic_control_thread() {
         } else {
           segment_angle_absolute_prev_.data = segment_angle_absolute_.data;
         }
-        theta_actual.push_back(static_cast<double>(angle_filtered));
-        omega_actual.push_back(static_cast<double>(segment_angular_velocity_absolute_.data.back()));
-        RCLCPP_INFO(this->get_logger(), "2 angle:%f angle_prev:%f angle_filtered:%f", segment_angle_absolute_.data.back(), segment_angle_absolute_prev_.data.back(), angle_filtered);
         segment_angle_absolute_prev_.data = segment_angle_absolute_.data;
+
+        double end_effector_theta_actual = angle_filtered;
+        double end_effector_omega_actual = segment_angular_velocity_absolute_.data.back();
+
         //************************** */
         double dt = DT;
         std::vector<double> tension = {this->loadcell_data_.stress[1]*0.001, this->loadcell_data_.stress[0]*0.001}; // g -> kg, Y.J. kiniematics is positive on CW.
@@ -796,15 +813,22 @@ void ControlNode::run_dynamic_control_thread() {
         // test -> no payload
         // external_force[0] = 0;
         // external_force[1] = 0;
-
+        
+        double cable_vel_left = this->wire_length_velocity_.data[1] * 0.001;  // mm -> m
+        double cable_vel_right = this->wire_length_velocity_.data[0] * 0.001; // mm -> m
+        std::vector<double> cable_velocity = {cable_vel_left, cable_vel_right};
 
         auto wire_length_to_move = this->HRM_controller_.compute(
           theta_desired,
+          end_effector_theta_actual,
+          end_effector_omega_actual,
           theta_actual,
           omega_actual,
+          cable_velocity,
           dt,
           tension,
-          external_force);
+          external_force,
+          this->HRM_controller_.hrm_controller_enable_);
 
         // publish dynamic MIMO values
         if (this->segment_angle_op_flag_ == true) {
@@ -815,16 +839,21 @@ void ControlNode::run_dynamic_control_thread() {
           dynamic_MIMO_values_.p_gain = HRM_controller_.pid_controller_.kp_;
           dynamic_MIMO_values_.i_gain = HRM_controller_.pid_controller_.ki_;
           dynamic_MIMO_values_.d_gain = HRM_controller_.pid_controller_.kd_;
+          dynamic_MIMO_values_.hrm_controller_enable = HRM_controller_.hrm_controller_enable_;
           dynamic_MIMO_values_.theta_desired = theta_desired; // 예제 데이터
           dynamic_MIMO_values_.theta_actual = HRM_controller_.end_effector_theta_actual_;    // 약간의 오차 추가
           dynamic_MIMO_values_.omega_actual = HRM_controller_.end_effector_dtheta_dt_actual_;  // 예제 데이터
           dynamic_MIMO_values_.tension = tension;                          // 예제 데이터
+          dynamic_MIMO_values_.cable_velocity_left = cable_velocity[0];
+          dynamic_MIMO_values_.cable_velocity_right = cable_velocity[1];
           dynamic_MIMO_values_.torque_input = HRM_controller_.torque_input_;
           dynamic_MIMO_values_.external_force = external_force;                   // 예제 데이터
           dynamic_MIMO_values_.external_torque = HRM_controller_.tau_ext_;
           dynamic_MIMO_values_.friction_mode = HRM_controller_.damping_friction_model_.mode_;
           dynamic_MIMO_values_.friction_torque = HRM_controller_.tau_friction_;
-          dynamic_MIMO_values_.damping_coefficient = HRM_controller_.dandf_[0];
+          dynamic_MIMO_values_.damping_coefficient = HRM_controller_.damping_friction_model_.B_;
+          dynamic_MIMO_values_.res_friction = HRM_controller_.damping_friction_model_.res_friction_;
+          dynamic_MIMO_values_.cmode = HRM_controller_.damping_friction_model_.cmode_;
           dynamic_MIMO_values_.input_alpha = HRM_controller_.theta_ddot_input_;
           dynamic_MIMO_values_.input_omega = HRM_controller_.theta_dot_input_;
           dynamic_MIMO_values_.input_theta = HRM_controller_.theta_input_;
@@ -841,9 +870,18 @@ void ControlNode::run_dynamic_control_thread() {
         f_val[4] = wire_length_to_move[4];  // grip
 
         this->motor_control_target_val_.header.stamp = this->now();
-        this->motor_control_target_val_.header.frame_id = "kinematics_motor_target_position";
-        this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
-        this->motor_control_target_val_.target_position[1] = DIRECTION_COUPLER * f_val[1] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+        this->motor_control_target_val_.header.frame_id = "motor_target_position";
+
+        if (this->loadcell_data_.stress[0] < TENSION_LIMIT && this->loadcell_data_.stress[1] < TENSION_LIMIT) {
+          this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+          this->motor_control_target_val_.target_position[1] = DIRECTION_COUPLER * f_val[1] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+        }
+        else {// for prevent wire cut off 
+          for (int i=0; i<NUM_OF_MOTORS; i++) {
+            this->motor_control_target_val_.target_position[i] = this->motor_state_.actual_position[i];
+          }
+        }
+        
 
         #if MOTOR_CONTROL_SAME_DURATION
           /**
@@ -864,8 +902,14 @@ void ControlNode::run_dynamic_control_thread() {
           this->motor_control_target_val_.target_velocity_profile[NUM_OF_MOTORS-1] = PERCENT_100 * 0.5;
           
         #else
+          int target_vel_profile = int(std::round(std::abs(HRM_controller_.theta_dot_input_)));
+          // prevent velocity 0
+          if (target_vel_profile < 20) {
+            target_vel_profile = 20;
+          }
           for (int i=0; i<NUM_OF_MOTORS; i++) { 
-            this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.01;
+            // this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.5;
+            this->motor_control_target_val_.target_velocity_profile[i] = std::min(target_vel_profile, 80);
           }
         #endif
         

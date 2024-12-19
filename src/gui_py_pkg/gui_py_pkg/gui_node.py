@@ -170,7 +170,7 @@ class GUINode(Node):
             'control/control_mode'
         )
         while not self.control_mode_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warning('The "/dynamics/move_tool_angle" service server not available. Check the kinematics_control_node')
+            self.get_logger().warning('The "control/control_mode" service server not available. Check the kinematics_control_node')
 
         self.recoder_service_client = self.create_client(
             SetBool,
@@ -232,7 +232,7 @@ class GUINode(Node):
         # rclpy.spin_until_future_complete(self, future)
         return future.result()
     
-    def send_request_move_tool_angle_dynamics(self, pan=0.0, tilt=0.0, grip=0.0, mode=1):
+    def send_request_move_tool_angle_dynamics(self, pan=0.0, tilt=0.0, grip=0.0, mode=0):
         service_request = MoveToolAngle.Request()
         service_request.panangle = pan
         service_request.tiltangle = tilt
@@ -761,10 +761,14 @@ class MyGUI(QWidget):
                                                                           mode=1)
                 # Mode : Dynamics
                 elif self.checkbox_mode_list[2].isChecked():
-                    response = self.node.send_request_move_tool_angle_dynamics(pan=float(self.motor_kinematics_line_edit_list[0].text()),
-                                                                      tilt=float(self.motor_kinematics_line_edit_list[1].text()),
-                                                                      mode=0)
-                    pass
+                    if self.checkbox_amode_list[0].isChecked(): # Absolute
+                        response = self.node.send_request_move_tool_angle_dynamics(pan=float(self.motor_kinematics_line_edit_list[0].text()),
+                                                                                    tilt=float(self.motor_kinematics_line_edit_list[1].text()),
+                                                                                    mode=0)
+                    elif self.checkbox_amode_list[1].isChecked():
+                        response = self.node.send_request_move_tool_angle_dynamics(pan=float(self.motor_kinematics_line_edit_list[0].text()),
+                                                                                    tilt=float(self.motor_kinematics_line_edit_list[1].text()),
+                                                                                    mode=1)
         except Exception as e:
             self.node.get_logger().warning(f'F:request_motor_move() -> {e}')
             return

@@ -19,9 +19,9 @@
 // #define KD  5.0
 
 // fast version MasterMACS 2000-100 - double of upper values
-#define KP  40.0
-#define KI  4.0
-#define KD  40.0
+#define KP  250.0
+#define KI  1.0
+#define KD  30.0
 #define SAMPLING_HZ  30.0    // Hz
 #define DT  1/SAMPLING_HZ  // sec
 // END - PID controller ================
@@ -32,7 +32,7 @@
 // K: spring
 #define INERTIA 0.01
 #define DAMPING_COEFFICIENT 0
-#define STIFFNESS 1
+#define STIFFNESS 2
 
 #define FRICTION_MODE 2
 

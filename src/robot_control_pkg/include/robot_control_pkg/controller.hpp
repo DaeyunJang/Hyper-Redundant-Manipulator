@@ -38,10 +38,7 @@ public:
      * @note
      * 1. compute PID
      * 2. HRM model (with F_ext, F_fric, B)
-     * 3. integral(1/dt)
-     * 4. integral
-     * 5. IK
-     * 6. wire length
+     * 3. iHRM_controller_ire length
      * 
      * the information are maybe obtained from other processes (ROS2)
      * 
@@ -50,15 +47,20 @@ public:
      * @param dtheta_dt_actual actual angular velocity (from image process)
      * @param dt sampling time (it is usually affected by curve fit algorithm)
      * @param torque_external estimated external force (LSTM)
-     * @return std::vector<double> wire length [right(East), left(West)]
+     * @return std::v
+ector<double> wire length [right(East), left(West)]
      */
     std::vector<double> compute(
         const double& theta_desired,
+        const double& end_effector_theta_actual,
+        const double& end_effector_omega_actual,
         const std::vector<double>& theta_actual,
         const std::vector<double>& dtheta_dt_actual,
+        const std::vector<double>& cable_velocity,
         const double& dt,
         const std::vector<double>& tension,
-        const std::vector<double>& force_external
+        const std::vector<double>& force_external,
+        const bool& hrm_controller_enable
         );
 
     double end_effector_theta_actual_;
@@ -71,11 +73,15 @@ public:
     double theta_ddot_input_;
     double theta_dot_input_;
     double theta_input_;
+    double theta_input_prev_=0;
+    bool hrm_controller_enable_=true;
 
     std::vector<double> theta_actual_;
     std::vector<double> theta_actual_prev_;
     std::vector<double> dtheta_dt_actual_;
     std::vector<double> dtheta_dt_actual_prev_;
+    std::vector<double> cable_velocity_actual_;
+    std::vector<double> cable_velocity_actual_prev_;
     std::vector<double> force_external_;
 
 // private:

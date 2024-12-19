@@ -37,32 +37,23 @@ public:
   DampingFrictionModel();
   ~DampingFrictionModel();
 
+  int mode_ = 2;
 
-  // std::tuple<double, double, int> compute_dampingCoeff_and_friction(
-  // return [B, res_fric, cmode]
-  std::tuple<double, double, int> compute_dampingCoeff_and_friction(
+  // std::pair<double, double> compute_dampingCoeff_and_friction(
+  std::vector<double> compute_dampingCoeff_and_friction(
     const std::vector<double>& q,
     const std::vector<double>& dq,
-    const std::vector<double>& cable_vel,
     const std::vector<double>& q_prev,
     const std::vector<double>& dq_prev,
-    const std::vector<double>& cable_vel_prev,
     const std::vector<double>& tension,
     const int& mode);  //
 
+  bool stop_state_;
   std::vector<double> q_;
   std::vector<double> dq_;
   std::vector<double> q_prev_;
   std::vector<double> dq_prev_;
-  std::vector<double> cable_vel;
-  std::vector<double> cable_vel_prev;
-  bool stop_state_;
 
-  double B_;
-  double res_friction_;
-  int cmode_;
-
-  int mode_ = 3;
 };
 
 #endif  // DAMPING_FRICTION_MODEL_HPP
