@@ -209,6 +209,7 @@ class SerialNode(Node):
         msg.header.frame_id = 'loadcell_state'
         msg.stress.append(self.loadcell_weight.squeeze()[0])
         msg.stress.append(self.loadcell_weight.squeeze()[1])
+        # msg.stress.append(self.loadcell_weight.squeeze()[1]+80)
         self.loadcell_publisher.publish(msg)
 
         offset_msg = LoadcellState()

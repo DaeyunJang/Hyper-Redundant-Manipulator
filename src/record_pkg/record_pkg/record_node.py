@@ -15,6 +15,7 @@ from std_msgs.msg import String
 from std_msgs.msg import Float32MultiArray
 from geometry_msgs.msg import WrenchStamped
 from geometry_msgs.msg import Vector3
+from geometry_msgs.msg import Twist
 from std_srvs.srv import SetBool
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import CameraInfo
@@ -167,6 +168,15 @@ class RecordNode(Node):
             QOS_RKL10V
         )
         self.get_logger().info('wire_length subscriber is created.')
+
+        self.surgical_tool_pose_flag = False
+        self.surgical_tool_pose = Twist()
+        self.surgical_tool_pose_subscriber = self.create_subscription(
+            Twist,
+            'surgical_tool_pose',
+            self.read_surgical_tool_pose,
+            1
+        )
 
         self.segment_angle_relative_flag = False
         self.segment_angle_relative = Float32MultiArray()
@@ -382,6 +392,10 @@ class RecordNode(Node):
         self.wire_length_flag = True
         self.wire_length = msg
 
+    def read_surgical_tool_pose(self, msg):
+        self.surgical_tool_pose_flag = True
+        self.surgical_tool_pose = msg
+
     def read_segment_angle_relative(self, msg):
         self.segment_angle_relative_flag = True
         self.segment_angle_relative = msg
@@ -429,6 +443,8 @@ class RecordNode(Node):
         for i in range(self.numofmotors):
             self.csv_headers[f'motor position #{i}'] = []
         for i in range(self.numofmotors):
+            self.csv_headers[f'motor velocity #{i}'] = []
+        for i in range(self.numofmotors):
             self.csv_headers[f'wire length #{i}'] = []
         for i in range(self.numofmotors):
             self.csv_headers[f'loadcell #{i}'] = []
@@ -448,6 +464,7 @@ class RecordNode(Node):
         self.csv_headers['tz_kalman'] = []
         self.csv_headers['fx_estimated'] = []
         self.csv_headers['fy_estimated'] = []
+        self.csv_headers['theta_desired'] = []
         self.csv_headers['theta_actual'] = []
 
 
@@ -465,6 +482,7 @@ class RecordNode(Node):
         timestamp_nanosec = str(self.capture_time.nanosec)
         image_file = str(self.data_count) + '_' + str(self.capture_time.sec) + '-' + str(self.capture_time.nanosec) +'.png'
         actual_position = self.motor_state.actual_position
+        actual_velocity = self.motor_state.actual_velocity
         wire_length = self.wire_length.data
         loadcell_stress = self.loadcell_data.stress
         forcexyz = self.fts_data.wrench.force
@@ -474,6 +492,7 @@ class RecordNode(Node):
         
         self.csv_writer.writerow([timestamp_sec, timestamp_nanosec, image_file]
                                  + [str(value) for value in actual_position]
+                                 + [str(value) for value in actual_velocity]
                                  + [str(value) for value in wire_length]
                                  + [str(value) for value in loadcell_stress]
                                  + [str(forcexyz.x)]
@@ -490,6 +509,7 @@ class RecordNode(Node):
                                  + [str(torquexyz_kalman.z)]
                                  + [str(self.external_force.x)]
                                  + [str(self.external_force.y)]
+                                 + [str(-self.surgical_tool_pose.angular.z)]
                                  + [str(self.end_effector_angle)])
         self.csv_file.flush()
         pass

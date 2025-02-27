@@ -83,5 +83,7 @@
         "typeindex": "cpp",
         "typeinfo": "cpp",
         "variant": "cpp"
-    }
+    },
+    "cmake.sourceDirectory": "/home/daeyun/Hyper-Redundant-Manipulator/src/custom_interfaces",
+    "ros.distro": "humble"
 }
