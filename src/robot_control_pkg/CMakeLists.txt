@@ -27,7 +27,6 @@ find_package(urdf REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
 
-ament_target_dependencies(eigen_node )
 include_directories(include
   "include/robot_control_pkg"
   "/opt/ros/hubmle/include"

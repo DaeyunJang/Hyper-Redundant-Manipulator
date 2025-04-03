@@ -6,7 +6,8 @@ SurgicalTool::SurgicalTool() {
 		SEGMENT_ARC,
 		SEGMENT_DIAMETER,
 		WIRE_DISTANCE,
-		SHIFT
+		SHIFT,
+		SEGMENT_ARC_CENTER_TO_SEGMENT_CENTER
 		);
 	std::cout << "Surgical tool is created" << &this->surgicaltool_ << std::endl;
 }
@@ -19,13 +20,15 @@ void SurgicalTool::init_surgical_tool(int num_joint,
 									 float arc,
 									 float diameter,
 									 float disWire,
-									 float shift)
+									 float shift,
+									 float arc_center_to_seg_center)
 {
 	this->surgicaltool_.num_joint = num_joint;
 	this->surgicaltool_.arc 	  =	arc * mm_;
 	this->surgicaltool_.diameter  =	diameter * mm_;
 	this->surgicaltool_.disWire   =	disWire * mm_;
 	this->surgicaltool_.shift	  = shift * torad();
+	this->surgicaltool_.arc_center_to_seg_center = arc_center_to_seg_center * mm_;
 	this->alpha_ = asin(this->surgicaltool_.disWire / this->surgicaltool_.arc);
 }
 
@@ -78,6 +81,50 @@ void SurgicalTool::inverse_kinematics()
 
 	// y = -x + 30
 	this->wrLengthGrip = ((-1) * this->target_forceps_angle_ + this->max_forceps_deg_) * ( MAX_FORCEPS_RAGNE_MM / MAX_FORCEPS_RAGNE_DEGREE ); 
+}
+
+Eigen::Matrix4d SurgicalTool::computeTransformationMatrix(const double& theta) {
+	double R = this->surgicaltool_.arc;
+	double L = this->surgicaltool_.arc_center_to_seg_center;
+	double l_theta = R / std::cos(theta / 2.0) - L;
+    double p_x = l_theta * (1.0 + std::cos(theta));
+    double p_y = l_theta * std::sin(theta);
+
+    Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+    T(0, 0) = std::cos(theta);
+    T(0, 1) = -std::sin(theta);
+    T(1, 0) = std::sin(theta);
+    T(1, 1) = std::cos(theta);
+    T(0, 3) = p_x;
+    T(1, 3) = p_y;
+
+    return T;
+}
+
+std::vector<Eigen::Matrix4d> SurgicalTool::computeBaseToJointsTransformationMatrices(const std::vector<double>& joint_angles) {
+	std::vector<Eigen::Matrix4d> transform_matrices;
+	Eigen::Matrix4d T_prev = Eigen::Matrix4d::Identity();
+	Eigen::Matrix4d T_current = Eigen::Matrix4d::Identity();
+
+	for (int i=0; i<this->surgicaltool_.num_joint; i++) {
+		Eigen::Matrix4d T_next = computeTransformationMatrix(joint_angles[i]);
+		T_current = T_current * T_next;
+		transform_matrices.push_back(T_current);
+	}
+	
+	return transform_matrices;
+}
+
+Eigen::Vector2d SurgicalTool::extractXYfromTransformMatrix(const Eigen::Matrix4d& T) {
+    return Eigen::Vector2d(T(0, 3), T(1, 3));
+}
+
+std::vector<Eigen::Vector2d> SurgicalTool::computeJointPositions(const std::vector<Eigen::Matrix4d>& transforms) {
+    std::vector<Eigen::Vector2d> positions;
+    for (const auto& T : transforms) {
+        positions.push_back(extractXYfromTransformMatrix(T));
+    }
+    return positions;
 }
 
 float SurgicalTool::tomm()

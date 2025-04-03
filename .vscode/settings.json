@@ -85,7 +85,12 @@
         "variant": "cpp",
         "dense": "cpp",
         "cholesky": "cpp",
-        "eigenvalues": "cpp"
+        "eigenvalues": "cpp",
+        "core": "cpp",
+        "numericaldiff": "cpp",
+        "specialfunctions": "cpp",
+        "*.ipp": "cpp",
+        "rope": "cpp"
     },
     "cmake.sourceDirectory": "/home/daeyun/Hyper-Redundant-Manipulator/src/custom_interfaces",
     "ros.distro": "humble"

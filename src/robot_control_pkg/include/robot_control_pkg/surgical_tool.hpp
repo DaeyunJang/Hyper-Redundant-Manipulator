@@ -42,6 +42,7 @@ struct structure {
   float diameter;
   float disWire;
   float shift;
+  float arc_center_to_seg_center;
 };
 
 class SurgicalTool
@@ -72,7 +73,8 @@ public:
     float arc,
     float diameter,
     float disWire,
-    float shift
+    float shift,
+    float arc_center_to_seg_center
   );
 
   // **************************
@@ -118,7 +120,7 @@ public:
    * @param grip    grip angle
    * @note   Also, class has the value : this->wrLength** variables has the target values
    *         or use the return values
-   * @return std::tuple<double ...>
+   * @return std::vector<double ...>
    */
   std::vector<double> get_IK_result(double pAngle, double tAngle, double grip);
 
@@ -129,16 +131,31 @@ public:
 
   /**
    * @brief calculate the Homogeneous transform matrix of each joint
+   * @param theta radian
+   * @return Eigen::Matrix4d 
    */
-  Eigen::Matrix4d computeTransformationMatrix();
+  Eigen::Matrix4d computeTransformationMatrix(const double& theta);
 
   /**
-   * @brief calculate the positions of each joint
-   * @author DY
+   * @brief calculate the transformation matrix of each joint
+   * @return std::vector<Eigen::Matrix4d> 
    */
-  std::vector<Eigen::Matrix4d> computeBaseToJointsTransformationMatrices() {
+  std::vector<Eigen::Matrix4d> computeBaseToJointsTransformationMatrices(const std::vector<double>& joint_angles);
+  
+  /**
+   * @brief get <x,y> from given transform matrix
+   * 
+   * @param T Homogeneous Transfrom Matrix
+   * @return Eigen::Vector2d 
+   */
+  Eigen::Vector2d extractXYfromTransformMatrix(const Eigen::Matrix4d& T);
 
-
+  /**
+   * @brief Get the Joint Positions object
+   * @param frame Group of the homogeneous transform matrix
+   * @return std::vector<Eigen::Vector2d> 
+   */
+  std::vector<Eigen::Vector2d> computeJointPositions(const std::vector<Eigen::Matrix4d>& transforms);
 
   /**
    * @brief make input variable to 'mm' unit
