@@ -23,6 +23,11 @@ find_package(robot_state_publisher REQUIRED)
 # find_package(joint_state_publisher_gui REQUIRED) 
 find_package(urdf REQUIRED)
 
+# Eigen library
+find_package(eigen3_cmake_module REQUIRED)
+find_package(Eigen3 REQUIRED)
+
+ament_target_dependencies(eigen_node )
 include_directories(include
   "include/robot_control_pkg"
   "/opt/ros/hubmle/include"
@@ -39,6 +44,7 @@ add_executable(robot_control
   src/surgical_tool.cpp
 )
 ament_target_dependencies(robot_control
+  Eigen3
   rclcpp
   rclcpp_action
   rcl_interfaces

@@ -18,6 +18,7 @@
 #include <vector>
 #include <math.h>
 #include <tuple>
+#include <Eigen/Dense>
 
 #include "hw_definition.hpp"
 
@@ -125,6 +126,19 @@ public:
    * @brief calculate the inverse-kinematics
    */
   void inverse_kinematics();
+
+  /**
+   * @brief calculate the Homogeneous transform matrix of each joint
+   */
+  Eigen::Matrix4d computeTransformationMatrix();
+
+  /**
+   * @brief calculate the positions of each joint
+   * @author DY
+   */
+  std::vector<Eigen::Matrix4d> computeBaseToJointsTransformationMatrices() {
+
+
 
   /**
    * @brief make input variable to 'mm' unit

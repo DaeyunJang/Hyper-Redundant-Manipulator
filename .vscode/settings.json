@@ -82,7 +82,10 @@
         "cinttypes": "cpp",
         "typeindex": "cpp",
         "typeinfo": "cpp",
-        "variant": "cpp"
+        "variant": "cpp",
+        "dense": "cpp",
+        "cholesky": "cpp",
+        "eigenvalues": "cpp"
     },
     "cmake.sourceDirectory": "/home/daeyun/Hyper-Redundant-Manipulator/src/custom_interfaces",
     "ros.distro": "humble"

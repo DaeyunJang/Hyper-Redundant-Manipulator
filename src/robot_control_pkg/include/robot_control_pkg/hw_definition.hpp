@@ -46,7 +46,7 @@
 #define SEGMENT_DIAMETER  9     // mm
 #define WIRE_DISTANCE     3.63   // mm
 #define TOTAL_LENGTH      10.125     // mm
-
+#define SEGMENT_ARC_CENTER_TO_SEGMENT_CENTER  10.5  // mm
 /**
  * @brief legacy
  * @date 2024.11.25
