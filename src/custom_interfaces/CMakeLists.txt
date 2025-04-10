@@ -20,12 +20,15 @@ set(msg_files
   "msg/LoadcellState.msg"
   "msg/DataFilterSetting.msg"
   "msg/DynamicMIMOValues.msg"
+  "msg/AdmittanceControl.msg"
+  "msg/PositionControl.msg"
 )
 
 set(srv_files
   # file
   "srv/surgicaltool/MoveMotorDirect.srv"
   "srv/surgicaltool/MoveToolAngle.srv"
+  "srv/surgicaltool/SetGoalPosition.srv"
 )
 
 set(action_files

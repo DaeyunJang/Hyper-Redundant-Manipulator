@@ -90,8 +90,29 @@
         "numericaldiff": "cpp",
         "specialfunctions": "cpp",
         "*.ipp": "cpp",
-        "rope": "cpp"
+        "rope": "cpp",
+        "csetjmp": "cpp",
+        "barrier": "cpp",
+        "charconv": "cpp",
+        "coroutine": "cpp",
+        "cuchar": "cpp",
+        "netfwd": "cpp",
+        "source_location": "cpp",
+        "slist": "cpp",
+        "latch": "cpp",
+        "ranges": "cpp",
+        "scoped_allocator": "cpp",
+        "span": "cpp",
+        "syncstream": "cpp",
+        "valarray": "cpp",
+        "*.txx": "cpp"
     },
     "cmake.sourceDirectory": "/home/daeyun/Hyper-Redundant-Manipulator/src/custom_interfaces",
-    "ros.distro": "humble"
+    "ros.distro": "humble",
+    "[cpp]": {
+        "editor.tabSize": 2
+    },
+    "[c]": {
+        "editor.tabSize": 2
+    }
 }

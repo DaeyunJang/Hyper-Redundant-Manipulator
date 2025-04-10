@@ -63,8 +63,8 @@ void SurgicalTool::inverse_kinematics()
 {
 	// y = kx (k=SHIFT/SHIFT_THRESHOLD)
 
-	this->wrLengthEast_  = 2 * surgicaltool_.arc * surgicaltool_.num_joint * ( cos(alpha_) - cos(alpha_ + (pAngle_ / (2*surgicaltool_.num_joint))) + 1 - cos(tAngle_ / (2*surgicaltool_.num_joint)));
-	this->wrLengthWest_  = 2 * surgicaltool_.arc * surgicaltool_.num_joint * ( cos(alpha_) - cos(alpha_ - (pAngle_ / (2*surgicaltool_.num_joint))) + 1 - cos(tAngle_ / (2*surgicaltool_.num_joint)));
+	this->wrLengthEast_  = 2 * surgicaltool_.arc * surgicaltool_.num_joint * ( cos(alpha_) - cos(alpha_ - (pAngle_ / (2*surgicaltool_.num_joint))) + 1 - cos(tAngle_ / (2*surgicaltool_.num_joint)));
+	this->wrLengthWest_  = 2 * surgicaltool_.arc * surgicaltool_.num_joint * ( cos(alpha_) - cos(alpha_ + (pAngle_ / (2*surgicaltool_.num_joint))) + 1 - cos(tAngle_ / (2*surgicaltool_.num_joint)));
 	this->wrLengthSouth_ = 2 * surgicaltool_.arc * surgicaltool_.num_joint * ( cos(alpha_) - cos(alpha_ - (tAngle_ / (2*surgicaltool_.num_joint))) + 1 - cos(pAngle_ / (2*surgicaltool_.num_joint)));
 	this->wrLengthNorth_ = 2 * surgicaltool_.arc * surgicaltool_.num_joint * ( cos(alpha_) - cos(alpha_ + (tAngle_ / (2*surgicaltool_.num_joint))) + 1 - cos(pAngle_ / (2*surgicaltool_.num_joint)));
 

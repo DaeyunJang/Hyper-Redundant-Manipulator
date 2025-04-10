@@ -12,7 +12,7 @@ import rosbag2_py
 from rclpy.serialization import serialize_message
 
 from std_msgs.msg import String
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float64MultiArray
 from geometry_msgs.msg import WrenchStamped
 from geometry_msgs.msg import Vector3
 from geometry_msgs.msg import Twist
@@ -162,7 +162,7 @@ class RecordNode(Node):
         self.wire_length_flag = False
         self.wire_length = MotorState()
         self.wire_length_subscriber = self.create_subscription(
-            Float32MultiArray,
+            Float64MultiArray,
             'wire_length',
             self.read_wire_length,
             QOS_RKL10V
@@ -179,10 +179,10 @@ class RecordNode(Node):
         )
 
         self.segment_angle_relative_flag = False
-        self.segment_angle_relative = Float32MultiArray()
+        self.segment_angle_relative = Float64MultiArray()
         self.end_effector_angle = 0
         self.segment_angle_relative_subscriber = self.create_subscription(
-            Float32MultiArray,
+            Float64MultiArray,
             'estimated_segment_angle/relative',
             self.read_segment_angle_relative,
             1

@@ -40,28 +40,36 @@
 #include <thread>
 #include <numeric>
 #include <iterator>
+#include <Eigen/Dense>
 
 // Surgical Tool Class
 #include "hw_definition.hpp"
-#include "dynamics_parameters.hpp"
-#include "controller.hpp"
+// #include "dynamics_parameters.hpp"
+#include "control_parameters.hpp"
+#include "dynamics_controller.hpp"
+#include "admittance_controller.hpp"
+#include "position_controller.hpp"
 
 // ROS2
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
+#include "builtin_interfaces/msg/time.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/int32_multi_array.hpp"
 #include "std_msgs/msg/int32.hpp"
-#include "std_msgs/msg/float32_multi_array.hpp"
+#include "std_msgs/msg/float64_multi_array.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "custom_interfaces/msg/motor_state.hpp"
 #include "custom_interfaces/msg/motor_command.hpp"
 #include "custom_interfaces/msg/loadcell_state.hpp"
 #include "custom_interfaces/msg/dynamic_mimo_values.hpp"
+#include "custom_interfaces/msg/admittance_control.hpp"
+#include "custom_interfaces/msg/position_control.hpp"
 #include "custom_interfaces/srv/move_motor_direct.hpp"
 #include "custom_interfaces/srv/move_tool_angle.hpp"
+#include "custom_interfaces/srv/set_goal_position.hpp"
 // #include "tcp_node.hpp"   // using #define NUM_OF_MOTRS
 
 typedef enum  {
@@ -74,6 +82,7 @@ typedef enum  {
 typedef enum  {
   kKinematics,
   kDynamics,
+  kAdmittance,
 } ControlMode;
 
 /**
@@ -88,15 +97,39 @@ public:
   using MotorState = custom_interfaces::msg::MotorState;
   using MotorCommand = custom_interfaces::msg::MotorCommand;
   using DynamicMIMOValues = custom_interfaces::msg::DynamicMIMOValues;
+  using AdmittanceControl = custom_interfaces::msg::AdmittanceControl;
+  using PositionControl = custom_interfaces::msg::PositionControl;
   using MoveMotorDirect = custom_interfaces::srv::MoveMotorDirect;
   using MoveToolAngle = custom_interfaces::srv::MoveToolAngle;
-
-  Controller HRM_controller_;
-  double theta_desired_;
+  using SetGoalPosition = custom_interfaces::srv::SetGoalPosition;
+  // Common values
   std::vector<double> theta_actual_;
-  std::vector<double> dtheta_dt_actual_;
+  std::vector<double> omega_actual_;
+
+
+  /**
+   * @brief Dynamics controller
+   */
+  DynamicsController HRM_controller_;
+  double theta_desired_;
   double dt_;
-  std::vector<double> force_external_;
+
+  /**
+   * @brief Admittance controller
+   */
+  Eigen::VectorXd del_f_;       // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
+  Eigen::VectorXd f_desired_;   // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
+  Eigen::VectorXd f_external_;  // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
+  Eigen::VectorXd del_xf_;      // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
+  AdmittanceController HRM_admittance_controller_;
+
+  /**
+   * @brief Position controller
+   */
+  Eigen::VectorXd x_t_;       // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
+  Eigen::VectorXd x_desired_; // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
+  Eigen::VectorXd x_actual_;  // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
+  PositionController HRM_position_controller_;
 
   /**
    * @brief Construct a new Kinematics Control Node object
@@ -171,12 +204,16 @@ private:
 
   /**
    * @author DY
-   * @brief  Dynamics parameters of input and output
-   * 
+   * @brief  controller parameters of input and output
    */
   DynamicMIMOValues dynamic_MIMO_values_;
   rclcpp::Publisher<DynamicMIMOValues>::SharedPtr dynamic_MIMO_values_publisher_;
 
+  AdmittanceControl admittance_control_msgs_;
+  rclcpp::Publisher<AdmittanceControl>::SharedPtr admittance_control_msgs_publisher_;
+
+  PositionControl position_control_msgs_;
+  rclcpp::Publisher<PositionControl>::SharedPtr position_control_msgs_publisher_;
   /**
    * @author DY
    * @brief actual motor status subscriber
@@ -195,10 +232,10 @@ private:
 
   geometry_msgs::msg::Twist surgical_tool_pose_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr surgical_tool_pose_publisher_;
-  std_msgs::msg::Float32MultiArray wire_length_;
-  rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr wire_length_publisher_;
-  std_msgs::msg::Float32MultiArray wire_length_velocity_;
-  rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr wire_length_velocity_publisher_;
+  std_msgs::msg::Float64MultiArray wire_length_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr wire_length_publisher_;
+  std_msgs::msg::Float64MultiArray wire_length_velocity_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr wire_length_velocity_publisher_;
 
   /**
    * @author DY
@@ -213,26 +250,29 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr external_force_subscriber_;
 
   bool segment_angle_op_flag_ = false;
-  std_msgs::msg::Float32MultiArray segment_angle_;
-  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angle_subscriber_;
-  std_msgs::msg::Float32MultiArray segment_angle_absolute_;
-  std_msgs::msg::Float32MultiArray segment_angle_absolute_prev_;
-  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angle_absolute_subscriber_;
+  std_msgs::msg::Float64MultiArray segment_angle_relative_;
+  std_msgs::msg::Float64MultiArray segment_angle_relative_prev_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angle_relative_subscriber_;
+  std_msgs::msg::Float64MultiArray segment_angle_absolute_;
+  std_msgs::msg::Float64MultiArray segment_angle_absolute_prev_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angle_absolute_subscriber_;
 
   bool segment_angular_velocity_op_flag_ = false;
-  std_msgs::msg::Float32MultiArray segment_angular_velocity_;
-  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angular_velocity_subscriber_;
-  std_msgs::msg::Float32MultiArray segment_angular_velocity_absolute_;
-  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr segment_angular_velocity_absolute_subscriber_;
+  std_msgs::msg::Float64MultiArray segment_angular_velocity_relative_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angular_velocity_relative_subscriber_;
+  std_msgs::msg::Float64MultiArray segment_angular_velocity_absolute_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angular_velocity_absolute_subscriber_;
 
 
   /**
    * @author DY
    * @brief Service server for motion
    */
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr control_mode_service_server_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr control_mode_change_between_kinematics_and_dynamics_service_server_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr control_mode_change_between_kinematics_and_admittance_service_server_;
   rclcpp::Service<MoveMotorDirect>::SharedPtr move_motor_direct_service_server_;
   rclcpp::Service<MoveToolAngle>::SharedPtr kinematics_move_tool_angle_service_server_;
+  rclcpp::Service<SetGoalPosition>::SharedPtr set_goal_position_service_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr move_sine_wave_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr move_sine_wave_1time_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr kinematics_move_circle_motion_server_;
@@ -249,8 +289,16 @@ private:
   float angle_ = 0;
 
   std::thread dynamic_control_thread_;
-  rclcpp::Rate loop_rate_;  // DY == initialize in the constructor of .cpp file (unit. Hz)
+  rclcpp::Rate loop_rate_dynamics_;  // DY == initialize in the constructor of .cpp file (unit. Hz)
   void run_dynamic_control_thread();
+
+  /**
+   * @brief 
+   * @todo make thread.
+   */
+  std::thread admittance_control_thread_;
+  rclcpp::Rate loop_rate_admittance_;  // DY == initialize in the constructor of .cpp file (unit. Hz)
+  void run_admittance_control_thread();
 };
 
 #endif

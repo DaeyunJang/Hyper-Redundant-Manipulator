@@ -1,21 +1,21 @@
-#include "controller.hpp"
+#include "dynamics_controller.hpp"
 #include "hw_definition.hpp"
-#include "dynamics_parameters.hpp"
+#include "control_parameters.hpp"
 #include <cmath>
 #include <vector>
 #include <numeric>
 #include <iterator>
 
-Controller::Controller() {initialize();}
-Controller::~Controller() {}
+DynamicsController::DynamicsController() {initialize();}
+DynamicsController::~DynamicsController() {}
 
-void Controller::initialize() {
-    pid_controller_.set_PID_gains(KP, KI, KD);
-    hrm_dynamics_model_.set_parameters(INERTIA, DAMPING_COEFFICIENT, STIFFNESS);
+void DynamicsController::initialize() {
+    pid_controller_.set_PID_gains(dynamics_params::KP, dynamics_params::KI, dynamics_params::KD);
+    hrm_dynamics_model_.set_parameters(dynamics_params::INERTIA, dynamics_params::DAMPING, dynamics_params::STIFFNESS);
     surgical_tool_.init_surgical_tool(NUM_OF_JOINT, SEGMENT_ARC, SEGMENT_DIAMETER, WIRE_DISTANCE, SHIFT, SEGMENT_ARC_CENTER_TO_SEGMENT_CENTER);
 }
 
-std::vector<double> Controller::compute(
+std::vector<double> DynamicsController::compute(
     const double& theta_desired,
     const double& end_effector_theta_actual,
     const double& end_effector_omega_actual,
@@ -104,9 +104,7 @@ std::vector<double> Controller::compute(
         // calculate angle
         theta_input_ = theta_dot_input_ * dt;
 
-        // calibration DY definition to Y.J. Kim kinematics definition
-        // double final_theta_input = theta_input_ * (-1) * surgical_tool_.todeg();
-        double final_theta_input = (end_effector_theta_actual_ + theta_input_) * (-1) * surgical_tool_.todeg();
+        double final_theta_input = (end_effector_theta_actual_ + theta_input_) * surgical_tool_.todeg();
         // std::cout << "final_theta_input: " << final_theta_input << std::endl;
         auto wire_length_to_move = surgical_tool_.get_IK_result(final_theta_input, 0, 0);
 
@@ -118,7 +116,7 @@ std::vector<double> Controller::compute(
     }
     else {  // hrm_controller_enable == false
     
-        double final_theta_input = (torque_input_ + end_effector_theta_actual_) * (-1) * surgical_tool_.todeg();
+        double final_theta_input = (torque_input_ + end_effector_theta_actual_) * surgical_tool_.todeg();
         auto wire_length_to_move = surgical_tool_.get_IK_result(final_theta_input, 0, 0);
         
         std::cout << "final_theta_input: " << final_theta_input << std::endl;

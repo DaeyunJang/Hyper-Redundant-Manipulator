@@ -132,7 +132,7 @@ public:
   /**
    * @brief calculate the Homogeneous transform matrix of each joint
    * @param theta radian
-   * @return Eigen::Matrix4d 
+   * @return Eigen::Matrix4d
    */
   Eigen::Matrix4d computeTransformationMatrix(const double& theta);
 
@@ -147,6 +147,12 @@ public:
    * 
    * @param T Homogeneous Transfrom Matrix
    * @return Eigen::Vector2d 
+   * @example
+   *  // e.g. Total 60 deg with 6 joints(10 deg each)
+   *  std::vector<double> joint_angles = [0.17, 0.17, 0.17, 0.17, 0.17, 0.17];
+   *  auto tf_matrices = computeBaseToJointsTransformationMatrices(joint_angles);
+   *  auto joints_xy = computeJointPositions(tf_matrices);
+   *  std::cout << joints_xy << std::endl;
    */
   Eigen::Vector2d extractXYfromTransformMatrix(const Eigen::Matrix4d& T);
 

@@ -1,6 +1,6 @@
 #pragma once
-#ifndef CONTROLLER_HPP
-#define CONTROLLER_HPP
+#ifndef DYNAMICS_CONTROLLER_HPP
+#define DYNAMICS_CONTROLLER_HPP
 
 #include "HRM_dynamics_model.hpp"
 #include "damping_friction_model.hpp"
@@ -16,10 +16,10 @@
  * This image shows the robot control system diagram.
  */
 
-class Controller {
+class DynamicsController {
 public:
-    Controller();
-    ~Controller();
+    DynamicsController();
+    ~DynamicsController();
 
     // PID 제어기의 게인 설정
     PIDController pid_controller_;

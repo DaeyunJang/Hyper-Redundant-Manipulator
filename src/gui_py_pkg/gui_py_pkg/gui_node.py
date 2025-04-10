@@ -165,12 +165,20 @@ class GUINode(Node):
         while not self.move_tool_angle_dynamics_service_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().warning('The "/dynamics/move_tool_angle" service server not available. Check the kinematics_control_node')
 
-        self.control_mode_client = self.create_client(
+        self.control_mode_kinematics_and_dynamics_client = self.create_client(
             SetBool,
-            'control/control_mode'
+            'control/control_mode_kin_dyn'
         )
-        while not self.control_mode_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warning('The "control/control_mode" service server not available. Check the kinematics_control_node')
+        while not self.control_mode_kinematics_and_dynamics_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning('The "control/control_mode_kin_dyn" service server not available. Check the kinematics_control_node')
+            
+        self.control_mode_kinematics_and_admittance_client = self.create_client(
+            SetBool,
+            'control/control_mode_kin_dyn'
+        )
+        while not self.control_mode_kinematics_and_admittance_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning('The "control/control_mode_kin_admit" service server not available. Check the kinematics_control_node')
+
 
         self.recoder_service_client = self.create_client(
             SetBool,
@@ -246,7 +254,7 @@ class GUINode(Node):
     def send_request_change_control_mode(self, mode=False):
         service_request = SetBool.Request()
         service_request.data = mode
-        future = self.control_mode_client.call_async(service_request)
+        future = self.control_mode_kinematics_and_dynamics_client.call_async(service_request)
         rclpy.spin_until_future_complete(self, future)
         return future.result()
     

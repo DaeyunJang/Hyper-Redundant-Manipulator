@@ -36,9 +36,12 @@ include_directories(include
 add_executable(robot_control
   src/main.cpp
   src/control_node.cpp
-  src/controller.cpp
+  src/dynamics_controller.cpp
   src/damping_friction_model.cpp
   src/HRM_dynamics_model.cpp
+  src/admittance_filter.cpp
+  src/admittance_controller.cpp
+  src/position_controller.cpp
   src/PID_controller.cpp
   src/surgical_tool.cpp
 )

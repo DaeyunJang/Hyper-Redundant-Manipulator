@@ -8,24 +8,42 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 : Node("ControlNode", node_options),
   control_mode_(ControlMode::kKinematics),
   hrm_controller_enable_(true),
-  loop_rate_(SAMPLING_HZ)
+  del_f_(Eigen::VectorXd::Zero(6)),
+  f_desired_(Eigen::VectorXd::Zero(6)),
+  f_external_(Eigen::VectorXd::Zero(6)),
+  del_xf_(Eigen::VectorXd::Zero(6)),
+  x_t_(Eigen::VectorXd::Zero(6)),
+  x_desired_(Eigen::VectorXd::Zero(6)),
+  x_actual_(Eigen::VectorXd::Zero(6)),
+  loop_rate_dynamics_(dynamics_params::SAMPLING_HZ),
+  loop_rate_admittance_(position_control_params::SAMPLING_HZ)
 {
   this->declare_parameter("qos_depth", 10);
   int8_t qos_depth = this->get_parameter("qos_depth", qos_depth);
 
   this->declare_parameter("control_mode", "kinematics");
-  this->declare_parameter<double>("dynamics/p_gain", KP);
-  this->declare_parameter<double>("dynamics/i_gain", KI);
-  this->declare_parameter<double>("dynamics/d_gain", KD);
-  this->declare_parameter<int>("dynamics/friction_mode", FRICTION_MODE);
+
+  // dynamics controller
+  this->declare_parameter<double>("dynamics/p_gain", dynamics_params::KP);
+  this->declare_parameter<double>("dynamics/i_gain", dynamics_params::KI);
+  this->declare_parameter<double>("dynamics/d_gain", dynamics_params::KD);
+  this->declare_parameter<int>("dynamics/friction_mode", dynamics_params::FRICTION_MODE);
   this->declare_parameter<bool>("dynamics/HRM_controller_enable", true);
+
+  // admittance controller
+  this->declare_parameter<double>("admittance/M_d", admittance_params::M_d);
+  this->declare_parameter<double>("admittance/B_d", admittance_params::B_d);
+  this->declare_parameter<double>("admittance/K_d", admittance_params::K_d);
+
+  // position controller
+  this->declare_parameter<double>("position_control/pid_controller_pan/p_gain", position_control_params::KP);
+  this->declare_parameter<double>("position_control/pid_controller_pan/i_gain", position_control_params::KI);
+  this->declare_parameter<double>("position_control/pid_controller_pan/d_gain", position_control_params::KD);
 
   // 파라미터 변경 콜백 등록
   param_callback_handle_ = this->add_on_set_parameters_callback(
     std::bind(&ControlNode::parameter_callback, this, std::placeholders::_1)
   );
-
-
 
   const auto QoS_RKL10V =
   rclcpp::QoS(rclcpp::KeepLast(qos_depth)).reliable().durability_volatile();
@@ -52,6 +70,12 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   dynamic_MIMO_values_publisher_ = this->create_publisher<DynamicMIMOValues>("dynamic_MIMO_values", QoS_RKL10V);
   RCLCPP_INFO(this->get_logger(), "Publisher 'dynamic_MIMO_values' is created.");
 
+  admittance_control_msgs_publisher_ = this->create_publisher<AdmittanceControl>("admittance_controller", QoS_RKL10V);
+  RCLCPP_INFO(this->get_logger(), "Publisher 'admittance_controller' is created.");
+
+  position_control_msgs_publisher_ = this->create_publisher<PositionControl>("position_controller", QoS_RKL10V);
+  RCLCPP_INFO(this->get_logger(), "Publisher 'position_controller' is created.");
+
   //===============================
   // surgical tool pose(degree) publisher
   //===============================
@@ -59,9 +83,9 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
     this->create_publisher<geometry_msgs::msg::Twist>("surgical_tool_pose", QoS_RKL10V);
 
   wire_length_publisher_ = 
-    this->create_publisher<std_msgs::msg::Float32MultiArray>("wire_length", QoS_RKL10V);
+    this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length", QoS_RKL10V);
   wire_length_velocity_publisher_ = 
-    this->create_publisher<std_msgs::msg::Float32MultiArray>("wire_length_velocity", QoS_RKL10V);
+    this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length_velocity", QoS_RKL10V);
   this->wire_length_.data.resize(NUM_OF_MOTORS);
   this->wire_length_velocity_.data.resize(NUM_OF_MOTORS);
 
@@ -134,15 +158,15 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       }
     );
   
-  segment_angle_subscriber_ =
-    this->create_subscription<std_msgs::msg::Float32MultiArray>(
+  segment_angle_relative_subscriber_ =
+    this->create_subscription<std_msgs::msg::Float64MultiArray>(
       "estimated_segment_angle/relative",
       QoS_RKL10V,
-      [this] (const std_msgs::msg::Float32MultiArray::SharedPtr msg) -> void
+      [this] (const std_msgs::msg::Float64MultiArray::SharedPtr msg) -> void
       {
         try {
           this->segment_angle_op_flag_ = true;
-          this->segment_angle_.data = msg->data;
+          this->segment_angle_relative_.data = msg->data;
 
           RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/relative.");
         } catch (const std::runtime_error & e) {
@@ -151,10 +175,10 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       }
     );
   segment_angle_absolute_subscriber_ =
-    this->create_subscription<std_msgs::msg::Float32MultiArray>(
+    this->create_subscription<std_msgs::msg::Float64MultiArray>(
       "estimated_segment_angle/absolute",
       QoS_RKL10V,
-      [this] (const std_msgs::msg::Float32MultiArray::SharedPtr msg) -> void
+      [this] (const std_msgs::msg::Float64MultiArray::SharedPtr msg) -> void
       {
         try {
           this->segment_angle_op_flag_ = true;
@@ -167,15 +191,15 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       }
     );
 
-  segment_angular_velocity_subscriber_ =
-    this->create_subscription<std_msgs::msg::Float32MultiArray>(
+  segment_angular_velocity_relative_subscriber_ =
+    this->create_subscription<std_msgs::msg::Float64MultiArray>(
       "estimated_segment_angular_velocity/relative",
       QoS_RKL10V,
-      [this] (const std_msgs::msg::Float32MultiArray::SharedPtr msg) -> void
+      [this] (const std_msgs::msg::Float64MultiArray::SharedPtr msg) -> void
       {
         try {
           this->segment_angular_velocity_op_flag_ = true;
-          this->segment_angular_velocity_.data = msg->data;
+          this->segment_angular_velocity_relative_.data = msg->data;
 
           RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/relative.");
         } catch (const std::runtime_error & e) {
@@ -185,10 +209,10 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
     );
 
   segment_angular_velocity_absolute_subscriber_ =
-    this->create_subscription<std_msgs::msg::Float32MultiArray>(
+    this->create_subscription<std_msgs::msg::Float64MultiArray>(
       "estimated_segment_angular_velocity/absolute",
       QoS_RKL10V,
-      [this] (const std_msgs::msg::Float32MultiArray::SharedPtr msg) -> void
+      [this] (const std_msgs::msg::Float64MultiArray::SharedPtr msg) -> void
       {
         try {
           this->segment_angular_velocity_op_flag_ = true;
@@ -200,10 +224,6 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         }
       }
     );
-
-
-
-
 
 
   /**********************************************************************
@@ -290,6 +310,54 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   kinematics_move_tool_angle_service_server_ = 
     create_service<MoveToolAngle>("kinematics/move_tool_angle", kinematics_move_tool_angle);
 
+  auto set_goal_position = 
+  [this](
+  const std::shared_ptr<SetGoalPosition::Request> request,
+  std::shared_ptr<SetGoalPosition::Response> response) -> void
+  {
+    try {
+      // run
+      if(this->op_mode_ == kEnable) {
+        if(request->mode == 0) {
+          // MOVE ABSOLUTELY
+          RCLCPP_INFO(
+            this->get_logger(),
+            "Received goal position: x: %.2f, y: %.2f, z: %.2f MODE: Absolute,", 
+            request->goal_position.position.x,
+            request->goal_position.position.y,
+            request->goal_position.position.z);
+          this->x_desired_ <<
+            request->goal_position.position.x,
+            request->goal_position.position.y,
+            request->goal_position.position.z,
+            0.0, 0.0, 0.0;  // 나머지 값은 기본값 0으로 설정
+        } else if (request->mode == 1) {
+          // MOVE ABSOLUTELY
+          RCLCPP_INFO(
+            this->get_logger(),
+            "Received goal position: x: x+%.2f, y: y+%.2f, z: z+%.2f MODE: Relative,", 
+            request->goal_position.position.x,
+            request->goal_position.position.y,
+            request->goal_position.position.z);
+          Eigen::VectorXd delta_x(6);
+          delta_x <<
+            request->goal_position.position.x,
+            request->goal_position.position.y,
+            request->goal_position.position.z,
+            0.0, 0.0, 0.0;  // 나머지 값은 기본값 0으로 설정
+          this->x_desired_ += delta_x;
+        }
+        response->success = true;
+        RCLCPP_INFO(this->get_logger(), "Service <kinematics/move_tool_angle> accept the request");
+      }
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+    }
+    
+  };
+  set_goal_position_service_server_ = 
+    create_service<SetGoalPosition>("position/set_goal_position", set_goal_position);
+
 
   auto sine_wave_callback = 
   [this](
@@ -297,12 +365,6 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
   {
     try {
-      // run
-      // if (control_mode_ != ControlMode::kKinematics) {
-      //   RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
-      //   return;
-      // }
-
       if(request->data) {
         // True --> Start timer
         count_ = 0;
@@ -342,12 +404,6 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
   {
     try {
-      // run
-      // if (control_mode_ != ControlMode::kKinematics) {
-      //   RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
-      //   return;
-      // }
-
       if(request->data) {
         // True --> Start timer
         count_ = 0;
@@ -392,7 +448,6 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
         return;
       }
-
       // run
       if(request->data) {
         // True --> Start timer
@@ -473,8 +528,11 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 
 
 
-
-  auto control_mode_callback = 
+  /**
+   * @brief change mode between kinematics and dynamics
+   * @note callback from gui (service call)
+   */
+  auto control_mode_change_between_kinematics_and_dynamics_callback = 
   [this](
   const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
@@ -498,8 +556,40 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
     }
   };
-  control_mode_service_server_ = 
-    create_service<std_srvs::srv::SetBool>("control/control_mode", control_mode_callback);
+  control_mode_change_between_kinematics_and_dynamics_service_server_ = 
+    create_service<std_srvs::srv::SetBool>("control/control_mode_kin_dyn", control_mode_change_between_kinematics_and_dynamics_callback);
+
+  /**
+   * @brief change mode between kinematics and admittance
+   * @note callback from gui (service call)
+   */
+  auto control_mode_change_between_kinematics_and_admittance_callback = 
+  [this](
+  const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+        std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
+  {
+    try {
+      // requst->data : true-Dynamics, false-Kinematics
+      if(request->data) {
+        // true : Dynamics
+        RCLCPP_INFO(this->get_logger(), "Control mode changed -> Admittance.");
+        this->set_parameter(rclcpp::Parameter("control_mode", "admittance"));
+        response->success = true;
+        response->message = "Control mode changed -> Admittance.";
+      } else {
+        // false : Kinematics
+        RCLCPP_INFO(this->get_logger(), "Control mode changed -> Kinematics.");
+        this->set_parameter(rclcpp::Parameter("control_mode", "kinematics"));
+        response->success = true;
+        response->message = "Control mode changed -> Kinematics.";
+      }
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+    }
+  };
+  control_mode_change_between_kinematics_and_admittance_service_server_ = 
+    create_service<std_srvs::srv::SetBool>("control/control_mode_kin_admit", control_mode_change_between_kinematics_and_admittance_callback);
+
 
   auto dynamics_move_tool_angle = 
   [this](
@@ -543,9 +633,9 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
     create_service<MoveToolAngle>("dynamics/move_tool_angle", dynamics_move_tool_angle);
 
 
-
-  // opertion thread which kinematics and dynamics
+  // opertion thread which kinematics, dynamics and admittance
   dynamic_control_thread_ = std::thread(&ControlNode::run_dynamic_control_thread, this);
+  admittance_control_thread_ = std::thread(&ControlNode::run_admittance_control_thread, this);
   /**
    * @brief homing
    */
@@ -727,11 +817,16 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       } else if (param.as_string() == "dynamics") {
         control_mode_ = ControlMode::kDynamics;
         RCLCPP_INFO(this->get_logger(), "Switched to DYNAMICS mode");
+      } else if (param.as_string() == "admittance") {
+        control_mode_ = ControlMode::kAdmittance;
+        RCLCPP_INFO(this->get_logger(), "Switched to ADMITTANCE mode");
       } else {
         RCLCPP_WARN(this->get_logger(), "Unknown mode. Keeping previous mode.");
       }
     // }
-    } else if (param.get_name() == "dynamics/p_gain") {
+    } 
+    // dynamics control
+    else if (param.get_name() == "dynamics/p_gain") {
       double p_gain = param.as_double();
       HRM_controller_.pid_controller_.kp_ = p_gain;
       RCLCPP_INFO(this->get_logger(), "Updated P gain: %f", p_gain);
@@ -751,6 +846,34 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       bool enable = param.as_bool();
       HRM_controller_.hrm_controller_enable_ = enable;
       RCLCPP_INFO(this->get_logger(), "Updated friction mode: %d", HRM_controller_.hrm_controller_enable_);
+    } 
+    // admittance control
+    else if (param.get_name() == "admittance/M") {
+      double M = param.as_double();
+      HRM_admittance_controller_.admittance_filter_.M_(1,1) = M;
+      RCLCPP_INFO(this->get_logger(), "Updated M(1,1): %f", M);
+    } else if (param.get_name() == "admittance/B") {
+      double B = param.as_double();
+      HRM_admittance_controller_.admittance_filter_.B_(1,1) = B;
+      RCLCPP_INFO(this->get_logger(), "Updated B(1,1): %f", B);
+    } else if (param.get_name() == "admittance/K") {
+      double K = param.as_double();
+      HRM_admittance_controller_.admittance_filter_.K_(1,1) = K;
+      RCLCPP_INFO(this->get_logger(), "Updated K(1,1): %f", K);
+    }
+    // poisiton control
+    else if (param.get_name() == "position_control/pid_controller_pan/p_gain") {
+      double p_gain = param.as_double();
+      HRM_position_controller_.pid_controller_pan_.kp_ = p_gain;
+      RCLCPP_INFO(this->get_logger(), "Updated p_gain: %f", p_gain);
+    } else if (param.get_name() == "position_control/pid_controller_pan/i_gain") {
+      double i__gain = param.as_double();
+      HRM_position_controller_.pid_controller_pan_.ki_ = i__gain;
+      RCLCPP_INFO(this->get_logger(), "Updated B: %f", i__gain);
+    } else if (param.get_name() == "position_control/pid_controller_pan/d_gain") {
+      double d_gain = param.as_double();
+      HRM_position_controller_.pid_controller_pan_.kd_ = d_gain;
+      RCLCPP_INFO(this->get_logger(), "Updated K: %f", d_gain);
     }
 
 
@@ -770,20 +893,18 @@ void ControlNode::run_dynamic_control_thread() {
         /***
          * @warning
          * optimazation for memory based on avoiding memory copy
-         * Y.J. Kim's kinematics is defined that CW direction is positive and CCW is negative.
-         * But DY defined opposite.
          * affect to 'theta_desired', 'tension'
          * @param loop_late_
          * loop_late_ is the sampling rate of the controller 
-         * loop_late = global variable SAMPLING_HZ @include '../include/dynamics_parameters.hpp' 
+         * loop_late = global variable dynamics_params::SAMPLING_HZ @include '../include/control_parameters.hpp' 
          */
         // double theta_desired = this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
         double theta_desired = (-1) * this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
         
         // if using std::vector<double> a = msg.data
         // The type must be conversion from float(msg.data) to double
-        std::vector<double> theta_actual(this->segment_angle_.data.begin(), this->segment_angle_.data.end());
-        std::vector<double> omega_actual(this->segment_angular_velocity_.data.begin(), this->segment_angular_velocity_.data.end());
+        std::vector<double> theta_actual(this->segment_angle_relative_.data.begin(), this->segment_angle_relative_.data.end());
+        std::vector<double> omega_actual(this->segment_angular_velocity_relative_.data.begin(), this->segment_angular_velocity_relative_.data.end());
 
         //************************** */
         // End-effector theta
@@ -806,7 +927,7 @@ void ControlNode::run_dynamic_control_thread() {
         double end_effector_omega_actual = segment_angular_velocity_absolute_.data.back();
 
         //************************** */
-        double dt = DT;
+        double dt = dynamics_params::DT;
         std::vector<double> tension = {this->loadcell_data_.stress[1]*0.001, this->loadcell_data_.stress[0]*0.001}; // g -> kg, Y.J. kiniematics is positive on CW.
         std::vector<double> external_force = {this->external_force_.x*0.001, this->external_force_.y*0.001};
 
@@ -923,7 +1044,241 @@ void ControlNode::run_dynamic_control_thread() {
         
 
 
-        loop_rate_.sleep();
+        loop_rate_dynamics_.sleep();
+      } catch (const std::runtime_error & e) {
+        RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+      }
+    } else {  // kinematics
+      //
+    }
+  }
+}
+
+
+
+void ControlNode::run_admittance_control_thread() {
+  while (rclcpp::ok()) {
+    if (control_mode_ == ControlMode::kAdmittance) {
+      try {
+        /***
+         * @note loop_late_
+         * loop_late_ is the sampling rate of the controller 
+         * loop_late = global variable admittance_params::SAMPLING_HZ @include '../include/control_parameters.hpp' 
+         */
+
+        // ================================================================
+        // Calculation of admittance control
+        // ================================================================
+        
+        // calculate admittance
+        this->f_external_(0) = this->external_force_.x * 0.001;
+        this->f_external_(1) = this->external_force_.y * 0.001;
+
+        this->del_xf_ = this->HRM_admittance_controller_.compute(this->f_desired_, this->f_external_);
+        // calculate admittance - END
+
+        // compensated desired x
+        // x_t = x_d + del_x_f
+        this->x_t_ = this->x_desired_ + this->del_xf_;
+
+        // position controller
+        double dt = position_control_params::DT;
+        /**
+         * @brief Get end-effector (x,y) from joint angle
+         * if using std::vector<double> a = msg.data
+         * The type must be conversion from float(msg.data) to double
+         */
+        // double alpha = 0.5;
+        // double angle_filtered = 0;
+        // if (!segment_angle_relative_.data.empty() && !segment_angle_relative_prev_.data.empty()) {
+        //   angle_filtered = alpha*segment_angle_relative_.data.back() + (1-alpha)*segment_angle_relative_prev_.data.back();
+        // } else {
+        //   segment_angle_relative_prev_.data = segment_angle_relative_.data;
+        // }
+        // segment_angle_relative_prev_.data = segment_angle_relative_.data;
+
+        /**
+         * @brief Get end-effector pose (x,y)
+         * @todo Extend from 2 DOF to 3 DOF(or 6 DOF)
+         */
+        this->theta_actual_ = std::vector<double>(this->segment_angle_relative_.data.begin(), this->segment_angle_relative_.data.end());
+        auto tf_matrices = this->HRM_position_controller_.surgical_tool_.computeBaseToJointsTransformationMatrices(this->theta_actual_);
+        auto joints_xy = this->HRM_position_controller_.surgical_tool_.computeJointPositions(tf_matrices);
+        Eigen::Vector2d eef_xy = joints_xy.back();  // get end-effector (x,y)
+        this->x_actual_(0) = eef_xy.x();  // = eef_xy(0)
+        this->x_actual_(1) = eef_xy.y();  // = eef_xy(1)
+
+        // get wire length to move (PID and Inverse-Kinematics method)
+        // @ref Y.J. Kim
+        auto wire_length_to_move = this->HRM_position_controller_.update(this->x_t_, this->x_actual_, dt);
+        // position controller - END_
+
+        // ================================================================
+        // Calculation of admittance control - END
+        // ================================================================
+
+        // transition to actuator
+        double f_val[5];
+        f_val[0] = wire_length_to_move[0];  // East
+        f_val[1] = wire_length_to_move[1];  // West
+        f_val[2] = wire_length_to_move[2];  // South
+        f_val[3] = wire_length_to_move[3];  // North
+        f_val[4] = wire_length_to_move[4];  // grip
+
+        this->motor_control_target_val_.header.stamp = this->now();
+        this->motor_control_target_val_.header.frame_id = "motor_target_position";
+
+        if (this->loadcell_data_.stress[0] < TENSION_LIMIT && this->loadcell_data_.stress[1] < TENSION_LIMIT) {
+          this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+          this->motor_control_target_val_.target_position[1] = DIRECTION_COUPLER * f_val[1] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+        }
+        else {// for prevent wire cut off 
+          for (int i=0; i<NUM_OF_MOTORS; i++) {
+            this->motor_control_target_val_.target_position[i] = this->motor_state_.actual_position[i];
+          }
+        }
+        
+
+        #if MOTOR_CONTROL_SAME_DURATION
+          /**
+           * @brief find max value and make it max_velocity_profile 100 (%),
+           *        other value have values proportional to 100 (%) each
+           */
+          static double prev_f_val[NUM_OF_MOTORS];  // for delta length
+
+          std::vector<double> abs_f_val(NUM_OF_MOTORS-1, 0);  // 5th DOF is a forceps
+          for (int i=0; i<NUM_OF_MOTORS-1; i++) { abs_f_val[i] = std::abs(this->motor_control_target_val_.target_position[i] - this->motor_state_.actual_position[i]); }
+
+          double max_val = *std::max_element(abs_f_val.begin(), abs_f_val.end()) + 0.00001; // 0.00001 is protection for 0/0 (0 divided by 0)
+          int max_val_index = std::max_element(abs_f_val.begin(), abs_f_val.end()) - abs_f_val.begin();
+          for (int i=0; i<(NUM_OF_MOTORS-1); i++) { 
+            this->motor_control_target_val_.target_velocity_profile[i] = (abs_f_val[i] / max_val) * PERCENT_100 * 0.5;
+          }
+          // last index means forceps. It doesn't need velocity profile
+          this->motor_control_target_val_.target_velocity_profile[NUM_OF_MOTORS-1] = PERCENT_100 * 0.5;
+          
+        #else
+          int target_vel_profile = int(std::round(std::abs(HRM_controller_.theta_dot_input_)));
+          // prevent velocity 0
+          if (target_vel_profile < 20) {
+            target_vel_profile = 20;
+          }
+          for (int i=0; i<NUM_OF_MOTORS; i++) { 
+            // this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.5;
+            this->motor_control_target_val_.target_velocity_profile[i] = std::min(target_vel_profile, 80);
+          }
+        #endif
+        
+        // send motor command
+        this->motor_control_publisher_->publish(this->motor_control_target_val_);
+
+
+        // publish variables
+        if (this->segment_angle_op_flag_ == true) {
+          // time
+          builtin_interfaces::msg::Time time;
+          time = this->get_clock()->now();
+
+          // ----------------------------------------------------
+          // Admittance controller
+          admittance_control_msgs_.header.stamp = time;
+          admittance_control_msgs_.header.frame_id = "admittance_controller";
+
+          // Force message
+          admittance_control_msgs_.desired_force.force.x = HRM_admittance_controller_.f_desired_(0);
+          admittance_control_msgs_.desired_force.force.y = HRM_admittance_controller_.f_desired_(1);
+          admittance_control_msgs_.desired_force.force.z = HRM_admittance_controller_.f_desired_(2);
+          admittance_control_msgs_.desired_force.torque.x = HRM_admittance_controller_.f_desired_(3);
+          admittance_control_msgs_.desired_force.torque.y = HRM_admittance_controller_.f_desired_(4);
+          admittance_control_msgs_.desired_force.torque.z = HRM_admittance_controller_.f_desired_(5);
+          
+          admittance_control_msgs_.external_force.force.x = HRM_admittance_controller_.f_external_(0);
+          admittance_control_msgs_.external_force.force.y = HRM_admittance_controller_.f_external_(1);
+          admittance_control_msgs_.external_force.force.z = HRM_admittance_controller_.f_external_(2);
+          admittance_control_msgs_.external_force.torque.x = HRM_admittance_controller_.f_external_(3);
+          admittance_control_msgs_.external_force.torque.y = HRM_admittance_controller_.f_external_(4);
+          admittance_control_msgs_.external_force.torque.z = HRM_admittance_controller_.f_external_(5);
+
+          admittance_control_msgs_.delta_force.force.x = HRM_admittance_controller_.del_f_(0);
+          admittance_control_msgs_.delta_force.force.y = HRM_admittance_controller_.del_f_(1);
+          admittance_control_msgs_.delta_force.force.z = HRM_admittance_controller_.del_f_(2);
+          admittance_control_msgs_.delta_force.torque.x = HRM_admittance_controller_.del_f_(3);
+          admittance_control_msgs_.delta_force.torque.y = HRM_admittance_controller_.del_f_(4);
+          admittance_control_msgs_.delta_force.torque.z = HRM_admittance_controller_.del_f_(5);
+
+          // Admittance variables
+          std::vector<double> m_matrix_vec(
+            HRM_admittance_controller_.admittance_filter_.M_.data(),
+            HRM_admittance_controller_.admittance_filter_.M_.data() + HRM_admittance_controller_.admittance_filter_.M_.size());
+          std::vector<double> b_matrix_vec(
+            HRM_admittance_controller_.admittance_filter_.B_.data(),
+            HRM_admittance_controller_.admittance_filter_.B_.data() + HRM_admittance_controller_.admittance_filter_.B_.size());
+          std::vector<double> k_matrix_vec(
+            HRM_admittance_controller_.admittance_filter_.K_.data(),
+            HRM_admittance_controller_.admittance_filter_.K_.data() + HRM_admittance_controller_.admittance_filter_.K_.size());
+          admittance_control_msgs_.m_matrix = m_matrix_vec;
+          admittance_control_msgs_.b_matrix = b_matrix_vec;
+          admittance_control_msgs_.k_matrix = k_matrix_vec;
+
+          admittance_control_msgs_.x_f.position.x = this->del_xf_(0);
+          admittance_control_msgs_.x_f.position.y = this->del_xf_(1);
+          admittance_control_msgs_.x_f.position.z = this->del_xf_(2);
+
+          // ----------------------------------------------------
+          // Position controller
+          position_control_msgs_.header.stamp = time;
+          position_control_msgs_.header.frame_id = "position_controller";
+
+          // gain (pan, tilt same)
+          position_control_msgs_.p_gain = HRM_position_controller_.pid_controller_pan_.kp_;
+          position_control_msgs_.i_gain = HRM_position_controller_.pid_controller_pan_.ki_;
+          position_control_msgs_.d_gain = HRM_position_controller_.pid_controller_pan_.kd_;
+
+          // position message
+          /**
+           * @note skip orientation (TBD)
+           */
+          position_control_msgs_.x_desired.position.x = HRM_position_controller_.x_desired_(0);
+          position_control_msgs_.x_desired.position.y = HRM_position_controller_.x_desired_(1);
+          position_control_msgs_.x_desired.position.z = HRM_position_controller_.x_desired_(2);
+
+          position_control_msgs_.x_actual.position.x = HRM_position_controller_.x_actual_(0);
+          position_control_msgs_.x_actual.position.y = HRM_position_controller_.x_actual_(1);
+          position_control_msgs_.x_actual.position.z = HRM_position_controller_.x_actual_(2);
+
+          position_control_msgs_.x_error.position.x = HRM_position_controller_.x_err_(0);
+          position_control_msgs_.x_error.position.y = HRM_position_controller_.x_err_(1);
+          position_control_msgs_.x_error.position.z = HRM_position_controller_.x_err_(2);
+
+          position_control_msgs_.dt = HRM_position_controller_.dt_;
+          position_control_msgs_.del_theta_pan = HRM_position_controller_.del_theta_pan_;
+          position_control_msgs_.del_theta_tilt = HRM_position_controller_.del_theta_tilt_;
+
+          // joint(segment) angle information
+          std::vector<double> theta_actual_rel(this->segment_angle_relative_.data.begin(), this->segment_angle_relative_.data.end());
+          std::vector<double> theta_actual_abs(this->segment_angle_absolute_.data.begin(), this->segment_angle_absolute_.data.end());
+          position_control_msgs_.theta_actual_relative = theta_actual_rel;
+          position_control_msgs_.theta_actual_absolute = theta_actual_abs;
+
+          // publish data of controllers
+          admittance_control_msgs_publisher_->publish(admittance_control_msgs_);
+          position_control_msgs_publisher_->publish(position_control_msgs_);
+
+          /**
+           * @brief update tool states (pan and tilt anlge)
+           * @warning Check out the coordinate system on paper
+           * Pan: rotate about Z-axis
+           * Tilt: rotate about Y-axis
+           */
+          geometry_msgs::msg::Twist surgical_tool_pose;
+          surgical_tool_pose.angular.z = HRM_position_controller_.surgical_tool_.pAngle_;
+          surgical_tool_pose.angular.y = HRM_position_controller_.surgical_tool_.tAngle_;
+          this->surgical_tool_pose_publisher_->publish(surgical_tool_pose);
+
+          this->segment_angle_op_flag_ = false;
+        }
+
+        loop_rate_admittance_.sleep();
       } catch (const std::runtime_error & e) {
         RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
       }

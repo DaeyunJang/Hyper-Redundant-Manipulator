@@ -2,7 +2,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include "sensor_msgs/msg/joy.hpp"
 #include "geometry_msgs/msg/twist.hpp"
-#include "std_msgs/msg/float32_multi_array.hpp"
+#include "std_msgs/msg/float64_multi_array.hpp"
 #include "custom_interfaces/msg/motor_state.hpp"
 #include "custom_interfaces/msg/motor_command.hpp"
 #include "custom_interfaces/msg/motor_command_csv.hpp"
