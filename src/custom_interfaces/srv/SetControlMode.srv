@@ -1,0 +1,6 @@
+# Request
+int8 mode #=0, kinematics=1, dynamics=2, position=3, admittance=4
+---
+# Response
+bool success
+string message

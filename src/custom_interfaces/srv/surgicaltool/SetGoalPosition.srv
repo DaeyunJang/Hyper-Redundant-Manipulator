@@ -3,7 +3,7 @@
 #________________________________________________________
 
 # Request
-int8    mode #= 0    # ABSOLUTE=0, RELATIVE=1
+string reference_type # absolute, relative
 geometry_msgs/Pose goal_position
 ---
 # Response

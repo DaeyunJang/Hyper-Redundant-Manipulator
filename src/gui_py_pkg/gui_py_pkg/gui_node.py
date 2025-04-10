@@ -34,9 +34,22 @@ from custom_interfaces.msg import LoadcellState
 from custom_interfaces.msg import MotorCommand
 from custom_interfaces.msg import MotorState
 from custom_interfaces.msg import DataFilterSetting
+from custom_interfaces.msg import AdmittanceControl
+from custom_interfaces.msg import PositionControl
 from custom_interfaces.srv import MoveMotorDirect
 from custom_interfaces.srv import MoveToolAngle
+from custom_interfaces.srv import SetGoalPosition
+from custom_interfaces.srv import SetControlMode
 
+
+from enum import Enum
+# 제어모드를 나타내는 Enum 정의
+class ControlMode(Enum):
+    kKinematics = 1
+    kDynamics = 2
+    kPosition = 3
+    kAdmittance = 4
+    
 # import rs_read
 from gui_py_pkg.rs_read import *
 # from gui_py_pkg.rs_read import RealSenseSubscriber
@@ -146,39 +159,52 @@ class GUINode(Node):
 
         self.move_motor_direct_service_client = self.create_client(
             MoveMotorDirect,
-            '/move_motor_direct'
+            'move_motor_direct'
         )
         while not self.move_motor_direct_service_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().warning('The "/move_motor_direct" service server not available. Check the kinematics_control_node')
 
         self.move_tool_angle_service_client = self.create_client(
             MoveToolAngle,
-            '/kinematics/move_tool_angle'
+            'kinematics/move_tool_angle'
         )
         while not self.move_tool_angle_service_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warning('The "/kinematics/move_tool_angle" service server not available. Check the kinematics_control_node')
+            self.get_logger().warning('The "kinematics/move_tool_angle" service server not available. Check the kinematics_control_node')
 
         self.move_tool_angle_dynamics_service_client = self.create_client(
             MoveToolAngle,
-            '/dynamics/move_tool_angle'
+            'dynamics/move_tool_angle'
         )
         while not self.move_tool_angle_dynamics_service_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warning('The "/dynamics/move_tool_angle" service server not available. Check the kinematics_control_node')
+            self.get_logger().warning('The "dynamics/move_tool_angle" service server not available. Check the kinematics_control_node')
 
-        self.control_mode_kinematics_and_dynamics_client = self.create_client(
-            SetBool,
-            'control/control_mode_kin_dyn'
+        self.set_goal_position_service_client = self.create_client(
+            SetGoalPosition,
+            'position/set_goal_position'
         )
-        while not self.control_mode_kinematics_and_dynamics_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warning('The "control/control_mode_kin_dyn" service server not available. Check the kinematics_control_node')
-            
-        self.control_mode_kinematics_and_admittance_client = self.create_client(
-            SetBool,
-            'control/control_mode_kin_dyn'
-        )
-        while not self.control_mode_kinematics_and_admittance_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warning('The "control/control_mode_kin_admit" service server not available. Check the kinematics_control_node')
+        while not self.set_goal_position_service_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning('The "position/set_goal_position" service server not available. Check the kinematics_control_node')
 
+        self.set_control_mode_service_client = self.create_client(
+            SetBool,
+            'control/set_control_mode'
+        )
+        while not self.set_control_mode_service_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning('The "control/set_control_mode" service server not available. Check the kinematics_control_node')
+
+        # self.control_mode_kinematics_and_dynamics_client = self.create_client(
+        #     SetBool,
+        #     'control/control_mode_kin_dyn'
+        # )
+        # while not self.control_mode_kinematics_and_dynamics_client.wait_for_service(timeout_sec=2.0):
+        #     self.get_logger().warning('The "control/control_mode_kin_dyn" service server not available. Check the kinematics_control_node')
+
+        # self.control_mode_position_and_admittance_client = self.create_client(
+        #     SetBool,
+        #     'control/control_mode_pos_admit'
+        # )
+        # while not self.control_mode_position_and_admittance_client.wait_for_service(timeout_sec=2.0):
+        #     self.get_logger().warning('The "control/control_mode_pos_admit" service server not available. Check the kinematics_control_node')
 
         self.recoder_service_client = self.create_client(
             SetBool,
@@ -250,11 +276,43 @@ class GUINode(Node):
         # rclpy.spin_until_future_complete(self, future)
         return future.result()
     
+    def send_request_set_goal_position(self, x=0.0, y=0.0, z=0.0, ref='absolute'):
+        service_request = SetGoalPosition.Request()
+        service_request.reference_type = ref
+        service_request.goal_position.position.x = x
+        service_request.goal_position.position.y = y
+        service_request.goal_position.position.z = z
+        service_request.goal_position.orientation.x = 0
+        service_request.goal_position.position.y = 0
+        service_request.goal_position.position.z = 0
+        service_request.goal_position.position.w = 0
+        future = self.set_goal_position_service_client.call_async(service_request)
+        # rclpy.spin_until_future_complete(self, future)
+        return future.result()
+    
     # mode : true-dynamics / false-kinematics
-    def send_request_change_control_mode(self, mode=False):
+    def send_request_change_control_mode_kinematics_and_dynamics(self, mode=False):
         service_request = SetBool.Request()
         service_request.data = mode
         future = self.control_mode_kinematics_and_dynamics_client.call_async(service_request)
+        rclpy.spin_until_future_complete(self, future)
+        return future.result()
+    
+    def send_request_set_control_mode(self, mode=ControlMode.kKinematics): 
+        """Set control mode of HRM
+
+        Args:
+            mode (int, optional): followd "ControlNode" class. Defaults to 1.
+            kinematics=1,
+            dynamics=2,
+            position=3,
+            admittance=4
+        Returns:
+            service response (ROS) : result of success and message (ROS)
+        """
+        service_request = SetControlMode.Request()
+        service_request.mode = mode
+        future = self.set_control_mode_service_client.call_async(service_request)
         rclpy.spin_until_future_complete(self, future)
         return future.result()
     
@@ -369,7 +427,7 @@ class MyGUI(QWidget):
         '''
         self.layout_mode = QVBoxLayout()
         self.label_mode = QLabel('Operation Mode')
-        self.checkbox_mode_list = [QCheckBox('manual'), QCheckBox('kinematics'), QCheckBox('Dynamics')]
+        self.checkbox_mode_list = [QCheckBox('Manual'), QCheckBox('Kinematics'), QCheckBox('Dynamics'), QCheckBox('Position', QCheckBox('Admittance'))]
         self.checkbox_mode_list[0].setChecked(False)
         self.checkbox_mode_list[0].setFixedWidth(200)
         self.checkbox_mode_list[0].clicked.connect(self.checkbox_mode_clicked)
@@ -380,15 +438,25 @@ class MyGUI(QWidget):
         self.checkbox_mode_list[2].setChecked(False)
         self.checkbox_mode_list[2].setFixedWidth(200)
         self.checkbox_mode_list[2].clicked.connect(self.checkbox_mode_clicked)
+        self.checkbox_mode_list[3].setChecked(False)
+        self.checkbox_mode_list[3].setFixedWidth(200)
+        self.checkbox_mode_list[3].clicked.connect(self.checkbox_mode_clicked)
+        self.checkbox_mode_list[4].setChecked(False)
+        self.checkbox_mode_list[4].setFixedWidth(200)
+        self.checkbox_mode_list[4].clicked.connect(self.checkbox_mode_clicked)
         # self.checkbox_mode_list[1].stateChanged.connect(self.disable_mode)
         self.layout_mode.addWidget(self.label_mode)
         self.layout_mode.addWidget(self.checkbox_mode_list[0])
         self.layout_mode.addWidget(self.checkbox_mode_list[1])
         self.layout_mode.addWidget(self.checkbox_mode_list[2])
+        self.layout_mode.addWidget(self.checkbox_mode_list[3])
+        self.layout_mode.addWidget(self.checkbox_mode_list[4])
         self.layout_mode.setAlignment(self.label_mode, Qt.AlignRight)
         self.layout_mode.setAlignment(self.checkbox_mode_list[0], Qt.AlignRight)
         self.layout_mode.setAlignment(self.checkbox_mode_list[1], Qt.AlignRight)
         self.layout_mode.setAlignment(self.checkbox_mode_list[2], Qt.AlignRight)
+        self.layout_mode.setAlignment(self.checkbox_mode_list[3], Qt.AlignRight)
+        self.layout_mode.setAlignment(self.checkbox_mode_list[4], Qt.AlignRight)
         self.layout_global.addLayout(self.layout_mode)
 
         self.motor_layout_list = []
@@ -409,29 +477,29 @@ class MyGUI(QWidget):
             self.motor_pub_line_edit_list.append(QLineEdit('0'))
             self.motor_pub_button_list.append(QPushButton('Publish'))
 
-            # @ note  if you input 'i' into argument of function 'request_motor_move' directly,
+            # @ note  if you input 'i' into argument of function 'publish_motion' directly,
             #         then all button will work about num=2, in this case
             try:
                 if i == 0:
-                    self.motor_pub_button_list[i].clicked.connect(lambda : self.request_motor_move(num=0))
+                    self.motor_pub_button_list[i].clicked.connect(lambda : self.publish_motion(num=0))
                 elif i == 1:
-                    self.motor_pub_button_list[i].clicked.connect(lambda : self.request_motor_move(num=1))
+                    self.motor_pub_button_list[i].clicked.connect(lambda : self.publish_motion(num=1))
                 elif i == 2:
-                    self.motor_pub_button_list[i].clicked.connect(lambda : self.request_motor_move(num=2))
+                    self.motor_pub_button_list[i].clicked.connect(lambda : self.publish_motion(num=2))
                 elif i == 3:
-                    self.motor_pub_button_list[i].clicked.connect(lambda : self.request_motor_move(num=3))
+                    self.motor_pub_button_list[i].clicked.connect(lambda : self.publish_motion(num=3))
                 elif i == 4:
-                    self.motor_pub_button_list[i].clicked.connect(lambda : self.request_motor_move(num=4))
+                    self.motor_pub_button_list[i].clicked.connect(lambda : self.publish_motion(num=4))
                 elif i == 5:
-                    self.motor_pub_button_list[i].clicked.connect(lambda : self.request_motor_move(num=5))
+                    self.motor_pub_button_list[i].clicked.connect(lambda : self.publish_motion(num=5))
                 elif i == 6:
-                    self.motor_pub_button_list[i].clicked.connect(lambda : self.request_motor_move(num=6))
+                    self.motor_pub_button_list[i].clicked.connect(lambda : self.publish_motion(num=6))
                 elif i == 7:
-                    self.motor_pub_button_list[i].clicked.connect(lambda : self.request_motor_move(num=7))
+                    self.motor_pub_button_list[i].clicked.connect(lambda : self.publish_motion(num=7))
                 elif i == 8:
-                    self.motor_pub_button_list[i].clicked.connect(lambda : self.request_motor_move(num=8))
+                    self.motor_pub_button_list[i].clicked.connect(lambda : self.publish_motion(num=8))
                 elif i == 9:
-                    self.motor_pub_button_list[i].clicked.connect(lambda : self.request_motor_move(num=8))
+                    self.motor_pub_button_list[i].clicked.connect(lambda : self.publish_motion(num=8))
             except Exception as e:
                 print(f'Exception error on connecting functions to button as {e}')
         
@@ -500,7 +568,7 @@ class MyGUI(QWidget):
         list(map(lambda x: x.setFixedWidth(100), self.motor_kinematics_line_edit_list))
         list(map(lambda x: x.setFixedHeight(30), self.motor_kinematics_line_edit_list))
         self.motor_kinematics_button = QPushButton('Publish')
-        self.motor_kinematics_button.clicked.connect(self.request_motor_move)
+        self.motor_kinematics_button.clicked.connect(self.publish_motion)
         self.motor_kinematics_button.setFixedWidth(150)
         self.motor_kinematics_button.setFixedHeight(70)
 
@@ -512,7 +580,7 @@ class MyGUI(QWidget):
         # self.motor_kinematics_label = QLabel("Move Tip(Degree) | Tilt")
         # self.motor_kinematics_line_edit = QLineEdit('0')
         # self.motor_kinematics_button = QPushButton('Publish')
-        # self.motor_kinematics_button.clicked.connect(self.request_motor_move)
+        # self.motor_kinematics_button.clicked.connect(self.publish_motion)
         # self.motor_kinematics_label.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
         # self.motor_kinematics_button.setFixedWidth(150)
         # self.motor_kinematics_button.setFixedHeight(30)
@@ -693,29 +761,62 @@ class MyGUI(QWidget):
 
         # manual
         if sender == self.checkbox_mode_list[0] and self.checkbox_mode_list[0].isChecked():
-            self.node.send_request_change_control_mode(mode=False)
+            # self.node.send_request_set_control_mode(mode=0)
             self.checkbox_mode_list[1].setChecked(False)
             self.checkbox_mode_list[2].setChecked(False)
+            self.checkbox_mode_list[3].setChecked(False)
+            self.checkbox_mode_list[4].setChecked(False)
+            
         # kinematics
         elif sender == self.checkbox_mode_list[1] and self.checkbox_mode_list[1].isChecked():
             self.node.get_logger().info("Setting parameter...")
-            self.node.send_request_change_control_mode(mode=False)
+            self.node.send_request_set_control_mode(mode=ControlMode.kKinematics)
             self.checkbox_mode_list[0].setChecked(False)
             self.checkbox_mode_list[2].setChecked(False)
+            self.checkbox_mode_list[3].setChecked(False)
+            self.checkbox_mode_list[4].setChecked(False)
+            self.motor_kinematics_label_list[0].setText("Move Tip(Degree) | Pan (E-W)")
+            self.motor_kinematics_label_list[1].setText("Move Tip(Degree) | Tilt(S-N)")
 
         # dynamics
         elif sender == self.checkbox_mode_list[2] and self.checkbox_mode_list[2].isChecked():
             self.node.get_logger().info("Setting parameter...")
-            self.node.send_request_change_control_mode(mode=True)
+            self.node.send_request_set_control_mode(mode=ControlMode.kDynamics)
             self.checkbox_mode_list[0].setChecked(False)
             self.checkbox_mode_list[1].setChecked(False)
+            self.checkbox_mode_list[3].setChecked(False)
+            self.checkbox_mode_list[4].setChecked(False)
+            self.motor_kinematics_label_list[0].setText("Move Tip(Degree) | Pan (E-W)")
+            self.motor_kinematics_label_list[1].setText("Move Tip(Degree) | Tilt(S-N)")
+            
+        # position
+        elif sender == self.checkbox_mode_list[3] and self.checkbox_mode_list[3].isChecked():
+            self.node.get_logger().info("Setting parameter...")
+            self.node.send_request_set_control_mode(mode=ControlMode.kPosition)
+            self.checkbox_mode_list[0].setChecked(False)
+            self.checkbox_mode_list[1].setChecked(False)
+            self.checkbox_mode_list[2].setChecked(False)
+            self.checkbox_mode_list[4].setChecked(False)
+            self.motor_kinematics_label_list[0].setText("Move Tip (mm) | y-axis")
+            self.motor_kinematics_label_list[1].setText("Move Tip (mm) | z-axis")
+            
+        # admittance
+        elif sender == self.checkbox_mode_list[4] and self.checkbox_mode_list[4].isChecked():
+            self.node.get_logger().info("Setting parameter...")
+            self.node.send_request_set_control_mode(mode=ControlMode.kAdmittance)
+            self.checkbox_mode_list[0].setChecked(False)
+            self.checkbox_mode_list[1].setChecked(False)
+            self.checkbox_mode_list[2].setChecked(False)
+            self.checkbox_mode_list[3].setChecked(False)
+            self.motor_kinematics_label_list[0].setText("Move Tip (mm) | y-axis")
+            self.motor_kinematics_label_list[1].setText("Move Tip (mm) | z-axis")
 
     def checkbox_amode_clicked(self):
         sender = self.sender()
         if sender == self.checkbox_amode_list[0] and self.checkbox_amode_list[0].isChecked():
             self.checkbox_amode_list[1].setChecked(False)
         elif sender == self.checkbox_amode_list[1] and self.checkbox_amode_list[1].isChecked():
-            self.checkbox_amode_list[0].setChecked(False)        
+            self.checkbox_amode_list[0].setChecked(False)
     
 
     def disable_mode(self, state):
@@ -736,7 +837,7 @@ class MyGUI(QWidget):
         line_edit = QLineEdit(f"{line_edit_text}")
         pass
 
-    def request_motor_move(self, num=0):
+    def publish_motion(self, num=0):
         try:
             if len(self.node.motor_state.actual_position) ==0:
                 # self.node.get_logger().warning(f'command val : {cmd_val}')
@@ -755,7 +856,7 @@ class MyGUI(QWidget):
                         cmd_val = int(self.motor_pub_line_edit_list[num].text())
                     self.node.get_logger().info(f'motor #{num} -> {cmd_val} command update {response}.')
 
-                # Mode : Operated by the inverse-kinematics of manipulator
+                # Mode : Kinematics
                 elif self.checkbox_mode_list[1].isChecked():
                     # Calculate the encoder value from the degree of surgical tool target
 
@@ -767,6 +868,7 @@ class MyGUI(QWidget):
                         response = self.node.send_request_move_tool_angle(pan=float(self.motor_kinematics_line_edit_list[0].text()),
                                                                           tilt=float(self.motor_kinematics_line_edit_list[1].text()),
                                                                           mode=1)
+
                 # Mode : Dynamics
                 elif self.checkbox_mode_list[2].isChecked():
                     if self.checkbox_amode_list[0].isChecked(): # Absolute
@@ -777,8 +879,34 @@ class MyGUI(QWidget):
                         response = self.node.send_request_move_tool_angle_dynamics(pan=float(self.motor_kinematics_line_edit_list[0].text()),
                                                                                     tilt=float(self.motor_kinematics_line_edit_list[1].text()),
                                                                                     mode=1)
+
+                # Mode : Position
+                elif self.checkbox_mode_list[3].isChecked():
+                    if self.checkbox_amode_list[0].isChecked(): # Absolute
+                        response = self.node.send_request_set_goal_position(x=0,
+                                                                            y=float(self.motor_kinematics_line_edit_list[0].text()),
+                                                                            z=float(self.motor_kinematics_line_edit_list[1].text()),
+                                                                            ref='absolute')
+                    elif self.checkbox_amode_list[1].isChecked():
+                        response = self.node.send_request_set_goal_position(x=0,
+                                                                            y=float(self.motor_kinematics_line_edit_list[0].text()),
+                                                                            z=float(self.motor_kinematics_line_edit_list[1].text()),
+                                                                            ref='relative')
+                # Mode : Admittance
+                elif self.checkbox_mode_list[4].isChecked():
+                    if self.checkbox_amode_list[0].isChecked(): # Absolute
+                        response = self.node.send_request_set_goal_position(x=0,
+                                                                            y=float(self.motor_kinematics_line_edit_list[0].text()),
+                                                                            z=float(self.motor_kinematics_line_edit_list[1].text()),
+                                                                            ref='absolute')
+                    elif self.checkbox_amode_list[1].isChecked():
+                        response = self.node.send_request_set_goal_position(x=0,
+                                                                            y=float(self.motor_kinematics_line_edit_list[0].text()),
+                                                                            z=float(self.motor_kinematics_line_edit_list[1].text()),
+                                                                            ref='relative')
+                        
         except Exception as e:
-            self.node.get_logger().warning(f'F:request_motor_move() -> {e}')
+            self.node.get_logger().warning(f'F:publish_motion() -> {e}')
             return
 
     def request_set_zero(self):

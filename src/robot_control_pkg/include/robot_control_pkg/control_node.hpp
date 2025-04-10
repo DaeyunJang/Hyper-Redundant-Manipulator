@@ -70,6 +70,7 @@
 #include "custom_interfaces/srv/move_motor_direct.hpp"
 #include "custom_interfaces/srv/move_tool_angle.hpp"
 #include "custom_interfaces/srv/set_goal_position.hpp"
+#include "custom_interfaces/srv/set_control_mode.hpp"
 // #include "tcp_node.hpp"   // using #define NUM_OF_MOTRS
 
 typedef enum  {
@@ -80,9 +81,10 @@ typedef enum  {
 } OpMode;
 
 typedef enum  {
-  kKinematics,
-  kDynamics,
-  kAdmittance,
+  kKinematics = 1,
+  kDynamics = 2,
+  kPosition = 3,
+  kAdmittance = 4,
 } ControlMode;
 
 /**
@@ -102,6 +104,8 @@ public:
   using MoveMotorDirect = custom_interfaces::srv::MoveMotorDirect;
   using MoveToolAngle = custom_interfaces::srv::MoveToolAngle;
   using SetGoalPosition = custom_interfaces::srv::SetGoalPosition;
+  using SetControlMode = custom_interfaces::srv::SetControlMode;
+
   // Common values
   std::vector<double> theta_actual_;
   std::vector<double> omega_actual_;
@@ -268,11 +272,12 @@ private:
    * @author DY
    * @brief Service server for motion
    */
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr control_mode_change_between_kinematics_and_dynamics_service_server_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr control_mode_change_between_kinematics_and_admittance_service_server_;
+  // rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr control_mode_change_between_kinematics_and_dynamics_service_server_;
+  // rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr control_mode_change_between_position_and_admittance_service_server_;
   rclcpp::Service<MoveMotorDirect>::SharedPtr move_motor_direct_service_server_;
   rclcpp::Service<MoveToolAngle>::SharedPtr kinematics_move_tool_angle_service_server_;
   rclcpp::Service<SetGoalPosition>::SharedPtr set_goal_position_service_server_;
+  rclcpp::Service<SetControlMode>::SharedPtr set_control_mode_service_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr move_sine_wave_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr move_sine_wave_1time_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr kinematics_move_circle_motion_server_;
@@ -296,9 +301,9 @@ private:
    * @brief 
    * @todo make thread.
    */
-  std::thread admittance_control_thread_;
-  rclcpp::Rate loop_rate_admittance_;  // DY == initialize in the constructor of .cpp file (unit. Hz)
-  void run_admittance_control_thread();
+  std::thread position_with_admittance_control_thread_;
+  rclcpp::Rate loop_rate_position_with_admittance_;  // DY == initialize in the constructor of .cpp file (unit. Hz)
+  void run_position_with_admittance_control_thread();
 };
 
 #endif

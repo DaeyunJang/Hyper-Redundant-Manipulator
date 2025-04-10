@@ -29,6 +29,7 @@ set(srv_files
   "srv/surgicaltool/MoveMotorDirect.srv"
   "srv/surgicaltool/MoveToolAngle.srv"
   "srv/surgicaltool/SetGoalPosition.srv"
+  "srv/SetControlMode.srv"
 )
 
 set(action_files

@@ -16,12 +16,12 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   x_desired_(Eigen::VectorXd::Zero(6)),
   x_actual_(Eigen::VectorXd::Zero(6)),
   loop_rate_dynamics_(dynamics_params::SAMPLING_HZ),
-  loop_rate_admittance_(position_control_params::SAMPLING_HZ)
+  loop_rate_position_with_admittance_(position_control_params::SAMPLING_HZ)
 {
   this->declare_parameter("qos_depth", 10);
   int8_t qos_depth = this->get_parameter("qos_depth", qos_depth);
 
-  this->declare_parameter("control_mode", "kinematics");
+  this->declare_parameter<int>("control_mode", ControlMode::kKinematics);
 
   // dynamics controller
   this->declare_parameter<double>("dynamics/p_gain", dynamics_params::KP);
@@ -310,6 +310,49 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   kinematics_move_tool_angle_service_server_ = 
     create_service<MoveToolAngle>("kinematics/move_tool_angle", kinematics_move_tool_angle);
 
+  //
+  auto dynamics_move_tool_angle = 
+  [this](
+  const std::shared_ptr<MoveToolAngle::Request> request,
+  std::shared_ptr<MoveToolAngle::Response> response) -> void
+  {
+    try {
+      // run
+      if (control_mode_ != ControlMode::kDynamics) {
+        RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'DYNAMICS\' mode. Change parameter \'control_mode\'.");
+        return;
+      }
+      if(this->op_mode_ == kEnable) {
+        if(request->mode == 0) {
+          // MOVE ABSOLUTELY
+          RCLCPP_INFO(this->get_logger(), "MODE: %d, tilt: %.2f, pan: %.2f, grip: %.2f", request->mode, request->tiltangle, request->panangle, request->gripangle);
+          double pan_angle =  request->panangle;
+          double tilt_angle = request->tiltangle;
+          double grip_angle = request->gripangle;
+          this->theta_desired_ = pan_angle;
+          RCLCPP_INFO(this->get_logger(), "Dynamics mode, target theta_desired: %.2f", this->theta_desired_);
+        }
+        else if (request->mode == 1) {
+          // MOVE RELATIVELY
+          RCLCPP_INFO(this->get_logger(), "MODE: %d, tilt: %.2f, pan: %.2f, grip: %.2f", request->mode, request->tiltangle, request->panangle, request->gripangle);
+          double pan_angle =  this->current_pan_angle_ + request->panangle;
+          double tilt_angle = this->current_tilt_angle_ + request->tiltangle;
+          double grip_angle = this->current_grip_angle_ + request->gripangle;
+          this->theta_desired_ = pan_angle;
+          RCLCPP_INFO(this->get_logger(), "Dynamics mode, target theta_desired: %.2f", this->theta_desired_);
+        }
+        response->success = true;
+        RCLCPP_INFO(this->get_logger(), "Service <dynamics/move_tool_angle> accept the request");
+      }
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+    }
+    
+  };
+  dynamics_move_tool_angle_service_server_ = 
+    create_service<MoveToolAngle>("dynamics/move_tool_angle", dynamics_move_tool_angle);
+
+
   auto set_goal_position = 
   [this](
   const std::shared_ptr<SetGoalPosition::Request> request,
@@ -318,8 +361,8 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
     try {
       // run
       if(this->op_mode_ == kEnable) {
-        if(request->mode == 0) {
-          // MOVE ABSOLUTELY
+        if(request->reference_type == "absolute") {
+          // MOVE absolute
           RCLCPP_INFO(
             this->get_logger(),
             "Received goal position: x: %.2f, y: %.2f, z: %.2f MODE: Absolute,", 
@@ -331,8 +374,8 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
             request->goal_position.position.y,
             request->goal_position.position.z,
             0.0, 0.0, 0.0;  // 나머지 값은 기본값 0으로 설정
-        } else if (request->mode == 1) {
-          // MOVE ABSOLUTELY
+        } else if (request->reference_type == "relative") {
+          // MOVE relative
           RCLCPP_INFO(
             this->get_logger(),
             "Received goal position: x: x+%.2f, y: y+%.2f, z: z+%.2f MODE: Relative,", 
@@ -348,7 +391,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
           this->x_desired_ += delta_x;
         }
         response->success = true;
-        RCLCPP_INFO(this->get_logger(), "Service <kinematics/move_tool_angle> accept the request");
+        RCLCPP_INFO(this->get_logger(), "Service <position/set_goal_position> accept the request");
       }
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
@@ -526,116 +569,104 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   kinematics_move_moebius_motion_server_ = 
     create_service<std_srvs::srv::SetBool>("kinematics/move_moebius_motion", moebius_motion_callback);
 
-
-
+  
   /**
-   * @brief change mode between kinematics and dynamics
+   * @date 2025.04.10
+   * @author DY
+   * @brief change control mode
    * @note callback from gui (service call)
+   * @param request->data (int8) followed enum 'ControlNode' (control_node.hpp)
+   * kinematics=1
+   * dynamics=2
+   * position=3
+   * admittance=4
+   * another mode (TBD)
    */
-  auto control_mode_change_between_kinematics_and_dynamics_callback = 
+  auto set_control_mode_callback = 
   [this](
-  const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-        std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
+  const std::shared_ptr<SetControlMode::Request> request,
+        std::shared_ptr<SetControlMode::Response> response) -> void
   {
     try {
-      // requst->data : true-Dynamics, false-Kinematics
-      if(request->data) {
-        // true : Dynamics
-        RCLCPP_INFO(this->get_logger(), "Control mode changed -> Dynamics.");
-        this->set_parameter(rclcpp::Parameter("control_mode", "dynamics"));
-        response->success = true;
-        response->message = "Control mode changed -> Dynamics.";
-      } else {
-        // false : Kinematics
-        RCLCPP_INFO(this->get_logger(), "Control mode changed -> Kinematics.");
-        this->set_parameter(rclcpp::Parameter("control_mode", "kinematics"));
-        response->success = true;
-        response->message = "Control mode changed -> Kinematics.";
-      }
+      RCLCPP_INFO(this->get_logger(), "Control mode changed -> %d.", request->mode);
+      this->set_parameter(rclcpp::Parameter("control_mode", request->mode));
+      response->success = true;
+      response->message = "Control mode changed -> %d.", request->mode;
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
     }
   };
-  control_mode_change_between_kinematics_and_dynamics_service_server_ = 
-    create_service<std_srvs::srv::SetBool>("control/control_mode_kin_dyn", control_mode_change_between_kinematics_and_dynamics_callback);
+  set_control_mode_service_server_ = 
+    create_service<SetControlMode>("control/set_control_mode", set_control_mode_callback);
 
-  /**
-   * @brief change mode between kinematics and admittance
-   * @note callback from gui (service call)
-   */
-  auto control_mode_change_between_kinematics_and_admittance_callback = 
-  [this](
-  const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-        std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
-  {
-    try {
-      // requst->data : true-Dynamics, false-Kinematics
-      if(request->data) {
-        // true : Dynamics
-        RCLCPP_INFO(this->get_logger(), "Control mode changed -> Admittance.");
-        this->set_parameter(rclcpp::Parameter("control_mode", "admittance"));
-        response->success = true;
-        response->message = "Control mode changed -> Admittance.";
-      } else {
-        // false : Kinematics
-        RCLCPP_INFO(this->get_logger(), "Control mode changed -> Kinematics.");
-        this->set_parameter(rclcpp::Parameter("control_mode", "kinematics"));
-        response->success = true;
-        response->message = "Control mode changed -> Kinematics.";
-      }
-    } catch (const std::exception & e) {
-      RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
-    }
-  };
-  control_mode_change_between_kinematics_and_admittance_service_server_ = 
-    create_service<std_srvs::srv::SetBool>("control/control_mode_kin_admit", control_mode_change_between_kinematics_and_admittance_callback);
+  // /**
+  //  * @brief change mode between kinematics and dynamics
+  //  * @note callback from gui (service call)
+  //  */
+  // auto control_mode_change_between_kinematics_and_dynamics_callback = 
+  // [this](
+  // const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+  //       std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
+  // {
+  //   try {
+  //     // requst->data : true-Dynamics, false-Kinematics
+  //     if(request->data) {
+  //       // true : Dynamics
+  //       RCLCPP_INFO(this->get_logger(), "Control mode changed -> Dynamics.");
+  //       this->set_parameter(rclcpp::Parameter("control_mode", "dynamics"));
+  //       response->success = true;
+  //       response->message = "Control mode changed -> Dynamics.";
+  //     } else {
+  //       // false : Kinematics
+  //       RCLCPP_INFO(this->get_logger(), "Control mode changed -> Kinematics.");
+  //       this->set_parameter(rclcpp::Parameter("control_mode", "kinematics"));
+  //       response->success = true;
+  //       response->message = "Control mode changed -> Kinematics.";
+  //     }
+  //   } catch (const std::exception & e) {
+  //     RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+  //   }
+  // };
+  // control_mode_change_between_kinematics_and_dynamics_service_server_ = 
+  //   create_service<std_srvs::srv::SetBool>("control/control_mode_kin_dyn", control_mode_change_between_kinematics_and_dynamics_callback);
+
+  // /**
+  //  * @brief change mode between kinematics and admittance
+  //  * @note callback from gui (service call)
+  //  */
+  // auto control_mode_change_between_position_and_admittance_callback = 
+  // [this](
+  // const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+  //       std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
+  // {
+  //   try {
+  //     // requst->data : true-Dynamics, false-Kinematics
+  //     if(request->data) {
+  //       // true : Dynamics
+  //       RCLCPP_INFO(this->get_logger(), "Control mode changed -> Admittance.");
+  //       this->set_parameter(rclcpp::Parameter("control_mode", "admittance"));
+  //       response->success = true;
+  //       response->message = "Control mode changed -> Admittance.";
+  //     } else {
+  //       // false : Kinematics
+  //       RCLCPP_INFO(this->get_logger(), "Control mode changed -> Position.");
+  //       this->set_parameter(rclcpp::Parameter("control_mode", "position"));
+  //       response->success = true;
+  //       response->message = "Control mode changed -> Position.";
+  //     }
+  //   } catch (const std::exception & e) {
+  //     RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+  //   }
+  // };
+  // control_mode_change_between_position_and_admittance_service_server_ = 
+  //   create_service<std_srvs::srv::SetBool>("control/control_mode_pos_admit", control_mode_change_between_position_and_admittance_callback);
 
 
-  auto dynamics_move_tool_angle = 
-  [this](
-  const std::shared_ptr<MoveToolAngle::Request> request,
-  std::shared_ptr<MoveToolAngle::Response> response) -> void
-  {
-    try {
-      // run
-      if (control_mode_ != ControlMode::kDynamics) {
-        RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'DYNAMICS\' mode. Change parameter \'control_mode\'.");
-        return;
-      }
-      if(this->op_mode_ == kEnable) {
-        if(request->mode == 0) {
-          // MOVE ABSOLUTELY
-          RCLCPP_INFO(this->get_logger(), "MODE: %d, tilt: %.2f, pan: %.2f, grip: %.2f", request->mode, request->tiltangle, request->panangle, request->gripangle);
-          double pan_angle =  request->panangle;
-          double tilt_angle = request->tiltangle;
-          double grip_angle = request->gripangle;
-          this->theta_desired_ = pan_angle;
-          RCLCPP_INFO(this->get_logger(), "Dynamics mode, target theta_desired: %.2f", this->theta_desired_);
-        }
-        else if (request->mode == 1) {
-          // MOVE RELATIVELY
-          RCLCPP_INFO(this->get_logger(), "MODE: %d, tilt: %.2f, pan: %.2f, grip: %.2f", request->mode, request->tiltangle, request->panangle, request->gripangle);
-          double pan_angle =  this->current_pan_angle_ + request->panangle;
-          double tilt_angle = this->current_tilt_angle_ + request->tiltangle;
-          double grip_angle = this->current_grip_angle_ + request->gripangle;
-          this->theta_desired_ = pan_angle;
-          RCLCPP_INFO(this->get_logger(), "Dynamics mode, target theta_desired: %.2f", this->theta_desired_);
-        }
-        response->success = true;
-        RCLCPP_INFO(this->get_logger(), "Service <dynamics/move_tool_angle> accept the request");
-      }
-    } catch (const std::exception & e) {
-      RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
-    }
-    
-  };
-  dynamics_move_tool_angle_service_server_ = 
-    create_service<MoveToolAngle>("dynamics/move_tool_angle", dynamics_move_tool_angle);
 
 
   // opertion thread which kinematics, dynamics and admittance
   dynamic_control_thread_ = std::thread(&ControlNode::run_dynamic_control_thread, this);
-  admittance_control_thread_ = std::thread(&ControlNode::run_admittance_control_thread, this);
+  position_with_admittance_control_thread_ = std::thread(&ControlNode::run_position_with_admittance_control_thread, this);
   /**
    * @brief homing
    */
@@ -645,6 +676,9 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 ControlNode::~ControlNode() {
   if (dynamic_control_thread_.joinable()) {
     dynamic_control_thread_.join();
+  }
+  if (position_with_admittance_control_thread_.joinable()) {
+    position_with_admittance_control_thread_.join();
   }
 }
 
@@ -811,19 +845,21 @@ void ControlNode::publish_moebius_motion()
 rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const std::vector<rclcpp::Parameter> &parameters) {
   for (const auto &param : parameters) {
     if (param.get_name() == "control_mode") {
-      if (param.as_string() == "kinematics") {
+      if (param.as_int() == ControlMode::kKinematics) {
         control_mode_ = ControlMode::kKinematics;
         RCLCPP_INFO(this->get_logger(), "Switched to KINEMATICS mode");
-      } else if (param.as_string() == "dynamics") {
+      } else if (param.as_int() == ControlMode::kDynamics) {
         control_mode_ = ControlMode::kDynamics;
         RCLCPP_INFO(this->get_logger(), "Switched to DYNAMICS mode");
-      } else if (param.as_string() == "admittance") {
+      } else if (param.as_int() == ControlMode::kPosition) {
+        control_mode_ = ControlMode::kPosition;
+        RCLCPP_INFO(this->get_logger(), "Switched to POSITION mode");
+      } else if (param.as_int() == ControlMode::kAdmittance) {
         control_mode_ = ControlMode::kAdmittance;
         RCLCPP_INFO(this->get_logger(), "Switched to ADMITTANCE mode");
       } else {
         RCLCPP_WARN(this->get_logger(), "Unknown mode. Keeping previous mode.");
       }
-    // }
     } 
     // dynamics control
     else if (param.get_name() == "dynamics/p_gain") {
@@ -1056,9 +1092,9 @@ void ControlNode::run_dynamic_control_thread() {
 
 
 
-void ControlNode::run_admittance_control_thread() {
+void ControlNode::run_position_with_admittance_control_thread() {
   while (rclcpp::ok()) {
-    if (control_mode_ == ControlMode::kAdmittance) {
+    if (control_mode_ == ControlMode::kPosition) {
       try {
         /***
          * @note loop_late_
@@ -1069,17 +1105,22 @@ void ControlNode::run_admittance_control_thread() {
         // ================================================================
         // Calculation of admittance control
         // ================================================================
+        if (control_mode_ == ControlMode::kAdmittance) {
+          // calculate admittance
+          this->f_external_(0) = this->external_force_.x * 0.001;
+          this->f_external_(1) = this->external_force_.y * 0.001;
+
+          this->del_xf_ = this->HRM_admittance_controller_.compute(this->f_desired_, this->f_external_);
+          // calculate admittance - END
+
+          // compensated desired x
+          // x_t = x_d + del_x_f
+          this->x_t_ = this->x_desired_ + this->del_xf_;
+        } else {
+          // only position mode
+          this->x_t_ = this->x_desired_;
+        }
         
-        // calculate admittance
-        this->f_external_(0) = this->external_force_.x * 0.001;
-        this->f_external_(1) = this->external_force_.y * 0.001;
-
-        this->del_xf_ = this->HRM_admittance_controller_.compute(this->f_desired_, this->f_external_);
-        // calculate admittance - END
-
-        // compensated desired x
-        // x_t = x_d + del_x_f
-        this->x_t_ = this->x_desired_ + this->del_xf_;
 
         // position controller
         double dt = position_control_params::DT;
@@ -1278,7 +1319,7 @@ void ControlNode::run_admittance_control_thread() {
           this->segment_angle_op_flag_ = false;
         }
 
-        loop_rate_admittance_.sleep();
+        loop_rate_position_with_admittance_.sleep();
       } catch (const std::runtime_error & e) {
         RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
       }
