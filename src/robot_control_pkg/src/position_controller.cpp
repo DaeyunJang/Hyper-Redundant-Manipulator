@@ -51,6 +51,8 @@ std::vector<double> PositionController::update(
   double final_theta_input_tilt = (this->surgical_tool_.tAngle_ + this->del_theta_tilt_) * surgical_tool_.todeg();
   // std::cout << "final_theta_input: " << final_theta_input << std::endl;
 
+  // std::cout << "input_theta(pan): " << final_theta_input_pan << std::endl;
+  // std::cout << "input_theta(tilt): " << final_theta_input_tilt << std::endl;
   /**
    * @brief get wire length from IK.
    * @warning If operate 2-DOF manipulation, then substitute the tilt-anle

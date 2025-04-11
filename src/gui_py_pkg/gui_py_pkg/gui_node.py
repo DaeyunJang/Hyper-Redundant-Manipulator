@@ -282,10 +282,10 @@ class GUINode(Node):
         service_request.goal_position.position.x = x
         service_request.goal_position.position.y = y
         service_request.goal_position.position.z = z
-        service_request.goal_position.orientation.x = 0
-        service_request.goal_position.position.y = 0
-        service_request.goal_position.position.z = 0
-        service_request.goal_position.position.w = 0
+        service_request.goal_position.orientation.x = 0.0
+        service_request.goal_position.orientation.y = 0.0
+        service_request.goal_position.orientation.z = 0.0
+        service_request.goal_position.orientation.w = 0.0
         future = self.set_goal_position_service_client.call_async(service_request)
         # rclpy.spin_until_future_complete(self, future)
         return future.result()
@@ -883,24 +883,24 @@ class MyGUI(QWidget):
                 # Mode : Position
                 elif self.checkbox_mode_list[3].isChecked():
                     if self.checkbox_amode_list[0].isChecked(): # Absolute
-                        response = self.node.send_request_set_goal_position(x=0,
+                        response = self.node.send_request_set_goal_position(x=0.0,
                                                                             y=float(self.motor_kinematics_line_edit_list[0].text()),
                                                                             z=float(self.motor_kinematics_line_edit_list[1].text()),
                                                                             ref='absolute')
                     elif self.checkbox_amode_list[1].isChecked():
-                        response = self.node.send_request_set_goal_position(x=0,
+                        response = self.node.send_request_set_goal_position(x=0.0,
                                                                             y=float(self.motor_kinematics_line_edit_list[0].text()),
                                                                             z=float(self.motor_kinematics_line_edit_list[1].text()),
                                                                             ref='relative')
                 # Mode : Admittance
                 elif self.checkbox_mode_list[4].isChecked():
                     if self.checkbox_amode_list[0].isChecked(): # Absolute
-                        response = self.node.send_request_set_goal_position(x=0,
+                        response = self.node.send_request_set_goal_position(x=0.0,
                                                                             y=float(self.motor_kinematics_line_edit_list[0].text()),
                                                                             z=float(self.motor_kinematics_line_edit_list[1].text()),
                                                                             ref='absolute')
                     elif self.checkbox_amode_list[1].isChecked():
-                        response = self.node.send_request_set_goal_position(x=0,
+                        response = self.node.send_request_set_goal_position(x=0.0,
                                                                             y=float(self.motor_kinematics_line_edit_list[0].text()),
                                                                             z=float(self.motor_kinematics_line_edit_list[1].text()),
                                                                             ref='relative')

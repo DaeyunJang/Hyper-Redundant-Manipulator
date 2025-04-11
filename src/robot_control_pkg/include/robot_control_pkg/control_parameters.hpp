@@ -51,9 +51,9 @@ inline constexpr int FRICTION_MODE = 2;
 namespace position_control_params {
 
 // PID controller ================
-inline constexpr double KP  = 100.0;
-inline constexpr double KI  = 0.0;
-inline constexpr double KD  = 30.0;
+inline constexpr double KP  = 250.0;
+inline constexpr double KI  = 5.0;
+inline constexpr double KD  = 100.0;
 inline constexpr double SAMPLING_HZ = 30.0;
 inline constexpr double DT = 1.0 / SAMPLING_HZ;
 } // namespace position_control_params

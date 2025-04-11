@@ -56,7 +56,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   this->motor_control_target_val_.target_position.resize(NUM_OF_MOTORS);
   this->motor_control_target_val_.target_velocity_profile.resize(NUM_OF_MOTORS);
   for(int i=0; i<NUM_OF_MOTORS; i++) {
-    this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100/10;
+    this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100;
   }
   motor_control_publisher_ = this->create_publisher<MotorCommand>("motor_command", QoS_RKL10V);
   RCLCPP_INFO(this->get_logger(), "Publisher 'motor_command' is created.");
@@ -910,13 +910,13 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       HRM_position_controller_.pid_controller_pan_.kp_ = p_gain;
       RCLCPP_INFO(this->get_logger(), "Updated p_gain: %f", p_gain);
     } else if (param.get_name() == "position_control/pid_controller_pan/i_gain") {
-      double i__gain = param.as_double();
-      HRM_position_controller_.pid_controller_pan_.ki_ = i__gain;
-      RCLCPP_INFO(this->get_logger(), "Updated B: %f", i__gain);
+      double i_gain = param.as_double();
+      HRM_position_controller_.pid_controller_pan_.ki_ = i_gain;
+      RCLCPP_INFO(this->get_logger(), "Updated i_gain: %f", i_gain);
     } else if (param.get_name() == "position_control/pid_controller_pan/d_gain") {
       double d_gain = param.as_double();
       HRM_position_controller_.pid_controller_pan_.kd_ = d_gain;
-      RCLCPP_INFO(this->get_logger(), "Updated K: %f", d_gain);
+      RCLCPP_INFO(this->get_logger(), "Updated d_gain: %f", d_gain);
     }
 
 
@@ -1113,7 +1113,6 @@ void ControlNode::run_position_with_admittance_control_thread() {
         // Calculation of admittance control
         // ================================================================
         if (control_mode_ == ControlMode::kAdmittance) {
-          std::cout << "calculating admittance...";
           // calculate admittance
           this->f_external_(0) = this->external_force_.x * 0.001;
           this->f_external_(1) = this->external_force_.y * 0.001;
@@ -1124,7 +1123,6 @@ void ControlNode::run_position_with_admittance_control_thread() {
           // compensated desired x
           // x_t = x_d + del_x_f
           this->x_t_ = this->x_desired_ + this->del_xf_;
-          std::cout << "finish!" << std::endl;
         } else if (control_mode_ == ControlMode::kPosition) {
           // only position mode
           this->x_t_ = this->x_desired_;
@@ -1159,27 +1157,28 @@ void ControlNode::run_position_with_admittance_control_thread() {
         this->x_actual_(1) = eef_xy.y();  // = eef_xy(1)
 
         // ************************ Print Values ************************
-        std::cout << "--------------------------" << std::endl;
-        std::cout << "this->f_external_(x): " << this->f_external_(0) << std::endl;
-        std::cout << "this->f_external_(y): " << this->f_external_(1) << std::endl;
+        // std::cout << "--------------------------" << std::endl;
+        // std::cout << "this->f_external_(x): " << this->f_external_(0) << std::endl;
+        // std::cout << "this->f_external_(y): " << this->f_external_(1) << std::endl;
 
-        std::cout << "theta_actual_: ";
-        for (const auto& val : theta_actual_) {
-          std::cout << val << " ";
-        }
-        std::cout << std::endl;
-        std::cout << "tf_matrices(y): " << tf_matrices[8](1,3) << std::endl;
-        std::cout << "joints_xy: ";
-        for (const auto& joint : joints_xy) {
-          std::cout << "(" << joint(0) << ", " << joint(1) << ") ";
-        }
-        std::cout << std::endl;
-        std::cout << "x_t(y): " << x_t_(1) << std::endl;
-        std::cout << "x_actual(y): " << x_actual_(1) << std::endl;
-        std::cout << "--------------------------" << std::endl;
+        // std::cout << "theta_actual_: ";
+        // for (const auto& val : theta_actual_) {
+        //   std::cout << val << " ";
+        // }
+        // std::cout << std::endl;
+        // std::cout << "tf_matrices(y): " << tf_matrices[8](1,3) << std::endl;
+        // std::cout << "joints_xy: ";
+        // for (const auto& joint : joints_xy) {
+        //   std::cout << "(" << joint(0) << ", " << joint(1) << ") ";
+        // }
+        // std::cout << std::endl;
+        // std::cout << "x_t(y): " << x_t_(1) << std::endl;
+        // std::cout << "x_actual(y): " << x_actual_(1) << std::endl;
+        // std::cout << "--------------------------" << std::endl;
 
         // get wire length to move (PID and Inverse-Kinematics method)
         // @ref Y.J. Kim
+        
         auto wire_length_to_move = this->HRM_position_controller_.update(this->x_t_, this->x_actual_, dt);
         // position controller - END_
         // ================================================================
@@ -1208,43 +1207,42 @@ void ControlNode::run_position_with_admittance_control_thread() {
         }
         
 
-        // #if MOTOR_CONTROL_SAME_DURATION
-        //   /**
-        //    * @brief find max value and make it max_velocity_profile 100 (%),
-        //    *        other value have values proportional to 100 (%) each
-        //    */
-        //   static double prev_f_val[NUM_OF_MOTORS];  // for delta length
+        #if MOTOR_CONTROL_SAME_DURATION
+          /**
+           * @brief find max value and make it max_velocity_profile 100 (%),
+           *        other value have values proportional to 100 (%) each
+           */
+          static double prev_f_val[NUM_OF_MOTORS];  // for delta length
 
-        //   std::vector<double> abs_f_val(NUM_OF_MOTORS-1, 0);  // 5th DOF is a forceps
-        //   for (int i=0; i<NUM_OF_MOTORS-1; i++) { abs_f_val[i] = std::abs(this->motor_control_target_val_.target_position[i] - this->motor_state_.actual_position[i]); }
+          std::vector<double> abs_f_val(NUM_OF_MOTORS-1, 0);  // 5th DOF is a forceps
+          for (int i=0; i<NUM_OF_MOTORS-1; i++) { abs_f_val[i] = std::abs(this->motor_control_target_val_.target_position[i] - this->motor_state_.actual_position[i]); }
 
-        //   double max_val = *std::max_element(abs_f_val.begin(), abs_f_val.end()) + 0.00001; // 0.00001 is protection for 0/0 (0 divided by 0)
-        //   int max_val_index = std::max_element(abs_f_val.begin(), abs_f_val.end()) - abs_f_val.begin();
-        //   for (int i=0; i<(NUM_OF_MOTORS-1); i++) { 
-        //     this->motor_control_target_val_.target_velocity_profile[i] = (abs_f_val[i] / max_val) * PERCENT_100 * 0.5;
-        //   }
-        //   // last index means forceps. It doesn't need velocity profile
-        //   this->motor_control_target_val_.target_velocity_profile[NUM_OF_MOTORS-1] = PERCENT_100 * 0.5;
+          double max_val = *std::max_element(abs_f_val.begin(), abs_f_val.end()) + 0.00001; // 0.00001 is protection for 0/0 (0 divided by 0)
+          int max_val_index = std::max_element(abs_f_val.begin(), abs_f_val.end()) - abs_f_val.begin();
+          for (int i=0; i<(NUM_OF_MOTORS-1); i++) { 
+            this->motor_control_target_val_.target_velocity_profile[i] = (abs_f_val[i] / max_val) * PERCENT_100 * 0.5;
+          }
+          // last index means forceps. It doesn't need velocity profile
+          this->motor_control_target_val_.target_velocity_profile[NUM_OF_MOTORS-1] = PERCENT_100 * 0.5;
           
-        // #else
-        //   int target_vel_profile = int(std::round(std::abs(HRM_controller_.theta_dot_input_)));
-        //   // prevent velocity 0
-        //   if (target_vel_profile < 20) {
-        //     target_vel_profile = 20;
-        //   }
-        //   for (int i=0; i<NUM_OF_MOTORS; i++) { 
-        //     // this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.5;
-        //     this->motor_control_target_val_.target_velocity_profile[i] = std::min(target_vel_profile, 80);
-        //   }
-        // #endif
+        #else
+          // x_err_(1) : y-axis error
+          int target_vel_profile = int(std::round(std::abs(HRM_position_controller_.x_err_(1) * 1000.0 * 10)));
+          target_vel_profile = std::min(70, target_vel_profile);
+          target_vel_profile = std::max(10, target_vel_profile);
+          // std::cout << "target_vel_profile: " << target_vel_profile << std::endl;
+          for (int i=0; i<NUM_OF_MOTORS; i++) { 
+            // this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.5;
+            this->motor_control_target_val_.target_velocity_profile[i] = target_vel_profile;
+          }
+        #endif
         
         // send motor command
-        // this->motor_control_publisher_->publish(this->motor_control_target_val_);
+        this->motor_control_publisher_->publish(this->motor_control_target_val_);
 
 
         // publish variables
-        std::cout << ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>" << std::endl;
-        std::cout << "publishing position controller data...";
+        // std::cout << "publishing position controller data...";
         if (this->segment_angle_op_flag_ == true) {
           // time
           builtin_interfaces::msg::Time time;
@@ -1348,7 +1346,6 @@ void ControlNode::run_position_with_admittance_control_thread() {
 
           this->segment_angle_op_flag_ = false;
         }
-        std::cout << "Finish!" << std::endl;
 
         loop_rate_position_with_admittance_.sleep();
       } catch (const std::runtime_error & e) {

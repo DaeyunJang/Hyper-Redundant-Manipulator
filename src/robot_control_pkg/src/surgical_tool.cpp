@@ -46,6 +46,13 @@ std::vector<double> SurgicalTool::get_IK_result(
 	double tAngle,
 	double gAngle)
 {	
+	// Filtering MAX_BENDING_DEGREE (hw_definition.hpp)
+	pAngle = std::min(pAngle, MAX_BENDING_DEGREE);
+	tAngle = std::min(tAngle, MAX_BENDING_DEGREE);
+
+	pAngle = std::max(pAngle, -MAX_BENDING_DEGREE);
+	tAngle = std::max(tAngle, -MAX_BENDING_DEGREE);
+
 	// 1. set angle(degree) of continuum part
 	this->set_bending_angle(pAngle, tAngle);
 	// 2. set angle(degree) o forceps
