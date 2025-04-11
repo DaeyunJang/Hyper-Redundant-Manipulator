@@ -22,7 +22,9 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   int8_t qos_depth = this->get_parameter("qos_depth", qos_depth);
 
   this->declare_parameter<int>("control_mode", ControlMode::kKinematics);
-
+  std::cout << "------------------------------------" <<std::endl;
+  std::cout << "control_mode_: " << control_mode_ << std::endl;
+  std::cout << "------------------------------------" <<std::endl;
   // dynamics controller
   this->declare_parameter<double>("dynamics/p_gain", dynamics_params::KP);
   this->declare_parameter<double>("dynamics/i_gain", dynamics_params::KI);
@@ -569,7 +571,9 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   kinematics_move_moebius_motion_server_ = 
     create_service<std_srvs::srv::SetBool>("kinematics/move_moebius_motion", moebius_motion_callback);
 
-  
+  std::cout << "+++++++++++++++++++++++++++++++++++++++++++++++++" << std::endl;
+  std::cout << "service client DYDDYDYDYDYDY" << std::endl;
+  std::cout << "+++++++++++++++++++++++++++++++++++++++++++++++++" << std::endl;
   /**
    * @date 2025.04.10
    * @author DY
@@ -663,6 +667,9 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 
 
 
+  std::cout << "+++++++++++++++++++++++++++++++++++++++++++++++++" << std::endl;
+  std::cout << "Threads start..." << std::endl;
+  std::cout << "+++++++++++++++++++++++++++++++++++++++++++++++++" << std::endl;
 
   // opertion thread which kinematics, dynamics and admittance
   dynamic_control_thread_ = std::thread(&ControlNode::run_dynamic_control_thread, this);
@@ -765,7 +772,7 @@ void ControlNode::publish_sine_wave()
   if (control_mode_ == ControlMode::kKinematics) {
     double omega = 2.0 * M_PI / period_;
     angle_ = amp_ * std::sin(omega * count_);
-    cal_inverse_kinematics(-angle_, 0, 0);
+    cal_inverse_kinematics(angle_, 0, 0);
     motor_control_publisher_->publish(motor_control_target_val_);
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
@@ -774,7 +781,7 @@ void ControlNode::publish_sine_wave()
   else if (control_mode_ == ControlMode::kDynamics) {
     double omega = 2.0 * M_PI / period_;
     angle_ = amp_ * std::sin(omega * count_);
-    this->theta_desired_ = -angle_;
+    this->theta_desired_ = angle_;
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
     // std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
   }
@@ -785,7 +792,7 @@ void ControlNode::publish_sine_wave_1time()
   if (control_mode_ == ControlMode::kKinematics) {
     double omega = 2.0 * M_PI / period_;
     angle_ = amp_ * std::sin(omega * count_);
-    cal_inverse_kinematics(-angle_, 0, 0);
+    cal_inverse_kinematics(angle_, 0, 0);
     motor_control_publisher_->publish(motor_control_target_val_);
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
@@ -801,7 +808,7 @@ void ControlNode::publish_sine_wave_1time()
   else if (control_mode_ == ControlMode::kDynamics) {
     double omega = 2.0 * M_PI / period_;
     angle_ = amp_ * std::sin(omega * count_);
-    this->theta_desired_ = -angle_; // +90 ~ -90
+    this->theta_desired_ = angle_; // +90 ~ -90
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
     // std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
     
@@ -920,7 +927,7 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
 }
 
 void ControlNode::run_dynamic_control_thread() {
-  RCLCPP_INFO(this->get_logger(), "control_thread is started on [%s]", this->get_parameter("control_mode").as_string().c_str());
+  RCLCPP_INFO(this->get_logger(), "dynamic control_thread is started on");
 
   while (rclcpp::ok()) {
     if (control_mode_ == ControlMode::kDynamics) {
@@ -935,7 +942,7 @@ void ControlNode::run_dynamic_control_thread() {
          * loop_late = global variable dynamics_params::SAMPLING_HZ @include '../include/control_parameters.hpp' 
          */
         // double theta_desired = this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
-        double theta_desired = (-1) * this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
+        double theta_desired = this->theta_desired_ * this->HRM_controller_.surgical_tool_.torad();
         
         // if using std::vector<double> a = msg.data
         // The type must be conversion from float(msg.data) to double
@@ -1093,19 +1100,20 @@ void ControlNode::run_dynamic_control_thread() {
 
 
 void ControlNode::run_position_with_admittance_control_thread() {
+  RCLCPP_INFO(this->get_logger(), "Position control_thread is started");
   while (rclcpp::ok()) {
-    if (control_mode_ == ControlMode::kPosition) {
+    if (control_mode_ == ControlMode::kPosition || control_mode_ == ControlMode::kAdmittance) {
       try {
         /***
          * @note loop_late_
          * loop_late_ is the sampling rate of the controller 
          * loop_late = global variable admittance_params::SAMPLING_HZ @include '../include/control_parameters.hpp' 
          */
-
         // ================================================================
         // Calculation of admittance control
         // ================================================================
         if (control_mode_ == ControlMode::kAdmittance) {
+          std::cout << "calculating admittance...";
           // calculate admittance
           this->f_external_(0) = this->external_force_.x * 0.001;
           this->f_external_(1) = this->external_force_.y * 0.001;
@@ -1116,11 +1124,11 @@ void ControlNode::run_position_with_admittance_control_thread() {
           // compensated desired x
           // x_t = x_d + del_x_f
           this->x_t_ = this->x_desired_ + this->del_xf_;
-        } else {
+          std::cout << "finish!" << std::endl;
+        } else if (control_mode_ == ControlMode::kPosition) {
           // only position mode
           this->x_t_ = this->x_desired_;
         }
-        
 
         // position controller
         double dt = position_control_params::DT;
@@ -1146,14 +1154,34 @@ void ControlNode::run_position_with_admittance_control_thread() {
         auto tf_matrices = this->HRM_position_controller_.surgical_tool_.computeBaseToJointsTransformationMatrices(this->theta_actual_);
         auto joints_xy = this->HRM_position_controller_.surgical_tool_.computeJointPositions(tf_matrices);
         Eigen::Vector2d eef_xy = joints_xy.back();  // get end-effector (x,y)
+        // Eigen::Vector2d eef_xy = Eigen::Vector2d::Zero(2);  // get end-effector (x,y)
         this->x_actual_(0) = eef_xy.x();  // = eef_xy(0)
         this->x_actual_(1) = eef_xy.y();  // = eef_xy(1)
+
+        // ************************ Print Values ************************
+        std::cout << "--------------------------" << std::endl;
+        std::cout << "this->f_external_(x): " << this->f_external_(0) << std::endl;
+        std::cout << "this->f_external_(y): " << this->f_external_(1) << std::endl;
+
+        std::cout << "theta_actual_: ";
+        for (const auto& val : theta_actual_) {
+          std::cout << val << " ";
+        }
+        std::cout << std::endl;
+        std::cout << "tf_matrices(y): " << tf_matrices[8](1,3) << std::endl;
+        std::cout << "joints_xy: ";
+        for (const auto& joint : joints_xy) {
+          std::cout << "(" << joint(0) << ", " << joint(1) << ") ";
+        }
+        std::cout << std::endl;
+        std::cout << "x_t(y): " << x_t_(1) << std::endl;
+        std::cout << "x_actual(y): " << x_actual_(1) << std::endl;
+        std::cout << "--------------------------" << std::endl;
 
         // get wire length to move (PID and Inverse-Kinematics method)
         // @ref Y.J. Kim
         auto wire_length_to_move = this->HRM_position_controller_.update(this->x_t_, this->x_actual_, dt);
         // position controller - END_
-
         // ================================================================
         // Calculation of admittance control - END
         // ================================================================
@@ -1180,41 +1208,43 @@ void ControlNode::run_position_with_admittance_control_thread() {
         }
         
 
-        #if MOTOR_CONTROL_SAME_DURATION
-          /**
-           * @brief find max value and make it max_velocity_profile 100 (%),
-           *        other value have values proportional to 100 (%) each
-           */
-          static double prev_f_val[NUM_OF_MOTORS];  // for delta length
+        // #if MOTOR_CONTROL_SAME_DURATION
+        //   /**
+        //    * @brief find max value and make it max_velocity_profile 100 (%),
+        //    *        other value have values proportional to 100 (%) each
+        //    */
+        //   static double prev_f_val[NUM_OF_MOTORS];  // for delta length
 
-          std::vector<double> abs_f_val(NUM_OF_MOTORS-1, 0);  // 5th DOF is a forceps
-          for (int i=0; i<NUM_OF_MOTORS-1; i++) { abs_f_val[i] = std::abs(this->motor_control_target_val_.target_position[i] - this->motor_state_.actual_position[i]); }
+        //   std::vector<double> abs_f_val(NUM_OF_MOTORS-1, 0);  // 5th DOF is a forceps
+        //   for (int i=0; i<NUM_OF_MOTORS-1; i++) { abs_f_val[i] = std::abs(this->motor_control_target_val_.target_position[i] - this->motor_state_.actual_position[i]); }
 
-          double max_val = *std::max_element(abs_f_val.begin(), abs_f_val.end()) + 0.00001; // 0.00001 is protection for 0/0 (0 divided by 0)
-          int max_val_index = std::max_element(abs_f_val.begin(), abs_f_val.end()) - abs_f_val.begin();
-          for (int i=0; i<(NUM_OF_MOTORS-1); i++) { 
-            this->motor_control_target_val_.target_velocity_profile[i] = (abs_f_val[i] / max_val) * PERCENT_100 * 0.5;
-          }
-          // last index means forceps. It doesn't need velocity profile
-          this->motor_control_target_val_.target_velocity_profile[NUM_OF_MOTORS-1] = PERCENT_100 * 0.5;
+        //   double max_val = *std::max_element(abs_f_val.begin(), abs_f_val.end()) + 0.00001; // 0.00001 is protection for 0/0 (0 divided by 0)
+        //   int max_val_index = std::max_element(abs_f_val.begin(), abs_f_val.end()) - abs_f_val.begin();
+        //   for (int i=0; i<(NUM_OF_MOTORS-1); i++) { 
+        //     this->motor_control_target_val_.target_velocity_profile[i] = (abs_f_val[i] / max_val) * PERCENT_100 * 0.5;
+        //   }
+        //   // last index means forceps. It doesn't need velocity profile
+        //   this->motor_control_target_val_.target_velocity_profile[NUM_OF_MOTORS-1] = PERCENT_100 * 0.5;
           
-        #else
-          int target_vel_profile = int(std::round(std::abs(HRM_controller_.theta_dot_input_)));
-          // prevent velocity 0
-          if (target_vel_profile < 20) {
-            target_vel_profile = 20;
-          }
-          for (int i=0; i<NUM_OF_MOTORS; i++) { 
-            // this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.5;
-            this->motor_control_target_val_.target_velocity_profile[i] = std::min(target_vel_profile, 80);
-          }
-        #endif
+        // #else
+        //   int target_vel_profile = int(std::round(std::abs(HRM_controller_.theta_dot_input_)));
+        //   // prevent velocity 0
+        //   if (target_vel_profile < 20) {
+        //     target_vel_profile = 20;
+        //   }
+        //   for (int i=0; i<NUM_OF_MOTORS; i++) { 
+        //     // this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.5;
+        //     this->motor_control_target_val_.target_velocity_profile[i] = std::min(target_vel_profile, 80);
+        //   }
+        // #endif
         
         // send motor command
-        this->motor_control_publisher_->publish(this->motor_control_target_val_);
+        // this->motor_control_publisher_->publish(this->motor_control_target_val_);
 
 
         // publish variables
+        std::cout << ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>" << std::endl;
+        std::cout << "publishing position controller data...";
         if (this->segment_angle_op_flag_ == true) {
           // time
           builtin_interfaces::msg::Time time;
@@ -1318,13 +1348,12 @@ void ControlNode::run_position_with_admittance_control_thread() {
 
           this->segment_angle_op_flag_ = false;
         }
+        std::cout << "Finish!" << std::endl;
 
         loop_rate_position_with_admittance_.sleep();
       } catch (const std::runtime_error & e) {
         RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
       }
-    } else {  // kinematics
-      //
     }
   }
 }

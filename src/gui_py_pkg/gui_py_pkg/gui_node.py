@@ -186,7 +186,7 @@ class GUINode(Node):
             self.get_logger().warning('The "position/set_goal_position" service server not available. Check the kinematics_control_node')
 
         self.set_control_mode_service_client = self.create_client(
-            SetBool,
+            SetControlMode,
             'control/set_control_mode'
         )
         while not self.set_control_mode_service_client.wait_for_service(timeout_sec=2.0):
@@ -298,7 +298,7 @@ class GUINode(Node):
         rclpy.spin_until_future_complete(self, future)
         return future.result()
     
-    def send_request_set_control_mode(self, mode=ControlMode.kKinematics): 
+    def send_request_set_control_mode(self, mode:Enum=ControlMode.kKinematics): 
         """Set control mode of HRM
 
         Args:
@@ -311,7 +311,7 @@ class GUINode(Node):
             service response (ROS) : result of success and message (ROS)
         """
         service_request = SetControlMode.Request()
-        service_request.mode = mode
+        service_request.mode = mode.value
         future = self.set_control_mode_service_client.call_async(service_request)
         rclpy.spin_until_future_complete(self, future)
         return future.result()
@@ -427,7 +427,7 @@ class MyGUI(QWidget):
         '''
         self.layout_mode = QVBoxLayout()
         self.label_mode = QLabel('Operation Mode')
-        self.checkbox_mode_list = [QCheckBox('Manual'), QCheckBox('Kinematics'), QCheckBox('Dynamics'), QCheckBox('Position', QCheckBox('Admittance'))]
+        self.checkbox_mode_list = [QCheckBox('Manual'), QCheckBox('Kinematics'), QCheckBox('Dynamics'), QCheckBox('Position'), QCheckBox('Admittance')]
         self.checkbox_mode_list[0].setChecked(False)
         self.checkbox_mode_list[0].setFixedWidth(200)
         self.checkbox_mode_list[0].clicked.connect(self.checkbox_mode_clicked)

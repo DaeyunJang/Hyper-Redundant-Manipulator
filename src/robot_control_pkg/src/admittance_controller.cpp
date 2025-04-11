@@ -14,7 +14,11 @@
 AdmittanceController::AdmittanceController()
 : admittance_filter_(admittance_params::MASS_MATRIX,
                      admittance_params::DAMPER_MATRIX,
-                     admittance_params::SPRING_MATRIX) {}
+                     admittance_params::SPRING_MATRIX),
+  del_f_(Eigen::VectorXd::Zero(6)),
+  f_desired_(Eigen::VectorXd::Zero(6)),
+  f_external_(Eigen::VectorXd::Zero(6)),
+  del_xf_(Eigen::VectorXd::Zero(6)) {}
 
 AdmittanceController::~AdmittanceController() {}
 

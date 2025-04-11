@@ -84,7 +84,7 @@ void SurgicalTool::inverse_kinematics()
 }
 
 Eigen::Matrix4d SurgicalTool::computeTransformationMatrix(const double& theta) {
-	double R = this->surgicaltool_.arc;
+	double R = this->surgicaltool_.arc*3;
 	double L = this->surgicaltool_.arc_center_to_seg_center;
 	double l_theta = R / std::cos(theta / 2.0) - L;
     double p_x = l_theta * (1.0 + std::cos(theta));
