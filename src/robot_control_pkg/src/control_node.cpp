@@ -1113,13 +1113,35 @@ void ControlNode::run_position_with_admittance_control_thread() {
         // Calculation of admittance control
         // ================================================================
         if (control_mode_ == ControlMode::kAdmittance) {
+          /**
+           * @brief Check the sampling rate of between admittance and position control.
+           * @author DY
+           * @date 2025.04.14
+           * @todo
+           * Update sampling time for calculation of admittance
+           * At now, joint_angle data is received at 30 Hz from camera vision (from LSTM_force_estimation_pkg)
+           * Later, it is necessary to increase the samplig rate from 30 to 60 Hz (intel(R) realsense)
+           */
           // calculate admittance
           this->f_external_(0) = this->external_force_.x * 0.001;
           this->f_external_(1) = this->external_force_.y * 0.001;
 
-          this->del_xf_ = this->HRM_admittance_controller_.compute(this->f_desired_, this->f_external_);
+          // DEBUG
+          this->f_external_(0) = 0.0; // N
+          this->f_external_(1) = 0.1; // N
+
+          this->del_xf_ = this->HRM_admittance_controller_.compute(this->f_desired_, this->f_external_, admittance_params::DT);
           // calculate admittance - END
 
+          // Print
+          auto xt = this->HRM_admittance_controller_.admittance_filter_getXt();
+          auto xt_dot = this->HRM_admittance_controller_.admittance_filter_getXtDot();
+          auto xt_ddot = this->HRM_admittance_controller_.admittance_filter_getXtDDot();
+          
+          std::cout << "--------------- Admittance --------------------" << std::endl;
+          std::cout << "xt" << xt << std::endl;
+          std::cout << "xt_dot" << xt_dot << std::endl;
+          std::cout << "xt_ddot" << xt_ddot << std::endl;
           // compensated desired x
           // x_t = x_d + del_x_f
           this->x_t_ = this->x_desired_ + this->del_xf_;

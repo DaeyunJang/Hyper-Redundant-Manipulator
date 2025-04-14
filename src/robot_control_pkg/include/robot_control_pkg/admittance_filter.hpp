@@ -3,7 +3,7 @@
 #define ADMITTANCE_FILTER_HPP
 
 #include <Eigen/Dense>
-#include "control_parameters.hpp"
+// #include "control_parameters.hpp"
 
 class AdmittanceFilter {
 public:
@@ -19,8 +19,8 @@ public:
   void setMassMatrix(const Eigen::MatrixXd& mass_matrix);
   void setDampingMatrix(const Eigen::MatrixXd& damping_matrix);
   void setSpringMatrix(const Eigen::MatrixXd& spring_matrix);
-  void setDesiredForceVector(const Eigen::VectorXd& desired_force);
-  void setExternalForceVector(const Eigen::VectorXd& external_force);
+  // void setDesiredForceVector(const Eigen::VectorXd& desired_force);
+  // void setExternalForceVector(const Eigen::VectorXd& external_force);
   
   // Update function to compute x_t based on the given force F_t
   /**
@@ -34,7 +34,8 @@ public:
    */
   Eigen::VectorXd computeAdmittance(
     const Eigen::VectorXd& desired_force,
-    const Eigen::VectorXd& external_force);
+    const Eigen::VectorXd& external_force,
+    const double& dt);
   
   // Get current position x_t
   Eigen::VectorXd getXt() const;
@@ -47,12 +48,13 @@ public:
 
   Eigen::VectorXd desired_force_;  // Desired force input
   Eigen::VectorXd external_force_;  // External force input
-  Eigen::VectorXd prev_force_;  // External force input
+  Eigen::VectorXd force_error_;  // External force input
   
   Eigen::VectorXd xt_;  // Position vector (6x1)
   Eigen::VectorXd xtdot_;  // Velocity vector (6x1)
   Eigen::VectorXd xtddot_;  // Acceleration vector (6x1)
   
+  double dt_;
 
 
 private:

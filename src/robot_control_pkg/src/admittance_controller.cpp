@@ -25,13 +25,14 @@ AdmittanceController::~AdmittanceController() {}
 
 Eigen::VectorXd AdmittanceController::compute(
   const Eigen::VectorXd& f_desired,
-  const Eigen::VectorXd& f_external
+  const Eigen::VectorXd& f_external,
+  const double& dt
 ) {
-  this-> f_desired_ = f_desired;
-  this-> f_external_ = f_external;
-  this-> del_f_ = f_desired - f_external;
-
-  auto del_xf = this->admittance_filter_.computeAdmittance(f_desired, f_external);
-  del_xf_ = del_xf;
-  return del_xf_;
+  this->f_desired_ = f_desired;
+  this->f_external_ = f_external;
+  this->del_f_ = f_desired - f_external;
+  this->dt_ = dt;
+  auto del_xf = this->admittance_filter_.computeAdmittance(f_desired, f_external, dt);
+  this->del_xf_ = del_xf;
+  return del_xf;
 }

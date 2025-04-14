@@ -28,6 +28,7 @@ public:
   Eigen::VectorXd f_desired_;
   Eigen::VectorXd f_external_;
   Eigen::VectorXd del_xf_;
+  double dt_;
 
   /**
    * @brief 
@@ -42,7 +43,8 @@ public:
    */
   Eigen::VectorXd compute(
     const Eigen::VectorXd& f_desired,
-    const Eigen::VectorXd& f_external
+    const Eigen::VectorXd& f_external,
+    const double& dt
   );
 
 private:

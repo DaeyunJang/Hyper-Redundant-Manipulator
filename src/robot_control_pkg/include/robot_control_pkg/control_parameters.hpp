@@ -68,10 +68,11 @@ namespace admittance_params {
 // M_d: desired mass
 // B_d: desired damper
 // K_d: desired spring
-inline constexpr double M_d = 0.01;
-inline constexpr double B_d = 0.0;
-inline constexpr double K_d = 0.01;
-
+inline constexpr double M_d = 0.01; // kg
+inline constexpr double B_d = 0.5;  // N-s/m
+inline constexpr double K_d = 10.0; // N/m
+inline constexpr double SAMPLING_HZ = 30.0;
+inline constexpr double DT = 1.0 / SAMPLING_HZ;
 // M: Mass matrix
 inline const Eigen::MatrixXd MASS_MATRIX = [] {
     Eigen::MatrixXd M = Eigen::MatrixXd::Zero(6, 6);
