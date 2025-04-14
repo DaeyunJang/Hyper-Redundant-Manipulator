@@ -3,7 +3,7 @@
 #define ADMITTANCE_CONTROLLER_HPP
 
 #include "admittance_filter.hpp"
-// #include "position_controller.hpp"
+#include "position_controller.hpp"
 
 /**
  * @file  controller.hpp

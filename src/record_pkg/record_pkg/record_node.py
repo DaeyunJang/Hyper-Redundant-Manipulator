@@ -24,6 +24,8 @@ from custom_interfaces.msg import LoadcellState
 from custom_interfaces.msg import MotorCommand
 from custom_interfaces.msg import MotorState
 from custom_interfaces.msg import DynamicMIMOValues
+from custom_interfaces.msg import PositionControl
+from custom_interfaces.msg import AdmittanceControl
 from custom_interfaces.srv import MoveMotorDirect
 from custom_interfaces.srv import MoveToolAngle
 
@@ -60,6 +62,7 @@ class RecordNode(Node):
         self.is_recording = False
         self.data_count = 0
         self.data_count_dMv = 0
+        self.data_count_admittance = 0
 
         # self.rosbag_writer = rosbag2_py.SequentialWriter()
         # storage_options = rosbag2_py._storage.StorageOptions(
@@ -201,6 +204,7 @@ class RecordNode(Node):
         )
         self.get_logger().info('wire_length subscriber is created.')
         
+        # dynamics
         self.dynamic_MIMO_values_flag = False
         self.dynamic_MIMO_values = DynamicMIMOValues()
         self.dynamic_MIMO_values_subscriber = self.create_subscription(
@@ -210,6 +214,28 @@ class RecordNode(Node):
             QOS_RKL10V
         )
         self.get_logger().info('dynamic_MIMO_values subscriber is created.')
+        
+        # position control
+        self.position_control_variables_flag = False
+        self.position_control_variables = PositionControl()
+        self.position_control_variables_subscriber = self.create_subscription(
+            PositionControl,
+            'position_controller',
+            self.read_position_control_variables,
+            QOS_RKL10V
+        )
+        self.get_logger().info('position_controller subscriber is created.')
+        
+        # admittance control
+        self.admittance_control_variables_flag = False
+        self.admittance_control_variables = AdmittanceControl()
+        self.admittance_control_variables_subscriber = self.create_subscription(
+            AdmittanceControl,
+            'admittance_controller',
+            self.read_admittance_control_variables,
+            QOS_RKL10V
+        )
+        self.get_logger().info('admittance_controller subscriber is created.')
 
 
         # self.realsense_subscriber = RealSenseSubscriber()
@@ -287,6 +313,7 @@ class RecordNode(Node):
                 self.create_directory()
                 self.create_csv()
                 self.create_csv_dynamics_MIMO_values()
+                self.create_csv_admittance_control_variables()
                 self.create_metadata_json()
 
 
@@ -312,11 +339,13 @@ class RecordNode(Node):
                 self.get_logger().info('Stop recording')
                 self.csv_file.close()
                 self.csv_file_dMv.close()
+                self.csv_file_admittance.close()
                 # self.bag_process.terminate()
                 response.success = True
                 response.message = 'Stop Recording.'
                 self.data_count = 0
                 self.data_count_dMv = 0
+                self.data_count_admittance = 0
         except Exception as e:
             self.get_logger().info(f'Exception Error as {e}')
             response.success = False
@@ -414,6 +443,26 @@ class RecordNode(Node):
             image_file = str(self.data_count_dMv) + '_' + str(self.dynamic_MIMO_values.header.stamp.sec) + '-' + str(self.dynamic_MIMO_values.header.stamp.nanosec) +'.png'
             cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
             self.update_csv_dynamics_MIMO_values()
+            
+    def read_position_control_variables(self, msg):
+        self.position_control_variables_flag = True
+        self.position_control_variables = msg
+
+        # if self.is_recording:
+        #     self.data_count_pcv += 1
+        #     image_file = str(self.data_count_pcv) + '_' + str(self.position_control_variables_flag.header.stamp.sec) + '-' + str(self.position_control_variables_flag.header.stamp.nanosec) +'.png'
+        #     cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
+        #     self.update_csv_position_control_variables()
+            
+    def read_admittance_control_variables(self, msg):
+        self.admittance_control_variables_flag = True
+        self.admittance_control_variables = msg
+
+        if self.is_recording:
+            self.data_count_admittance += 1
+            image_file = str(self.data_count_admittance) + '_' + str(self.admittance_control_variables.header.stamp.sec) + '-' + str(self.admittance_control_variables.header.stamp.nanosec) +'.png'
+            cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
+            self.update_csv_admittance_control_variables()
 
 
     def create_directory(self):
@@ -430,6 +479,7 @@ class RecordNode(Node):
             os.makedirs(self.directory_path_image_with_estimated_angle)
         self.directory_path_csv = self.directory_path
         self.directory_path_csv_dMv = self.directory_path
+        self.directory_path_csv_admittance = self.directory_path
 
     ##################################
     def create_csv(self):
@@ -600,8 +650,165 @@ class RecordNode(Node):
                                  + [str(self.dynamic_MIMO_values.cmode)]
                                  + [str(self.dynamic_MIMO_values.input_alpha)]
                                  + [str(self.dynamic_MIMO_values.input_omega)]
-                                 + [str(self.dynamic_MIMO_values.input_theta)])
+                                 + [str(self.dynamic_MIMO_values.input_theta)]
+        )
         self.csv_file_dMv.flush()
+        pass
+    
+    ##################################
+    def create_csv_admittance_control_variables(self):
+        self.csv_file_name_admittance_control = os.path.join(self.directory_path_csv_admittance, 'data_admittance_control.csv')
+        self.get_logger().info(f'CSV is created => name : {self.csv_file_name_admittance_control}')
+
+        self.csv_headers_admittance = {}
+        self.csv_headers_admittance['sec'] = []
+        self.csv_headers_admittance['nanosec'] = []
+        self.csv_headers_admittance['image'] = []
+        self.csv_headers_admittance['sampling_time'] = []
+        
+        self.csv_headers_admittance['mass_x'] = []
+        self.csv_headers_admittance['mass_y'] = []
+        self.csv_headers_admittance['mass_z'] = []
+        self.csv_headers_admittance['damper_x'] = []
+        self.csv_headers_admittance['damper_y'] = []
+        self.csv_headers_admittance['damper_z'] = []
+        self.csv_headers_admittance['spring_x'] = []
+        self.csv_headers_admittance['spring_y'] = []
+        self.csv_headers_admittance['spring_z'] = []
+        
+        self.csv_headers_admittance['f_desired_x'] = []
+        self.csv_headers_admittance['f_desired_y'] = []
+        self.csv_headers_admittance['f_desired_z'] = []
+        self.csv_headers_admittance['f_external_x'] = []
+        self.csv_headers_admittance['f_external_y'] = []
+        self.csv_headers_admittance['f_external_z'] = []
+        self.csv_headers_admittance['delta_f_x'] = []
+        self.csv_headers_admittance['delta_f_y'] = []
+        self.csv_headers_admittance['delta_f_z'] = []
+        
+        self.csv_headers_admittance['x_ddot_x'] = []
+        self.csv_headers_admittance['x_ddot_y'] = []
+        self.csv_headers_admittance['x_ddot_z'] = []
+        self.csv_headers_admittance['x_dot_x'] = []
+        self.csv_headers_admittance['x_dot_y'] = []
+        self.csv_headers_admittance['x_dot_z'] = []
+        self.csv_headers_admittance['x(xf)_x'] = []
+        self.csv_headers_admittance['x(xf)_y'] = []
+        self.csv_headers_admittance['x(xf)_z'] = []
+        self.csv_headers_admittance['dt(admittance)'] = []
+        
+        self.csv_headers_admittance['pos-p_gain'] = []
+        self.csv_headers_admittance['pos-i_gain'] = []
+        self.csv_headers_admittance['pos-d_gain'] = []
+        
+        self.csv_headers_admittance['desired_x'] = []
+        self.csv_headers_admittance['desired_y'] = []
+        self.csv_headers_admittance['desired_z'] = []
+        self.csv_headers_admittance['actual_x'] = []
+        self.csv_headers_admittance['actual_y'] = []
+        self.csv_headers_admittance['actual_z'] = []
+        self.csv_headers_admittance['error_x'] = []
+        self.csv_headers_admittance['error_y'] = []
+        self.csv_headers_admittance['error_z'] = []
+        
+        self.csv_headers_admittance['dt(position)'] = []
+        self.csv_headers_admittance['delta_pan'] = []
+        self.csv_headers_admittance['delta_tilt'] = []
+
+        for i in range(self.numofjoints):
+            self.csv_headers_admittance[f'theta_actual_rel_#{i}'] = []
+            
+        """
+        TODO mapping to self.update_csv_admittance_control_variables
+        """        
+        self.csv_headers_admittance[f'estimated_force_x'] = []
+        self.csv_headers_admittance[f'estimated_force_y'] = []
+        self.csv_headers_admittance[f'actual_force_x (raw)'] = []
+        self.csv_headers_admittance[f'actual_force_y (raw)'] = []
+        self.csv_headers_admittance[f'actual_force_x (kalman)'] = []
+        self.csv_headers_admittance[f'actual_force_y (kalman)'] = []
+            
+        self.csv_file_admittance = open(self.csv_file_name_admittance_control, mode='w')
+        self.csv_writer_admittance = csv.writer(self.csv_file_admittance)
+        self.csv_writer_admittance.writerow(self.csv_headers_admittance.keys())
+        self.csv_file_admittance.flush()
+    
+    def update_csv_admittance_control_variables(self):
+        # if not self.image_flag and not self.fts_data_flag and not self.motor_state_flag and not self.loadcell_data_flag:
+        #     self.get_logger().warning(f'All data are not subscribed')
+        #     return
+        timestamp_sec = str(self.position_control_variables.header.stamp.sec)
+        timestamp_nanosec = str(self.position_control_variables.header.stamp.nanosec)
+        image_file = str(self.data_count_admittance) + '_' + str(timestamp_sec) + '-' + str(timestamp_nanosec) +'.png'
+        actual_force = self.fts_data.wrench.force   # mN
+        actual_force_kalman = self.fts_data_kalman_filter.wrench.force
+        # N-m
+        # actual_torque = (-1) * (10.125*0.001) * (actual_force.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
+        # actual_torque_kalman = (-1) * (10.125*0.001) * (actual_force_kalman.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force_kalman.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
+
+        self.csv_writer_admittance.writerow([timestamp_sec, timestamp_nanosec, image_file]
+                                 + [str(self.admittance_control_variables.sampling_time)]
+                                 
+                                 + [str(self.admittance_control_variables.m_matrix[0])]
+                                 + [str(self.admittance_control_variables.m_matrix[7])]
+                                 + [str(self.admittance_control_variables.m_matrix[14])]
+                                 + [str(self.admittance_control_variables.b_matrix[0])]
+                                 + [str(self.admittance_control_variables.b_matrix[7])]
+                                 + [str(self.admittance_control_variables.b_matrix[14])]
+                                 + [str(self.admittance_control_variables.k_matrix[0])]
+                                 + [str(self.admittance_control_variables.k_matrix[7])]
+                                 + [str(self.admittance_control_variables.k_matrix[14])]
+                                 
+                                 + [str(self.admittance_control_variables.desired_force.force.x)]
+                                 + [str(self.admittance_control_variables.desired_force.force.y)]
+                                 + [str(self.admittance_control_variables.desired_force.force.z)]
+                                 + [str(self.admittance_control_variables.external_force.force.x)]
+                                 + [str(self.admittance_control_variables.external_force.force.y)]
+                                 + [str(self.admittance_control_variables.external_force.force.z)]
+                                 + [str(self.admittance_control_variables.delta_force.force.x)]
+                                 + [str(self.admittance_control_variables.delta_force.force.y)]
+                                 + [str(self.admittance_control_variables.delta_force.force.z)]
+                                 
+                                 + [str(self.admittance_control_variables.x_ddot.position.x)]
+                                 + [str(self.admittance_control_variables.x_ddot.position.y)]
+                                 + [str(self.admittance_control_variables.x_ddot.position.z)]
+                                 + [str(self.admittance_control_variables.x_dot.position.x)]
+                                 + [str(self.admittance_control_variables.x_dot.position.y)]
+                                 + [str(self.admittance_control_variables.x_dot.position.z)]
+                                 + [str(self.admittance_control_variables.x.position.x)]
+                                 + [str(self.admittance_control_variables.x.position.y)]
+                                 + [str(self.admittance_control_variables.x.position.z)]
+                                 + [str(self.admittance_control_variables.dt)]
+                                 
+                                 + [str(self.position_control_variables.p_gain)]
+                                 + [str(self.position_control_variables.i_gain)]
+                                 + [str(self.position_control_variables.d_gain)]
+                                 
+                                 + [str(self.position_control_variables.x_desired.position.x)]
+                                 + [str(self.position_control_variables.x_desired.position.y)]
+                                 + [str(self.position_control_variables.x_desired.position.z)]
+                                 + [str(self.position_control_variables.x_actual.position.x)]
+                                 + [str(self.position_control_variables.x_actual.position.y)]
+                                 + [str(self.position_control_variables.x_actual.position.z)]
+                                 + [str(self.position_control_variables.x_error.position.x)]
+                                 + [str(self.position_control_variables.x_error.position.y)]
+                                 + [str(self.position_control_variables.x_error.position.z)]
+                                 
+                                 + [str(self.position_control_variables.dt)]
+                                 + [str(self.position_control_variables.del_theta_pan)]
+                                 + [str(self.position_control_variables.del_theta_tilt)]
+
+                                 + [str(value) for value in self.position_control_variables.theta_actual_relative]
+                                 
+                                 + [str(self.external_force.x * 0.001)]
+                                 + [str(self.external_force.y * 0.001)]
+                                 + [str(actual_force.x * 0.001)]
+                                 + [str(actual_force.y * 0.001)]
+                                 + [str(actual_force_kalman.x * 0.001)]
+                                 + [str(actual_force_kalman.y * 0.001)]
+        )
+        
+        self.csv_file_admittance.flush()
         pass
 
     #######################################
@@ -629,6 +836,10 @@ class RecordNode(Node):
                 "tx": "mNm",
                 "ty": "mNm",
                 "tz": "mNm",
+                "M_matrix": "kg",
+                "B_matrix": "N-s/m",
+                "K_matrix": "N/m",
+                "x_vector": "m",
             },
             "offsets": {
                 "fx": self.fts_data_offset.wrench.force.x,

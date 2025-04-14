@@ -891,18 +891,18 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       RCLCPP_INFO(this->get_logger(), "Updated friction mode: %d", HRM_controller_.hrm_controller_enable_);
     } 
     // admittance control
-    else if (param.get_name() == "admittance/M") {
+    else if (param.get_name() == "admittance/M_d") {
       double M = param.as_double();
       HRM_admittance_controller_.admittance_filter_.M_(1,1) = M;
-      RCLCPP_INFO(this->get_logger(), "Updated M(1,1): %f", M);
-    } else if (param.get_name() == "admittance/B") {
+      RCLCPP_INFO(this->get_logger(), "Updated M_d(1,1): %f", M);
+    } else if (param.get_name() == "admittance/B_d") {
       double B = param.as_double();
       HRM_admittance_controller_.admittance_filter_.B_(1,1) = B;
-      RCLCPP_INFO(this->get_logger(), "Updated B(1,1): %f", B);
-    } else if (param.get_name() == "admittance/K") {
+      RCLCPP_INFO(this->get_logger(), "Updated B_d(1,1): %f", B);
+    } else if (param.get_name() == "admittance/K_d") {
       double K = param.as_double();
       HRM_admittance_controller_.admittance_filter_.K_(1,1) = K;
-      RCLCPP_INFO(this->get_logger(), "Updated K(1,1): %f", K);
+      RCLCPP_INFO(this->get_logger(), "Updated K_d(1,1): %f", K);
     }
     // poisiton control
     else if (param.get_name() == "position_control/pid_controller_pan/p_gain") {
@@ -1112,6 +1112,9 @@ void ControlNode::run_position_with_admittance_control_thread() {
         // ================================================================
         // Calculation of admittance control
         // ================================================================
+
+        std::vector<double> external_force = {this->external_force_.x*0.001, this->external_force_.y*0.001};
+
         if (control_mode_ == ControlMode::kAdmittance) {
           /**
            * @brief Check the sampling rate of between admittance and position control.
@@ -1134,17 +1137,20 @@ void ControlNode::run_position_with_admittance_control_thread() {
           // calculate admittance - END
 
           // Print
-          auto xt = this->HRM_admittance_controller_.admittance_filter_getXt();
-          auto xt_dot = this->HRM_admittance_controller_.admittance_filter_getXtDot();
-          auto xt_ddot = this->HRM_admittance_controller_.admittance_filter_getXtDDot();
+          auto xt = this->HRM_admittance_controller_.admittance_filter_.getXt();
+          auto xt_dot = this->HRM_admittance_controller_.admittance_filter_.getXtDot();
+          auto xt_ddot = this->HRM_admittance_controller_.admittance_filter_.getXtDDot();
           
-          std::cout << "--------------- Admittance --------------------" << std::endl;
-          std::cout << "xt" << xt << std::endl;
-          std::cout << "xt_dot" << xt_dot << std::endl;
-          std::cout << "xt_ddot" << xt_ddot << std::endl;
+          // std::cout << "--------------- Admittance --------------------" << std::endl;
+          // std::cout << "xt" << xt << std::endl;
+          // std::cout << "xt_dot" << xt_dot << std::endl;
+          // std::cout << "xt_ddot" << xt_ddot << std::endl;
+          // std::cout << "xt_ddot" << xt_ddot << std::endl;
+          // std::cout << "del_xf_" << del_xf_ << std::endl;
           // compensated desired x
           // x_t = x_d + del_x_f
           this->x_t_ = this->x_desired_ + this->del_xf_;
+          this->x_t_ = this->x_desired_;
         } else if (control_mode_ == ControlMode::kPosition) {
           // only position mode
           this->x_t_ = this->x_desired_;
@@ -1274,6 +1280,7 @@ void ControlNode::run_position_with_admittance_control_thread() {
           // Admittance controller
           admittance_control_msgs_.header.stamp = time;
           admittance_control_msgs_.header.frame_id = "admittance_controller";
+          admittance_control_msgs_.sampling_time = admittance_params::SAMPLING_HZ;
 
           // Force message
           admittance_control_msgs_.desired_force.force.x = HRM_admittance_controller_.f_desired_(0);
@@ -1311,9 +1318,19 @@ void ControlNode::run_position_with_admittance_control_thread() {
           admittance_control_msgs_.b_matrix = b_matrix_vec;
           admittance_control_msgs_.k_matrix = k_matrix_vec;
 
-          admittance_control_msgs_.x_f.position.x = this->del_xf_(0);
-          admittance_control_msgs_.x_f.position.y = this->del_xf_(1);
-          admittance_control_msgs_.x_f.position.z = this->del_xf_(2);
+          admittance_control_msgs_.x_ddot.position.x = this->HRM_admittance_controller_.admittance_filter_.getXtDDot()(0);
+          admittance_control_msgs_.x_ddot.position.y = this->HRM_admittance_controller_.admittance_filter_.getXtDDot()(1);
+          admittance_control_msgs_.x_ddot.position.z = this->HRM_admittance_controller_.admittance_filter_.getXtDDot()(2);
+          
+          admittance_control_msgs_.x_dot.position.x = this->HRM_admittance_controller_.admittance_filter_.getXtDot()(0);
+          admittance_control_msgs_.x_dot.position.y = this->HRM_admittance_controller_.admittance_filter_.getXtDot()(1);
+          admittance_control_msgs_.x_dot.position.z = this->HRM_admittance_controller_.admittance_filter_.getXtDot()(2);
+
+          admittance_control_msgs_.x.position.x = this->HRM_admittance_controller_.admittance_filter_.getXt()(0);
+          admittance_control_msgs_.x.position.y = this->HRM_admittance_controller_.admittance_filter_.getXt()(1);
+          admittance_control_msgs_.x.position.z = this->HRM_admittance_controller_.admittance_filter_.getXt()(2);
+
+          admittance_control_msgs_.dt = this->HRM_admittance_controller_.dt_;
 
           // ----------------------------------------------------
           // Position controller

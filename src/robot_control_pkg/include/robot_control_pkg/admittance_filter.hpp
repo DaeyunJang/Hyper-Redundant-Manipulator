@@ -3,6 +3,7 @@
 #define ADMITTANCE_FILTER_HPP
 
 #include <Eigen/Dense>
+#include <iostream>
 // #include "control_parameters.hpp"
 
 class AdmittanceFilter {

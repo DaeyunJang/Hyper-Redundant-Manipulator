@@ -68,9 +68,13 @@ namespace admittance_params {
 // M_d: desired mass
 // B_d: desired damper
 // K_d: desired spring
-inline constexpr double M_d = 0.01; // kg
-inline constexpr double B_d = 0.5;  // N-s/m
-inline constexpr double K_d = 10.0; // N/m
+// inline constexpr double M_d = 1.0; // kg
+// inline constexpr double B_d = 10.0;  // N-s/m
+// inline constexpr double K_d = 100.0; // N/m
+
+inline constexpr double M_d = 0.05; // kg
+inline constexpr double B_d = 1.0;  // N-s/m
+inline constexpr double K_d = 20.0; // N/m
 inline constexpr double SAMPLING_HZ = 30.0;
 inline constexpr double DT = 1.0 / SAMPLING_HZ;
 // M: Mass matrix

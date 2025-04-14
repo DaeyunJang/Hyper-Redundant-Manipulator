@@ -62,7 +62,7 @@ Eigen::VectorXd AdmittanceFilter::computeAdmittance(
   // setExternalForceVector(external_force);
   this->desired_force_ = desired_force;
   this->external_force_ = external_force;
-  this->force_error_ = external_force - desired_force;
+  this->force_error_ = desired_force - external_force;
   this->dt_ = dt;
 
   // Ensure size consistency
@@ -72,28 +72,32 @@ Eigen::VectorXd AdmittanceFilter::computeAdmittance(
     xtddot_ = Eigen::VectorXd::Zero(6);
   }
   
-  const double eps = 1e-6;
+  const double eps = 1e-3;
   // Full admittance (MBK)
   if (M_.norm() > eps) {
-    xtddot_ = M_.ldlt().solve(force_error - B_ * xtdot_ - K_ * xt_);  // M^-1(F - Bẋ - Kx)
+    // std::cout << "admittance mode: Full" << std::endl;
+    xtddot_ = M_.ldlt().solve(force_error_ - B_ * xtdot_ - K_ * xt_);  // M^-1(F - Bẋ - Kx)
     xtdot_ += xtddot_ * dt;
     xt_ += xtdot_ * dt;
   }
   // Damper + Spring (M = 0, 1st ODE system)
   else if (B_.norm() > eps && K_.norm() > eps) {
-    xtdot_ = B_.ldlt().solve(force_error - K_ * xt_);
+    // std::cout << "admittance mode: B+K" << std::endl;
+    xtdot_ = B_.ldlt().solve(force_error_ - K_ * xt_);
     xt_ += xtdot_ * dt;
     xtddot_.setZero();
   }
   // Damping control (1st ODE system)
   else if (B_.norm() > eps) {
-    xtdot_ = B_.ldlt().solve(force_error);
+    // std::cout << "admittance mode: B" << std::endl;
+    xtdot_ = B_.ldlt().solve(force_error_);
     xt_ += xtdot_ * dt;
     xtddot_.setZero();
   }
   // Stiffness control (0 order system))
   else if (K_.norm() > eps) {
-    xt_ = K_.ldlt().solve(force_error);
+    // std::cout << "admittance mode: K" << std::endl;
+    xt_ = K_.ldlt().solve(force_error_);
     xtdot_.setZero();
     xtddot_.setZero();
   }
