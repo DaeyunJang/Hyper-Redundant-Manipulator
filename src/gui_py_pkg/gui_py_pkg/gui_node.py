@@ -797,8 +797,8 @@ class MyGUI(QWidget):
             self.checkbox_mode_list[1].setChecked(False)
             self.checkbox_mode_list[2].setChecked(False)
             self.checkbox_mode_list[4].setChecked(False)
-            self.motor_kinematics_label_list[0].setText("Move Tip (mm) | y-axis")
-            self.motor_kinematics_label_list[1].setText("Move Tip (mm) | z-axis")
+            self.motor_kinematics_label_list[0].setText("Move Tip (m) | y-axis")
+            self.motor_kinematics_label_list[1].setText("Move Tip (m) | z-axis")
             
         # admittance
         elif sender == self.checkbox_mode_list[4] and self.checkbox_mode_list[4].isChecked():
@@ -808,8 +808,8 @@ class MyGUI(QWidget):
             self.checkbox_mode_list[1].setChecked(False)
             self.checkbox_mode_list[2].setChecked(False)
             self.checkbox_mode_list[3].setChecked(False)
-            self.motor_kinematics_label_list[0].setText("Move Tip (mm) | y-axis")
-            self.motor_kinematics_label_list[1].setText("Move Tip (mm) | z-axis")
+            self.motor_kinematics_label_list[0].setText("Move Tip (m) | y-axis")
+            self.motor_kinematics_label_list[1].setText("Move Tip (m) | z-axis")
 
     def checkbox_amode_clicked(self):
         sender = self.sender()

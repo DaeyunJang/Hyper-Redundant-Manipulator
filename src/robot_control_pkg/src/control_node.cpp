@@ -1126,12 +1126,15 @@ void ControlNode::run_position_with_admittance_control_thread() {
            * Later, it is necessary to increase the samplig rate from 30 to 60 Hz (intel(R) realsense)
            */
           // calculate admittance
-          this->f_external_(0) = this->external_force_.x * 0.001;
-          this->f_external_(1) = this->external_force_.y * 0.001;
+          /**
+           * @brief mapping F/T sensor to F_ext of admittance.
+           */
+          this->f_external_(0) = -this->external_force_.y * 0.001;
+          this->f_external_(1) = this->external_force_.x * 0.001;
 
           // DEBUG
-          this->f_external_(0) = 0.0; // N
-          this->f_external_(1) = 0.1; // N
+          // this->f_external_(0) = 0.0; // N
+          // this->f_external_(1) = 0.1; // N
 
           this->del_xf_ = this->HRM_admittance_controller_.compute(this->f_desired_, this->f_external_, admittance_params::DT);
           // calculate admittance - END
@@ -1150,9 +1153,12 @@ void ControlNode::run_position_with_admittance_control_thread() {
           // compensated desired x
           // x_t = x_d + del_x_f
           this->x_t_ = this->x_desired_ + this->del_xf_;
-          this->x_t_ = this->x_desired_;
         } else if (control_mode_ == ControlMode::kPosition) {
           // only position mode
+          this->HRM_admittance_controller_.admittance_filter_.xt_.setZero();
+          this->HRM_admittance_controller_.admittance_filter_.xtdot_.setZero();
+          this->HRM_admittance_controller_.admittance_filter_.xtddot_.setZero();
+
           this->x_t_ = this->x_desired_;
         }
 

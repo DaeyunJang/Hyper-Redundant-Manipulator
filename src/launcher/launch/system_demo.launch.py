@@ -22,6 +22,11 @@ from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
+  apriltag_param_file = os.path.join(
+        get_package_share_directory('apriltag_ros'),
+        'cfg',
+        'tags_36h11.yaml'
+    )
   
   return LaunchDescription([
     
@@ -36,11 +41,12 @@ def generate_launch_description():
           'rgb_camera.color_profile': '1280,720,30',
           'depth_module.depth_profile': '1280,720,30',
           'rgb_camera.enable_auto_exposure': 'false',
-          'rgb_camera.exposure': '250',
+          'rgb_camera.exposure': '150',
           # 'rgb_camera.profile': '640,480,30',
           # 'depth_module.profile': '640,480,30',
         }.items()
     ),
+    
     IncludeLaunchDescription(
       PythonLaunchDescriptionSource(
         [get_package_share_directory('serial_pkg'), '/launch/_launch.py']),
@@ -66,5 +72,17 @@ def generate_launch_description():
     IncludeLaunchDescription(
       PythonLaunchDescriptionSource(
         [get_package_share_directory('estimation_pkg'), '/launch/_launch.py']),
+    ),
+    
+    Node(
+      package='apriltag_ros',
+      executable='apriltag_node',
+      name='apriltag_node',
+      output='screen',
+      parameters=[apriltag_param_file],
+      remappings=[
+        ('image_rect', '/camera/camera/color/image_raw'),
+        ('camera_info', '/camera/camera/color/camera_info')
+      ]
     ),
   ])
