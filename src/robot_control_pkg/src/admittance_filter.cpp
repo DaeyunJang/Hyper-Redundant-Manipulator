@@ -6,7 +6,7 @@ AdmittanceFilter::AdmittanceFilter()
   B_(Eigen::MatrixXd::Zero(6, 6)),
   K_(Eigen::MatrixXd::Zero(6, 6)),
   desired_force_(Eigen::VectorXd::Zero(6)),
-  external_force_(Eigen::VectorXd::Zero(6)),
+  env_force_(Eigen::VectorXd::Zero(6)),
   force_error_(Eigen::VectorXd::Zero(6)),
   xt_(Eigen::VectorXd::Zero(6)),
   xtdot_(Eigen::VectorXd::Zero(6)),
@@ -18,7 +18,7 @@ AdmittanceFilter::AdmittanceFilter(const Eigen::MatrixXd& mass_matrix, const Eig
   B_(damping_matrix),
   K_(spring_matrix),
   desired_force_(Eigen::VectorXd::Zero(6)),
-  external_force_(Eigen::VectorXd::Zero(6)),
+  env_force_(Eigen::VectorXd::Zero(6)),
   force_error_(Eigen::VectorXd::Zero(6)),
   xt_(Eigen::VectorXd::Zero(6)),
   xtdot_(Eigen::VectorXd::Zero(6)),
@@ -47,22 +47,22 @@ void AdmittanceFilter::setSpringMatrix(const Eigen::MatrixXd& spring_matrix) {
 //   desired_force_ = desired_force;
 // }
 
-// void AdmittanceFilter::setExternalForceVector(const Eigen::VectorXd& external_force) {
-//   external_force_ = external_force;
+// void AdmittanceFilter::setExternalForceVector(const Eigen::VectorXd& env_force) {
+//   env_force_ = env_force;
 // }
 
 
 // Update function to calculate position using the admittance model
 Eigen::VectorXd AdmittanceFilter::computeAdmittance(
   const Eigen::VectorXd& desired_force,
-  const Eigen::VectorXd& external_force,
+  const Eigen::VectorXd& env_force,
   const double& dt
 ) {
   // setDesiredForceVector(desired_force);
-  // setExternalForceVector(external_force);
+  // setExternalForceVector(env_force);
   this->desired_force_ = desired_force;
-  this->external_force_ = external_force;
-  this->force_error_ = desired_force - external_force;
+  this->env_force_ = env_force;
+  this->force_error_ = desired_force - env_force;
   this->dt_ = dt;
 
   // Ensure size consistency

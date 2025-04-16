@@ -48,7 +48,7 @@ public:
   Eigen::MatrixXd K_;  // Spring constant matrix (6x6)
 
   Eigen::VectorXd desired_force_;  // Desired force input
-  Eigen::VectorXd external_force_;  // External force input
+  Eigen::VectorXd env_force_;  // External force input
   Eigen::VectorXd force_error_;  // External force input
   
   Eigen::VectorXd xt_;  // Position vector (6x1)

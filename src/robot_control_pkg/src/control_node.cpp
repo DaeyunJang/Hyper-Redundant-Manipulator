@@ -10,7 +10,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   hrm_controller_enable_(true),
   del_f_(Eigen::VectorXd::Zero(6)),
   f_desired_(Eigen::VectorXd::Zero(6)),
-  f_external_(Eigen::VectorXd::Zero(6)),
+  f_env_(Eigen::VectorXd::Zero(6)),
   del_xf_(Eigen::VectorXd::Zero(6)),
   x_t_(Eigen::VectorXd::Zero(6)),
   x_desired_(Eigen::VectorXd::Zero(6)),
@@ -1113,7 +1113,7 @@ void ControlNode::run_position_with_admittance_control_thread() {
         // Calculation of admittance control
         // ================================================================
 
-        std::vector<double> external_force = {this->external_force_.x*0.001, this->external_force_.y*0.001};
+        // std::vector<double> external_force = {this->external_force_.x*0.001, this->external_force_.y*0.001};
 
         if (control_mode_ == ControlMode::kAdmittance) {
           /**
@@ -1129,14 +1129,14 @@ void ControlNode::run_position_with_admittance_control_thread() {
           /**
            * @brief mapping F/T sensor to F_ext of admittance.
            */
-          this->f_external_(0) = -this->external_force_.y * 0.001;
-          this->f_external_(1) = this->external_force_.x * 0.001;
+          this->f_env_(0) = this->external_force_.y * 0.001;
+          this->f_env_(1) = (-1) * this->external_force_.x * 0.001;
 
           // DEBUG
-          // this->f_external_(0) = 0.0; // N
-          // this->f_external_(1) = 0.1; // N
+          // this->f_env_(0) = 0.0; // N
+          // this->f_env_(1) = 0.1; // N
 
-          this->del_xf_ = this->HRM_admittance_controller_.compute(this->f_desired_, this->f_external_, admittance_params::DT);
+          this->del_xf_ = this->HRM_admittance_controller_.compute(this->f_desired_, this->f_env_, admittance_params::DT);
           // calculate admittance - END
 
           // Print
@@ -1192,8 +1192,8 @@ void ControlNode::run_position_with_admittance_control_thread() {
 
         // ************************ Print Values ************************
         // std::cout << "--------------------------" << std::endl;
-        // std::cout << "this->f_external_(x): " << this->f_external_(0) << std::endl;
-        // std::cout << "this->f_external_(y): " << this->f_external_(1) << std::endl;
+        // std::cout << "this->f_env_(x): " << this->f_env_(0) << std::endl;
+        // std::cout << "this->f_env_(y): " << this->f_env_(1) << std::endl;
 
         // std::cout << "theta_actual_: ";
         // for (const auto& val : theta_actual_) {
@@ -1296,12 +1296,12 @@ void ControlNode::run_position_with_admittance_control_thread() {
           admittance_control_msgs_.desired_force.torque.y = HRM_admittance_controller_.f_desired_(4);
           admittance_control_msgs_.desired_force.torque.z = HRM_admittance_controller_.f_desired_(5);
           
-          admittance_control_msgs_.external_force.force.x = HRM_admittance_controller_.f_external_(0);
-          admittance_control_msgs_.external_force.force.y = HRM_admittance_controller_.f_external_(1);
-          admittance_control_msgs_.external_force.force.z = HRM_admittance_controller_.f_external_(2);
-          admittance_control_msgs_.external_force.torque.x = HRM_admittance_controller_.f_external_(3);
-          admittance_control_msgs_.external_force.torque.y = HRM_admittance_controller_.f_external_(4);
-          admittance_control_msgs_.external_force.torque.z = HRM_admittance_controller_.f_external_(5);
+          admittance_control_msgs_.env_force.force.x = HRM_admittance_controller_.f_env_(0);
+          admittance_control_msgs_.env_force.force.y = HRM_admittance_controller_.f_env_(1);
+          admittance_control_msgs_.env_force.force.z = HRM_admittance_controller_.f_env_(2);
+          admittance_control_msgs_.env_force.torque.x = HRM_admittance_controller_.f_env_(3);
+          admittance_control_msgs_.env_force.torque.y = HRM_admittance_controller_.f_env_(4);
+          admittance_control_msgs_.env_force.torque.z = HRM_admittance_controller_.f_env_(5);
 
           admittance_control_msgs_.delta_force.force.x = HRM_admittance_controller_.del_f_(0);
           admittance_control_msgs_.delta_force.force.y = HRM_admittance_controller_.del_f_(1);

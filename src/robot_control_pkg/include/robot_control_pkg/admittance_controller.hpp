@@ -26,7 +26,7 @@ public:
   /** @brief this f and x values are must be 6 DOF vector (e.g. VectorXd(6)) */
   Eigen::VectorXd del_f_;
   Eigen::VectorXd f_desired_;
-  Eigen::VectorXd f_external_;
+  Eigen::VectorXd f_env_;
   Eigen::VectorXd del_xf_;
   double dt_;
 
@@ -38,12 +38,12 @@ public:
    * 3. x_t = x_f + x_d
    * the information are maybe obtained from other processes (ROS2)
    * @param f_desired 6DOF Desired force for manipulation
-   * @param f_external 6DOF External(or Environment) force
+   * @param f_env 6DOF External(or Environment) force
    * @return Eigen::VectorXd target pose trajectory
    */
   Eigen::VectorXd compute(
     const Eigen::VectorXd& f_desired,
-    const Eigen::VectorXd& f_external,
+    const Eigen::VectorXd& f_env,
     const double& dt
   );
 

@@ -123,7 +123,7 @@ public:
    */
   Eigen::VectorXd del_f_;       // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
   Eigen::VectorXd f_desired_;   // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
-  Eigen::VectorXd f_external_;  // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
+  Eigen::VectorXd f_env_;  // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
   Eigen::VectorXd del_xf_;      // 6 DOF -> e.g. Eigen::VectorXD::Zero(6)
   AdmittanceController HRM_admittance_controller_;
 

@@ -17,7 +17,7 @@ AdmittanceController::AdmittanceController()
                      admittance_params::SPRING_MATRIX),
   del_f_(Eigen::VectorXd::Zero(6)),
   f_desired_(Eigen::VectorXd::Zero(6)),
-  f_external_(Eigen::VectorXd::Zero(6)),
+  f_env_(Eigen::VectorXd::Zero(6)),
   del_xf_(Eigen::VectorXd::Zero(6)) {}
 
 AdmittanceController::~AdmittanceController() {}
@@ -25,14 +25,14 @@ AdmittanceController::~AdmittanceController() {}
 
 Eigen::VectorXd AdmittanceController::compute(
   const Eigen::VectorXd& f_desired,
-  const Eigen::VectorXd& f_external,
+  const Eigen::VectorXd& f_env,
   const double& dt
 ) {
   this->f_desired_ = f_desired;
-  this->f_external_ = f_external;
-  this->del_f_ = f_desired - f_external;
+  this->f_env_ = f_env;
+  this->del_f_ = f_desired - f_env;
   this->dt_ = dt;
-  auto del_xf = this->admittance_filter_.computeAdmittance(f_desired, f_external, dt);
+  auto del_xf = this->admittance_filter_.computeAdmittance(f_desired, f_env, dt);
   this->del_xf_ = del_xf;
   return del_xf;
 }
