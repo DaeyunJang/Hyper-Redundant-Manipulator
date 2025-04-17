@@ -771,32 +771,41 @@ void ControlNode::publish_sine_wave()
 {
   if (control_mode_ == ControlMode::kKinematics) {
     double omega = 2.0 * M_PI / period_;
-    angle_ = amp_ * std::sin(omega * count_);
-    cal_inverse_kinematics(angle_, 0, 0);
+    trajectory_ = amp_deg_ * std::sin(omega * count_);
+    cal_inverse_kinematics(trajectory_, 0, 0);
     motor_control_publisher_->publish(motor_control_target_val_);
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
-    std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
+    std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
   }
   else if (control_mode_ == ControlMode::kDynamics) {
     double omega = 2.0 * M_PI / period_;
-    angle_ = amp_ * std::sin(omega * count_);
-    this->theta_desired_ = angle_;
+    trajectory_ = amp_deg_ * std::sin(omega * count_);
+    this->theta_desired_ = trajectory_;
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
-    // std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
+    // std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
   }
+  else if (control_mode_ == ControlMode::kPosition || control_mode_ == ControlMode::kAdmittance) {
+    double omega = 2.0 * M_PI / period_;
+    trajectory_ = amp_mm_ * std::sin(omega * count_);
+    Eigen::VectorXd x_target = Eigen::VectorXd::Zero(6);
+    x_target(1) = trajectory_;
+    this->x_desired_ = x_target;
+    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+  }
+
 }
 
 void ControlNode::publish_sine_wave_1time()
 {
   if (control_mode_ == ControlMode::kKinematics) {
     double omega = 2.0 * M_PI / period_;
-    angle_ = amp_ * std::sin(omega * count_);
-    cal_inverse_kinematics(angle_, 0, 0);
+    trajectory_ = amp_deg_ * std::sin(omega * count_);
+    cal_inverse_kinematics(trajectory_, 0, 0);
     motor_control_publisher_->publish(motor_control_target_val_);
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
-    std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
+    std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
     
     if (count_ >= period_) {
       count_ = 0;
@@ -807,10 +816,25 @@ void ControlNode::publish_sine_wave_1time()
   }
   else if (control_mode_ == ControlMode::kDynamics) {
     double omega = 2.0 * M_PI / period_;
-    angle_ = amp_ * std::sin(omega * count_);
-    this->theta_desired_ = angle_; // +90 ~ -90
+    trajectory_ = amp_deg_ * std::sin(omega * count_);
+    this->theta_desired_ = trajectory_; // +90 ~ -90
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
-    // std::cout << omega << " / " << amp_ << " / " << angle_ << " / " << count_ << " / " << count_add_ << std::endl;
+    // std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
+    
+    if (count_ >= period_) {
+      count_ = 0;
+      timer_->cancel();
+      timer_ = nullptr;
+      RCLCPP_INFO(this->get_logger(), "Sine wave cycle completed. Timer stopped.");
+    }
+  }
+  else if (control_mode_ == ControlMode::kPosition || control_mode_ == ControlMode::kAdmittance) {
+    double omega = 2.0 * M_PI / period_;
+    trajectory_ = amp_mm_ * std::sin(omega * count_);
+    Eigen::VectorXd x_target = Eigen::VectorXd::Zero(6);
+    x_target(1) = trajectory_;
+    this->x_desired_ = x_target;
+    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
     
     if (count_ >= period_) {
       count_ = 0;
@@ -825,8 +849,8 @@ void ControlNode::publish_circle_motion()
 {
   if (control_mode_ == ControlMode::kKinematics) {
     double omega = 2.0 * M_PI / period_;
-    double pan_deg = amp_ * std::sin(omega * count_);
-    double tilt_deg = amp_ * std::cos(omega * count_);
+    double pan_deg = amp_deg_ * std::sin(omega * count_);
+    double tilt_deg = amp_deg_ * std::cos(omega * count_);
     cal_inverse_kinematics(pan_deg, 0, 0);
     motor_control_publisher_->publish(motor_control_target_val_);
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
@@ -839,8 +863,8 @@ void ControlNode::publish_moebius_motion()
 {
   if (control_mode_ == ControlMode::kKinematics) {
     double omega = 2.0 * M_PI / period_;
-    double pan_deg = 0.5 * amp_ * std::sin((omega*2.0) * count_);
-    double tilt_deg = amp_ * std::sin(omega * count_);
+    double pan_deg = 0.5 * amp_deg_ * std::sin((omega*2.0) * count_);
+    double tilt_deg = amp_deg_ * std::sin(omega * count_);
     cal_inverse_kinematics(pan_deg, tilt_deg, 0);
     motor_control_publisher_->publish(motor_control_target_val_);
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);

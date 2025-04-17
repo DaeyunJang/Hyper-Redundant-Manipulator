@@ -25,7 +25,7 @@ from rclpy.node import Node
 from rcl_interfaces.msg import ParameterValue
 from rclpy.parameter import Parameter
 from rclpy.executors import MultiThreadedExecutor
-
+# from rclpy import RCLError
 from std_msgs.msg import String
 from std_msgs.msg import Bool
 from geometry_msgs.msg import WrenchStamped
@@ -717,9 +717,9 @@ class MyGUI(QWidget):
             self.timer_loadcell.start(33)
 
             # filter_checkbox_state update
-            self.timer_loadcell = QTimer(self)
-            self.timer_loadcell.timeout.connect(self.update_filter_state)
-            self.timer_loadcell.start(500)
+            self.timer_filter_state = QTimer(self)
+            self.timer_filter_state.timeout.connect(self.update_filter_state)
+            self.timer_filter_state.start(500)
 
             # ros node
             self.timer_ros_node = QTimer(self)
@@ -916,7 +916,13 @@ class MyGUI(QWidget):
             self.node.get_logger().warning(f'F:set_zero() -> {e}')
 
     def node_spin_once(self):
-        rclpy.spin_once(self.node)
+        # rclpy.spin_once(self.node)
+        try:
+            if rclpy.ok():
+                rclpy.spin_once(self.node)
+        except rclpy.exceptions.RCLError:
+            print("⚠️ ROS shutdown 이후 spin_once 호출 방지됨")
+            # rclpy.shutdown()
 
 
     def update_motor_state(self):
@@ -987,7 +993,22 @@ class MyGUI(QWidget):
         msg.lpf_weight = float(self.LPF_parameter.text())
         msg.maf_buffer_size = int(self.MAF_parameter.text())
 
-        self.node.data_filter_setting_publisher.publish(msg)
+        try:
+            if rclpy.ok():
+                self.node.data_filter_setting_publisher.publish(msg)
+        except Exception as e:
+        # except rclpy.exceptions.RCLError as e:
+            print(f"❗ update_filter_state publish 에러: {e}")
+            
+    def closeEvent(self, event):
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+            self.node.destroy_node()
+        except Exception as e:
+            print(f"❗ closeEvent 에러: {e}")
+        finally:
+            event.accept()
 
 
 def main():
@@ -998,31 +1019,9 @@ def main():
     gui = MyGUI(node)
     gui.show()
 
-    sys.exit(app.exec_())
-    # rclpy.init(args=None)
-    # node = GUINode()
-
-    # # 멀티스레드 실행기를 사용하여 ROS2 노드를 별도의 스레드에서 실행
-    # executor = MultiThreadedExecutor()
-    # executor.add_node(node)
-
-    # # 별도 스레드에서 spin 시작
-    # spin_thread = threading.Thread(target=executor.spin, daemon=True)
-    # spin_thread.start()
-
-    # # PyQt5 GUI 실행
-    # app = QApplication(sys.argv)
-    # gui = MyGUI(node)
-    # gui.show()
-
-    # # GUI 종료 시 실행기와 스레드도 정리
-    # exit_code = app.exec_()
-    # executor.shutdown()
-    # node.destroy_node()
-    # rclpy.shutdown()
-    # spin_thread.join()
-    # sys.exit(exit_code)
-
+    exit_code = app.exec_()
+    sys.exit(exit_code)
+    
 if __name__ == '__main__':
     main()
 

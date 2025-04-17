@@ -287,11 +287,12 @@ private:
 
   rclcpp::TimerBase::SharedPtr timer_;  // 타이머는 시작과 중지를 위해 nullptr로 관리
   int timer_period_ms_ = 10;
-  float amp_ = 60;
-  float period_ = 30; // secs
+  float amp_deg_ = 60;  // degeree
+  float amp_mm_ = 0.04;  // mm
+  float period_ = 20; // secs
   float count_ = 0;
   float count_add_ = timer_period_ms_ / 1000.0;
-  float angle_ = 0;
+  float trajectory_ = 0;
 
   std::thread dynamic_control_thread_;
   rclcpp::Rate loop_rate_dynamics_;  // DY == initialize in the constructor of .cpp file (unit. Hz)
