@@ -534,10 +534,10 @@ class MyGUI(QWidget):
         self.layout_amode = QVBoxLayout()
         self.label_amode = QLabel('Actuation mode')
         self.checkbox_amode_list = [QCheckBox('Absolute'), QCheckBox('Relative')]
-        self.checkbox_amode_list[0].setChecked(False)
+        self.checkbox_amode_list[0].setChecked(True)
         self.checkbox_amode_list[0].setFixedWidth(200)
         self.checkbox_amode_list[0].clicked.connect(self.checkbox_amode_clicked)
-        self.checkbox_amode_list[1].setChecked(True)
+        self.checkbox_amode_list[1].setChecked(False)
         self.checkbox_amode_list[1].setFixedWidth(200)
         self.checkbox_amode_list[1].clicked.connect(self.checkbox_amode_clicked)
         self.layout_amode.addWidget(self.label_amode)
