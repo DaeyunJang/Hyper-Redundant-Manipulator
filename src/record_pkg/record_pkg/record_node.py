@@ -29,6 +29,15 @@ from custom_interfaces.msg import AdmittanceControl
 from custom_interfaces.srv import MoveMotorDirect
 from custom_interfaces.srv import MoveToolAngle
 
+# Apriltag
+from tf2_ros import Buffer, TransformListener
+from geometry_msgs.msg import TransformStamped
+from scipy.spatial.transform import Rotation as R
+import numpy as np
+
+from apriltag_msgs.msg import AprilTagDetectionArray
+from geometry_msgs.msg import Pose
+
 from rclpy.executors import MultiThreadedExecutor
 
 print("Python executable:", sys.executable)
@@ -54,16 +63,16 @@ import subprocess   # CLI
 
 class RecordNode(Node):
     def __init__(self):
-        """
-        ROS2 bag profile set
-        """
         super().__init__('record_node')
         self.create_service(SetBool, '/data/record', self.record_callback)
         self.is_recording = False
         self.data_count = 0
         self.data_count_dMv = 0
         self.data_count_admittance = 0
-
+        
+        """
+        ROS2 bag profile set
+        """
         # self.rosbag_writer = rosbag2_py.SequentialWriter()
         # storage_options = rosbag2_py._storage.StorageOptions(
         #     uri='SIFM_bag',
@@ -204,6 +213,16 @@ class RecordNode(Node):
         )
         self.get_logger().info('wire_length subscriber is created.')
         
+        # robot control mode
+        self.control_mode_flat = False
+        self.control_mode = String()
+        self.control_mode_subscriber = self.create_subscription(
+            String,
+            "control_mode",
+            self.read_control_mode,
+            QOS_RKL10V
+        )
+        
         # dynamics
         self.dynamic_MIMO_values_flag = False
         self.dynamic_MIMO_values = DynamicMIMOValues()
@@ -258,7 +277,26 @@ class RecordNode(Node):
             "estimated_segment_angle_image",
             self.segment_angle_image_callback,
             1)
-        self.get_logger().info('realsense-camera subscriber is created.')
+        self.get_logger().info('estimated_segment_angle_image subscriber is created.')
+        
+        # Apriltags
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.apriltag_tf_timer = self.create_timer(0.01, self.compute_relative_pose)
+        self.base_frame = 'ID0'
+        self.target_frame = 'ID1'
+        self.csv_writer_apriltag = None  # 외부에서 설정하도록 열어 둠
+        self.latest_transform_time = None
+        self.relative_translation = None
+        self.relative_euler = None
+        # self.apriltag_tag36h11 = AprilTagDetectionArray()
+        # self.segment_angle_image_subscriber = self.create_subscription(
+        #     AprilTagDetectionArray,
+        #     "detections",
+        #     self.apriltag_detection_callback,
+        #     1)
+        # self.get_logger().info('Apriltag detections subscriber is created.')
+        
 
 
         ### ================================================================
@@ -313,7 +351,7 @@ class RecordNode(Node):
                 self.create_directory()
                 self.create_csv()
                 self.create_csv_dynamics_MIMO_values()
-                self.create_csv_admittance_control_variables()
+                self.create_csv_controller_variables()
                 self.create_metadata_json()
 
 
@@ -339,7 +377,7 @@ class RecordNode(Node):
                 self.get_logger().info('Stop recording')
                 self.csv_file.close()
                 self.csv_file_dMv.close()
-                self.csv_file_admittance.close()
+                self.csv_file_controller.close()
                 # self.bag_process.terminate()
                 response.success = True
                 response.message = 'Stop Recording.'
@@ -379,8 +417,14 @@ class RecordNode(Node):
         if self.is_recording:
             self.data_count += 1
             image_file = str(self.data_count) + '_' + str(self.capture_time.sec) + '-' + str(self.capture_time.nanosec) +'.png'
+            ## raw image
             cv2.imwrite(self.directory_path_image + '/' + image_file, self.current_frame)
+            ## roi image with segment's arrows
+            cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
+            
             self.update_csv()
+            self.update_csv_dynamics_MIMO_values()
+            self.update_csv_controller_variables()
 
         # cv2.imshow("[Record Node] rgb", self.current_frame)
         # cv2.waitKey(1)
@@ -397,13 +441,35 @@ class RecordNode(Node):
         self.segment_angle_image_flag = True
         self.segment_angle_image_capture_time = data.header.stamp
         self.segment_angle_image = self.br_rgb.imgmsg_to_cv2(data, 'bgr8')
+        
+                
+    def compute_relative_pose(self):
+        try:
+            tf: TransformStamped = self.tf_buffer.lookup_transform(self.base_frame, self.target_frame, rclpy.time.Time())
+            t = tf.transform.translation
+            r = tf.transform.rotation
+
+            rot = R.from_quat([r.x, r.y, r.z, r.w])
+            euler = rot.as_euler('xyz', degrees=False)
+
+            # 내부 상태 저장
+            self.latest_transform_time = tf.header.stamp
+            self.relative_translation = (t.x, t.y, t.z)
+            self.relative_euler = tuple(euler)
+
+            # self.get_logger().info(f"[{self.target_frame} w.r.t {self.base_frame}] Position: ({t.x:.3f}, {t.y:.3f}, {t.z:.3f}), Euler: ({euler[0]:.2f}, {euler[1]:.2f}, {euler[2]:.2f})")
+
+        except Exception as e:
+            self.get_logger().warn(f"[TF] Failed to lookup transform from {self.base_frame} to {self.target_frame}: {e}")
 
     def read_fts_data(self, msg):
         self.fts_data_flag = True
         self.fts_data = msg
+        
     def read_fts_data_kalman_filter(self, msg):
         self.fts_data_kalman_filter_flag = True
         self.fts_data_kalman_filter = msg
+        
     def read_fts_data_offset(self, msg):
         self.fts_data_offset = msg
 
@@ -433,16 +499,20 @@ class RecordNode(Node):
     def read_external_force(self, msg):
         self.external_force_flag = True
         self.external_force = msg
+        
+    def read_control_mode(self, msg):
+        self.control_mode_flag = True
+        self.control_mode = msg
 
     def read_dynamic_MIMO_values(self, msg):
         self.dynamic_MIMO_values_flag = True
         self.dynamic_MIMO_values = msg
 
-        if self.is_recording:
-            self.data_count_dMv += 1
-            image_file = str(self.data_count_dMv) + '_' + str(self.dynamic_MIMO_values.header.stamp.sec) + '-' + str(self.dynamic_MIMO_values.header.stamp.nanosec) +'.png'
-            cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
-            self.update_csv_dynamics_MIMO_values()
+        # if self.is_recording:
+        #     self.data_count_dMv += 1
+        #     image_file = str(self.data_count_dMv) + '_' + str(self.dynamic_MIMO_values.header.stamp.sec) + '-' + str(self.dynamic_MIMO_values.header.stamp.nanosec) +'.png'
+        #     cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
+        #     self.update_csv_dynamics_MIMO_values()
             
     def read_position_control_variables(self, msg):
         self.position_control_variables_flag = True
@@ -458,11 +528,11 @@ class RecordNode(Node):
         self.admittance_control_variables_flag = True
         self.admittance_control_variables = msg
 
-        if self.is_recording:
-            self.data_count_admittance += 1
-            image_file = str(self.data_count_admittance) + '_' + str(self.admittance_control_variables.header.stamp.sec) + '-' + str(self.admittance_control_variables.header.stamp.nanosec) +'.png'
-            cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
-            self.update_csv_admittance_control_variables()
+        # if self.is_recording:
+        #     self.data_count_admittance += 1
+        #     image_file = str(self.data_count_admittance) + '_' + str(self.admittance_control_variables.header.stamp.sec) + '-' + str(self.admittance_control_variables.header.stamp.nanosec) +'.png'
+        #     cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
+        #     self.update_csv_controller_variables()
 
 
     def create_directory(self):
@@ -478,12 +548,10 @@ class RecordNode(Node):
         if not os.path.exists(self.directory_path_image_with_estimated_angle):
             os.makedirs(self.directory_path_image_with_estimated_angle)
         self.directory_path_csv = self.directory_path
-        self.directory_path_csv_dMv = self.directory_path
-        self.directory_path_csv_admittance = self.directory_path
 
     ##################################
     def create_csv(self):
-        self.csv_file_name = os.path.join(self.directory_path_csv, 'data.csv')
+        self.csv_file_name = os.path.join(self.directory_path_csv, 'data_raw.csv')
         self.get_logger().info(f'CSV is created => name : {self.csv_file_name}')
 
         self.csv_headers = {}
@@ -516,6 +584,15 @@ class RecordNode(Node):
         self.csv_headers['fy_estimated'] = []
         self.csv_headers['theta_desired'] = []
         self.csv_headers['theta_actual'] = []
+        self.csv_headers['translation(m)(x)'] = []
+        self.csv_headers['translation(m)(y)'] = []
+        self.csv_headers['translation(m)(z)'] = []
+        self.csv_headers['Rotation(deg)(x)'] = []
+        self.csv_headers['Rotation(deg)(y)'] = []
+        self.csv_headers['Rotation(deg)(z)'] = []
+        self.csv_headers['Rotation(rad)(x)'] = []
+        self.csv_headers['Rotation(rad)(y)'] = []
+        self.csv_headers['Rotation(rad)(z)'] = []
 
 
         self.csv_file = open(self.csv_file_name, mode='w')
@@ -560,19 +637,30 @@ class RecordNode(Node):
                                  + [str(self.external_force.x)]
                                  + [str(self.external_force.y)]
                                  + [str(-self.surgical_tool_pose.angular.z)]
-                                 + [str(self.end_effector_angle)])
+                                 + [str(self.end_effector_angle)]
+                                 + [str(self.relative_translation[0])]
+                                 + [str(self.relative_translation[1])]
+                                 + [str(self.relative_translation[2])]
+                                 + [str(self.relative_euler[0])]
+                                 + [str(self.relative_euler[1])]
+                                 + [str(self.relative_euler[2])]
+                                 + [str(self.relative_euler[0]*np.pi/180)]
+                                 + [str(self.relative_euler[1]*np.pi/180)]
+                                 + [str(self.relative_euler[2]*np.pi/180)]
+                                 )
         self.csv_file.flush()
         pass
 
     ##################################
     def create_csv_dynamics_MIMO_values(self):
-        self.csv_file_name_dMv = os.path.join(self.directory_path_csv_dMv, 'data_DynamicMIMOValues.csv')
+        self.csv_file_name_dMv = os.path.join(self.directory_path_csv, 'data_DynamicMIMOValues.csv')
         self.get_logger().info(f'CSV is created => name : {self.csv_file_name_dMv}')
 
         self.csv_headers_dMv = {}
         self.csv_headers_dMv['sec'] = []
         self.csv_headers_dMv['nanosec'] = []
         self.csv_headers_dMv['image'] = []
+        self.csv_headers_dMv['control_mode'] = []
         self.csv_headers_dMv['sampling_time'] = []
         self.csv_headers_dMv['p_gain'] = []
         self.csv_headers_dMv['i_gain'] = []
@@ -624,6 +712,7 @@ class RecordNode(Node):
         actual_torque_kalman = (-1) * (10.125*0.001) * (actual_force_kalman.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force_kalman.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
 
         self.csv_writer_dMv.writerow([timestamp_sec, timestamp_nanosec, image_file]
+                                 + [str(self.control_mode.data)]
                                  + [str(self.dynamic_MIMO_values.sampling_time)]
                                  + [str(self.dynamic_MIMO_values.p_gain)]
                                  + [str(self.dynamic_MIMO_values.i_gain)]
@@ -656,84 +745,86 @@ class RecordNode(Node):
         pass
     
     ##################################
-    def create_csv_admittance_control_variables(self):
-        self.csv_file_name_admittance_control = os.path.join(self.directory_path_csv_admittance, 'data_admittance_control.csv')
-        self.get_logger().info(f'CSV is created => name : {self.csv_file_name_admittance_control}')
+    def create_csv_controller_variables(self):
+        self.csv_file_name_controller = os.path.join(self.directory_path_csv, 'data_controller.csv')
+        self.get_logger().info(f'CSV is created => name : {self.csv_file_name_controller}')
 
-        self.csv_headers_admittance = {}
-        self.csv_headers_admittance['sec'] = []
-        self.csv_headers_admittance['nanosec'] = []
-        self.csv_headers_admittance['image'] = []
-        self.csv_headers_admittance['sampling_time'] = []
+        self.csv_headers_contoller = {}
+        self.csv_headers_contoller['sec'] = []
+        self.csv_headers_contoller['nanosec'] = []
+        self.csv_headers_contoller['image'] = []
+        self.csv_headers_contoller['sampling_time'] = []
         
-        self.csv_headers_admittance['mass_x'] = []
-        self.csv_headers_admittance['mass_y'] = []
-        self.csv_headers_admittance['mass_z'] = []
-        self.csv_headers_admittance['damper_x'] = []
-        self.csv_headers_admittance['damper_y'] = []
-        self.csv_headers_admittance['damper_z'] = []
-        self.csv_headers_admittance['spring_x'] = []
-        self.csv_headers_admittance['spring_y'] = []
-        self.csv_headers_admittance['spring_z'] = []
+        self.csv_headers_contoller['control_mode'] = []
         
-        self.csv_headers_admittance['desired_force_x'] = []
-        self.csv_headers_admittance['desired_force_y'] = []
-        self.csv_headers_admittance['desired_force_z'] = []
-        self.csv_headers_admittance['env_force_x'] = []
-        self.csv_headers_admittance['env_force_y'] = []
-        self.csv_headers_admittance['env_force_z'] = []
-        self.csv_headers_admittance['delta_force_x'] = []
-        self.csv_headers_admittance['delta_force_y'] = []
-        self.csv_headers_admittance['delta_force_z'] = []
+        self.csv_headers_contoller['mass_x'] = []
+        self.csv_headers_contoller['mass_y'] = []
+        self.csv_headers_contoller['mass_z'] = []
+        self.csv_headers_contoller['damper_x'] = []
+        self.csv_headers_contoller['damper_y'] = []
+        self.csv_headers_contoller['damper_z'] = []
+        self.csv_headers_contoller['spring_x'] = []
+        self.csv_headers_contoller['spring_y'] = []
+        self.csv_headers_contoller['spring_z'] = []
         
-        self.csv_headers_admittance['x_ddot_x'] = []
-        self.csv_headers_admittance['x_ddot_y'] = []
-        self.csv_headers_admittance['x_ddot_z'] = []
-        self.csv_headers_admittance['x_dot_x'] = []
-        self.csv_headers_admittance['x_dot_y'] = []
-        self.csv_headers_admittance['x_dot_z'] = []
-        self.csv_headers_admittance['x(xf)_x'] = []
-        self.csv_headers_admittance['x(xf)_y'] = []
-        self.csv_headers_admittance['x(xf)_z'] = []
-        self.csv_headers_admittance['dt(admittance)'] = []
+        self.csv_headers_contoller['desired_force_x'] = []
+        self.csv_headers_contoller['desired_force_y'] = []
+        self.csv_headers_contoller['desired_force_z'] = []
+        self.csv_headers_contoller['env_force_x'] = []
+        self.csv_headers_contoller['env_force_y'] = []
+        self.csv_headers_contoller['env_force_z'] = []
+        self.csv_headers_contoller['delta_force_x'] = []
+        self.csv_headers_contoller['delta_force_y'] = []
+        self.csv_headers_contoller['delta_force_z'] = []
         
-        self.csv_headers_admittance['pos-p_gain'] = []
-        self.csv_headers_admittance['pos-i_gain'] = []
-        self.csv_headers_admittance['pos-d_gain'] = []
+        self.csv_headers_contoller['x_ddot_x'] = []
+        self.csv_headers_contoller['x_ddot_y'] = []
+        self.csv_headers_contoller['x_ddot_z'] = []
+        self.csv_headers_contoller['x_dot_x'] = []
+        self.csv_headers_contoller['x_dot_y'] = []
+        self.csv_headers_contoller['x_dot_z'] = []
+        self.csv_headers_contoller['x(xf)_x'] = []
+        self.csv_headers_contoller['x(xf)_y'] = []
+        self.csv_headers_contoller['x(xf)_z'] = []
+        self.csv_headers_contoller['dt(admittance)'] = []
         
-        self.csv_headers_admittance['desired_x'] = []
-        self.csv_headers_admittance['desired_y'] = []
-        self.csv_headers_admittance['desired_z'] = []
-        self.csv_headers_admittance['actual_x'] = []
-        self.csv_headers_admittance['actual_y'] = []
-        self.csv_headers_admittance['actual_z'] = []
-        self.csv_headers_admittance['error_x'] = []
-        self.csv_headers_admittance['error_y'] = []
-        self.csv_headers_admittance['error_z'] = []
+        self.csv_headers_contoller['pos-p_gain'] = []
+        self.csv_headers_contoller['pos-i_gain'] = []
+        self.csv_headers_contoller['pos-d_gain'] = []
         
-        self.csv_headers_admittance['dt(position)'] = []
-        self.csv_headers_admittance['delta_pan'] = []
-        self.csv_headers_admittance['delta_tilt'] = []
+        self.csv_headers_contoller['desired_x'] = []
+        self.csv_headers_contoller['desired_y'] = []
+        self.csv_headers_contoller['desired_z'] = []
+        self.csv_headers_contoller['actual_x'] = []
+        self.csv_headers_contoller['actual_y'] = []
+        self.csv_headers_contoller['actual_z'] = []
+        self.csv_headers_contoller['error_x'] = []
+        self.csv_headers_contoller['error_y'] = []
+        self.csv_headers_contoller['error_z'] = []
+        
+        self.csv_headers_contoller['dt(position)'] = []
+        self.csv_headers_contoller['delta_pan'] = []
+        self.csv_headers_contoller['delta_tilt'] = []
 
         for i in range(self.numofjoints):
-            self.csv_headers_admittance[f'theta_actual_rel_#{i}'] = []
+            self.csv_headers_contoller[f'theta_actual_rel_#{i}'] = []
             
         """
-        TODO mapping to self.update_csv_admittance_control_variables
+        TODO mapping to self.update_csv_controller_variables
         """        
-        self.csv_headers_admittance[f'estimated_force_x'] = []
-        self.csv_headers_admittance[f'estimated_force_y'] = []
-        self.csv_headers_admittance[f'actual_force_x (raw)'] = []
-        self.csv_headers_admittance[f'actual_force_y (raw)'] = []
-        self.csv_headers_admittance[f'actual_force_x (kalman)'] = []
-        self.csv_headers_admittance[f'actual_force_y (kalman)'] = []
+        self.csv_headers_contoller[f'estimated_force_x'] = []
+        self.csv_headers_contoller[f'estimated_force_y'] = []
+        self.csv_headers_contoller[f'actual_force_x (raw)'] = []
+        self.csv_headers_contoller[f'actual_force_y (raw)'] = []
+        self.csv_headers_contoller[f'actual_force_x (kalman)'] = []
+        self.csv_headers_contoller[f'actual_force_y (kalman)'] = []
             
-        self.csv_file_admittance = open(self.csv_file_name_admittance_control, mode='w')
-        self.csv_writer_admittance = csv.writer(self.csv_file_admittance)
-        self.csv_writer_admittance.writerow(self.csv_headers_admittance.keys())
-        self.csv_file_admittance.flush()
+        self.csv_file_controller = open(self.csv_file_name_controller, mode='w')
+        self.csv_writer_controller = csv.writer(self.csv_file_controller)
+        self.csv_writer_controller.writerow(self.csv_headers_contoller.keys())
+        self.csv_file_controller.flush()
     
-    def update_csv_admittance_control_variables(self):
+    def update_csv_controller_variables(self):
         # if not self.image_flag and not self.fts_data_flag and not self.motor_state_flag and not self.loadcell_data_flag:
         #     self.get_logger().warning(f'All data are not subscribed')
         #     return
@@ -746,8 +837,10 @@ class RecordNode(Node):
         # actual_torque = (-1) * (10.125*0.001) * (actual_force.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
         # actual_torque_kalman = (-1) * (10.125*0.001) * (actual_force_kalman.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force_kalman.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
 
-        self.csv_writer_admittance.writerow([timestamp_sec, timestamp_nanosec, image_file]
+        self.csv_writer_controller.writerow([timestamp_sec, timestamp_nanosec, image_file]
                                  + [str(self.admittance_control_variables.sampling_time)]
+                                 
+                                 + [str(self.control_mode.data)]
                                  
                                  + [str(self.admittance_control_variables.m_matrix[0])]
                                  + [str(self.admittance_control_variables.m_matrix[7])]
@@ -808,7 +901,7 @@ class RecordNode(Node):
                                  + [str(actual_force_kalman.y * 0.001)]
         )
         
-        self.csv_file_admittance.flush()
+        self.csv_file_controller.flush()
         pass
 
     #######################################
@@ -840,6 +933,8 @@ class RecordNode(Node):
                 "B_matrix": "N-s/m",
                 "K_matrix": "N/m",
                 "x_vector": "m",
+                "Translation": "m",
+                "Rotation": "deg",
             },
             "offsets": {
                 "fx": self.fts_data_offset.wrench.force.x,

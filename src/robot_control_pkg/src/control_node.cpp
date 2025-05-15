@@ -78,12 +78,14 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   position_control_msgs_publisher_ = this->create_publisher<PositionControl>("position_controller", QoS_RKL10V);
   RCLCPP_INFO(this->get_logger(), "Publisher 'position_controller' is created.");
 
+  control_mode_msgs_publisher_ = this->create_publisher<std_msgs::msg::String>("control_mode", QoS_RKL10V);
+  RCLCPP_INFO(this->get_logger(), "Publisher 'control_mode' is created.");
+
   //===============================
   // surgical tool pose(degree) publisher
   //===============================
   surgical_tool_pose_publisher_ =
     this->create_publisher<geometry_msgs::msg::Twist>("surgical_tool_pose", QoS_RKL10V);
-
   wire_length_publisher_ = 
     this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length", QoS_RKL10V);
   wire_length_velocity_publisher_ = 
@@ -950,6 +952,17 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
   return result;
 }
 
+std::string ControlNode::ControlModeToString(ControlMode mode) {
+  switch(mode) {
+    case ControlMode::kKinematics: return "kinematics";
+    case ControlMode::kDynamics: return "dynamics";
+    case ControlMode::kPosition: return "position";
+    case ControlMode::kAdmittance: return "admittance";
+    default: return "unknown";
+  }
+}
+
+
 void ControlNode::run_dynamic_control_thread() {
   RCLCPP_INFO(this->get_logger(), "dynamic control_thread is started on");
 
@@ -957,7 +970,7 @@ void ControlNode::run_dynamic_control_thread() {
     if (control_mode_ == ControlMode::kDynamics) {
       try {
         // run dynamics() code
-        /***
+        /*** 
          * @warning
          * optimazation for memory based on avoiding memory copy
          * affect to 'theta_desired', 'tension'
@@ -1047,6 +1060,10 @@ void ControlNode::run_dynamic_control_thread() {
           dynamic_MIMO_values_.input_theta = HRM_controller_.theta_input_;
 
           dynamic_MIMO_values_publisher_->publish(dynamic_MIMO_values_);
+
+          // publish control mode
+          control_mode_msgs.data = ControlModeToString(this->control_mode_);
+          control_mode_msgs_publisher_->publish(control_mode_msgs);
           this->segment_angle_op_flag_ = false;
         }
 
@@ -1107,8 +1124,6 @@ void ControlNode::run_dynamic_control_thread() {
         surgical_tool_pose.angular.z = theta_desired;
         // surgical_tool_pose.angular.y = theta_desired;
         this->surgical_tool_pose_publisher_->publish(surgical_tool_pose);
-
-        
 
 
         loop_rate_dynamics_.sleep();
@@ -1401,7 +1416,10 @@ void ControlNode::run_position_with_admittance_control_thread() {
           // publish data of controllers
           admittance_control_msgs_publisher_->publish(admittance_control_msgs_);
           position_control_msgs_publisher_->publish(position_control_msgs_);
-
+          
+          // publish control mode
+          control_mode_msgs.data = ControlModeToString(this->control_mode_);
+          control_mode_msgs_publisher_->publish(control_mode_msgs);
           /**
            * @brief update tool states (pan and tilt anlge)
            * @warning Check out the coordinate system on paper

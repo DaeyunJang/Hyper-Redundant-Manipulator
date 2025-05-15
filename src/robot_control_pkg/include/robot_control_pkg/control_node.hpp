@@ -59,6 +59,7 @@
 #include "std_msgs/msg/int32_multi_array.hpp"
 #include "std_msgs/msg/int32.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "custom_interfaces/msg/motor_state.hpp"
@@ -193,7 +194,8 @@ private:
   void publish_sine_wave_1time();
   void publish_circle_motion();
   void publish_moebius_motion();
-
+  std::string ControlModeToString(ControlMode mode);
+  
   /**
    * @brief virtual_position
    */
@@ -205,6 +207,13 @@ private:
    */
   MotorCommand motor_control_target_val_;
   rclcpp::Publisher<MotorCommand>::SharedPtr motor_control_publisher_;
+  /**
+   * @author DY
+   * @brief actual motor status subscriber
+   */
+  bool motorstate_op_flag_ = false;
+  MotorState motor_state_;
+  rclcpp::Subscription<MotorState>::SharedPtr motor_state_subscriber_;
 
   /**
    * @author DY
@@ -218,13 +227,9 @@ private:
 
   PositionControl position_control_msgs_;
   rclcpp::Publisher<PositionControl>::SharedPtr position_control_msgs_publisher_;
-  /**
-   * @author DY
-   * @brief actual motor status subscriber
-   */
-  bool motorstate_op_flag_ = false;
-  MotorState motor_state_;
-  rclcpp::Subscription<MotorState>::SharedPtr motor_state_subscriber_;
+  
+  std_msgs::msg::String control_mode_msgs_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr control_mode_msgs_publisher_;
 
   /**
    * @author DY
