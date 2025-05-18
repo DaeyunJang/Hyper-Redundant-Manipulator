@@ -1062,8 +1062,8 @@ void ControlNode::run_dynamic_control_thread() {
           dynamic_MIMO_values_publisher_->publish(dynamic_MIMO_values_);
 
           // publish control mode
-          control_mode_msgs.data = ControlModeToString(this->control_mode_);
-          control_mode_msgs_publisher_->publish(control_mode_msgs);
+          control_mode_msgs_.data = ControlModeToString(this->control_mode_);
+          control_mode_msgs_publisher_->publish(control_mode_msgs_);
           this->segment_angle_op_flag_ = false;
         }
 
@@ -1418,8 +1418,8 @@ void ControlNode::run_position_with_admittance_control_thread() {
           position_control_msgs_publisher_->publish(position_control_msgs_);
           
           // publish control mode
-          control_mode_msgs.data = ControlModeToString(this->control_mode_);
-          control_mode_msgs_publisher_->publish(control_mode_msgs);
+          control_mode_msgs_.data = ControlModeToString(this->control_mode_);
+          control_mode_msgs_publisher_->publish(control_mode_msgs_);
           /**
            * @brief update tool states (pan and tilt anlge)
            * @warning Check out the coordinate system on paper
