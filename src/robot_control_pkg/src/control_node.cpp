@@ -80,7 +80,10 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 
   control_mode_msgs_publisher_ = this->create_publisher<std_msgs::msg::String>("control_mode", QoS_RKL10V);
   RCLCPP_INFO(this->get_logger(), "Publisher 'control_mode' is created.");
-
+  // publish control mode
+  control_mode_msgs_.data = ControlModeToString(this->control_mode_);
+  control_mode_msgs_publisher_->publish(control_mode_msgs_);
+  
   //===============================
   // surgical tool pose(degree) publisher
   //===============================
@@ -712,7 +715,7 @@ void ControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gA
 
   for (int i=0; i<5; i++)
   {
-    std::cout<< "f_val" << i << ": " << f_val[i] << std::endl;
+    // std::cout<< "f_val" << i << ": " << f_val[i] << std::endl;
   }
   this->motor_control_target_val_.header.stamp = this->now();
   this->motor_control_target_val_.header.frame_id = "kinematics_motor_target_position";
@@ -778,7 +781,7 @@ void ControlNode::publish_sine_wave()
     motor_control_publisher_->publish(motor_control_target_val_);
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
-    std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
+    // std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
   }
   else if (control_mode_ == ControlMode::kDynamics) {
     double omega = 2.0 * M_PI / period_;
@@ -807,7 +810,7 @@ void ControlNode::publish_sine_wave_1time()
     motor_control_publisher_->publish(motor_control_target_val_);
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
-    std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
+    // std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
     
     if (count_ >= period_) {
       count_ = 0;
@@ -857,7 +860,7 @@ void ControlNode::publish_circle_motion()
     motor_control_publisher_->publish(motor_control_target_val_);
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
-    std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
+    // std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
   }
 }
 
@@ -871,7 +874,7 @@ void ControlNode::publish_moebius_motion()
     motor_control_publisher_->publish(motor_control_target_val_);
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;
-    std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
+    // std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
   }
 }
 

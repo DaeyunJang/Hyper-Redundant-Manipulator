@@ -445,6 +445,10 @@ class RecordNode(Node):
                 
     def compute_relative_pose(self):
         try:
+            """ reverse (base_frame) and (target_frame)
+            Since our coordinate system is defined oppositely to ROS's TF system,
+            we reverse the roles of the base frame and target frame accordingly.
+            """
             tf: TransformStamped = self.tf_buffer.lookup_transform(self.base_frame, self.target_frame, rclpy.time.Time())
             t = tf.transform.translation
             r = tf.transform.rotation
@@ -456,6 +460,11 @@ class RecordNode(Node):
             self.latest_transform_time = tf.header.stamp
             self.relative_translation = (t.x, t.y, t.z)
             self.relative_euler = tuple(euler)
+            
+            # 🔽 출력 추가
+            print(f"tf: {tf}")
+            # print(f"[TF] Relative Translation (m): {self.relative_translation}")
+            print(f"[TF] Relative Euler Angles (rad): {self.relative_euler}")
 
             # self.get_logger().info(f"[{self.target_frame} w.r.t {self.base_frame}] Position: ({t.x:.3f}, {t.y:.3f}, {t.z:.3f}), Euler: ({euler[0]:.2f}, {euler[1]:.2f}, {euler[2]:.2f})")
 
@@ -587,12 +596,12 @@ class RecordNode(Node):
         self.csv_headers['translation(m)(x)'] = []
         self.csv_headers['translation(m)(y)'] = []
         self.csv_headers['translation(m)(z)'] = []
-        self.csv_headers['Rotation(deg)(x)'] = []
-        self.csv_headers['Rotation(deg)(y)'] = []
-        self.csv_headers['Rotation(deg)(z)'] = []
         self.csv_headers['Rotation(rad)(x)'] = []
         self.csv_headers['Rotation(rad)(y)'] = []
         self.csv_headers['Rotation(rad)(z)'] = []
+        self.csv_headers['Rotation(deg)(x)'] = []
+        self.csv_headers['Rotation(deg)(y)'] = []
+        self.csv_headers['Rotation(deg)(z)'] = []
 
 
         self.csv_file = open(self.csv_file_name, mode='w')
@@ -644,9 +653,9 @@ class RecordNode(Node):
                                  + [str(self.relative_euler[0])]
                                  + [str(self.relative_euler[1])]
                                  + [str(self.relative_euler[2])]
-                                 + [str(self.relative_euler[0]*np.pi/180)]
-                                 + [str(self.relative_euler[1]*np.pi/180)]
-                                 + [str(self.relative_euler[2]*np.pi/180)]
+                                 + [str(self.relative_euler[0]*180/np.pi)]
+                                 + [str(self.relative_euler[1]*180/np.pi)]
+                                 + [str(self.relative_euler[2]*180/np.pi)]
                                  )
         self.csv_file.flush()
         pass
@@ -836,70 +845,70 @@ class RecordNode(Node):
         # N-m
         # actual_torque = (-1) * (10.125*0.001) * (actual_force.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
         # actual_torque_kalman = (-1) * (10.125*0.001) * (actual_force_kalman.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force_kalman.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
+        if self.control_mode.data in ('position', 'admittance'):
+            self.csv_writer_controller.writerow([timestamp_sec, timestamp_nanosec, image_file]
+                                    + [str(self.admittance_control_variables.sampling_time)]
+                                    
+                                    + [str(self.control_mode.data)]
+                                    
+                                    + [str(self.admittance_control_variables.m_matrix[0])]
+                                    + [str(self.admittance_control_variables.m_matrix[7])]
+                                    + [str(self.admittance_control_variables.m_matrix[14])]
+                                    + [str(self.admittance_control_variables.b_matrix[0])]
+                                    + [str(self.admittance_control_variables.b_matrix[7])]
+                                    + [str(self.admittance_control_variables.b_matrix[14])]
+                                    + [str(self.admittance_control_variables.k_matrix[0])]
+                                    + [str(self.admittance_control_variables.k_matrix[7])]
+                                    + [str(self.admittance_control_variables.k_matrix[14])]
+                                    
+                                    + [str(self.admittance_control_variables.desired_force.force.x)]
+                                    + [str(self.admittance_control_variables.desired_force.force.y)]
+                                    + [str(self.admittance_control_variables.desired_force.force.z)]
+                                    + [str(self.admittance_control_variables.env_force.force.x)]
+                                    + [str(self.admittance_control_variables.env_force.force.y)]
+                                    + [str(self.admittance_control_variables.env_force.force.z)]
+                                    + [str(self.admittance_control_variables.delta_force.force.x)]
+                                    + [str(self.admittance_control_variables.delta_force.force.y)]
+                                    + [str(self.admittance_control_variables.delta_force.force.z)]
+                                    
+                                    + [str(self.admittance_control_variables.x_ddot.position.x)]
+                                    + [str(self.admittance_control_variables.x_ddot.position.y)]
+                                    + [str(self.admittance_control_variables.x_ddot.position.z)]
+                                    + [str(self.admittance_control_variables.x_dot.position.x)]
+                                    + [str(self.admittance_control_variables.x_dot.position.y)]
+                                    + [str(self.admittance_control_variables.x_dot.position.z)]
+                                    + [str(self.admittance_control_variables.x.position.x)]
+                                    + [str(self.admittance_control_variables.x.position.y)]
+                                    + [str(self.admittance_control_variables.x.position.z)]
+                                    + [str(self.admittance_control_variables.dt)]
+                                    
+                                    + [str(self.position_control_variables.p_gain)]
+                                    + [str(self.position_control_variables.i_gain)]
+                                    + [str(self.position_control_variables.d_gain)]
+                                    
+                                    + [str(self.position_control_variables.x_desired.position.x)]
+                                    + [str(self.position_control_variables.x_desired.position.y)]
+                                    + [str(self.position_control_variables.x_desired.position.z)]
+                                    + [str(self.position_control_variables.x_actual.position.x)]
+                                    + [str(self.position_control_variables.x_actual.position.y)]
+                                    + [str(self.position_control_variables.x_actual.position.z)]
+                                    + [str(self.position_control_variables.x_error.position.x)]
+                                    + [str(self.position_control_variables.x_error.position.y)]
+                                    + [str(self.position_control_variables.x_error.position.z)]
+                                    
+                                    + [str(self.position_control_variables.dt)]
+                                    + [str(self.position_control_variables.del_theta_pan)]
+                                    + [str(self.position_control_variables.del_theta_tilt)]
 
-        self.csv_writer_controller.writerow([timestamp_sec, timestamp_nanosec, image_file]
-                                 + [str(self.admittance_control_variables.sampling_time)]
-                                 
-                                 + [str(self.control_mode.data)]
-                                 
-                                 + [str(self.admittance_control_variables.m_matrix[0])]
-                                 + [str(self.admittance_control_variables.m_matrix[7])]
-                                 + [str(self.admittance_control_variables.m_matrix[14])]
-                                 + [str(self.admittance_control_variables.b_matrix[0])]
-                                 + [str(self.admittance_control_variables.b_matrix[7])]
-                                 + [str(self.admittance_control_variables.b_matrix[14])]
-                                 + [str(self.admittance_control_variables.k_matrix[0])]
-                                 + [str(self.admittance_control_variables.k_matrix[7])]
-                                 + [str(self.admittance_control_variables.k_matrix[14])]
-                                 
-                                 + [str(self.admittance_control_variables.desired_force.force.x)]
-                                 + [str(self.admittance_control_variables.desired_force.force.y)]
-                                 + [str(self.admittance_control_variables.desired_force.force.z)]
-                                 + [str(self.admittance_control_variables.env_force.force.x)]
-                                 + [str(self.admittance_control_variables.env_force.force.y)]
-                                 + [str(self.admittance_control_variables.env_force.force.z)]
-                                 + [str(self.admittance_control_variables.delta_force.force.x)]
-                                 + [str(self.admittance_control_variables.delta_force.force.y)]
-                                 + [str(self.admittance_control_variables.delta_force.force.z)]
-                                 
-                                 + [str(self.admittance_control_variables.x_ddot.position.x)]
-                                 + [str(self.admittance_control_variables.x_ddot.position.y)]
-                                 + [str(self.admittance_control_variables.x_ddot.position.z)]
-                                 + [str(self.admittance_control_variables.x_dot.position.x)]
-                                 + [str(self.admittance_control_variables.x_dot.position.y)]
-                                 + [str(self.admittance_control_variables.x_dot.position.z)]
-                                 + [str(self.admittance_control_variables.x.position.x)]
-                                 + [str(self.admittance_control_variables.x.position.y)]
-                                 + [str(self.admittance_control_variables.x.position.z)]
-                                 + [str(self.admittance_control_variables.dt)]
-                                 
-                                 + [str(self.position_control_variables.p_gain)]
-                                 + [str(self.position_control_variables.i_gain)]
-                                 + [str(self.position_control_variables.d_gain)]
-                                 
-                                 + [str(self.position_control_variables.x_desired.position.x)]
-                                 + [str(self.position_control_variables.x_desired.position.y)]
-                                 + [str(self.position_control_variables.x_desired.position.z)]
-                                 + [str(self.position_control_variables.x_actual.position.x)]
-                                 + [str(self.position_control_variables.x_actual.position.y)]
-                                 + [str(self.position_control_variables.x_actual.position.z)]
-                                 + [str(self.position_control_variables.x_error.position.x)]
-                                 + [str(self.position_control_variables.x_error.position.y)]
-                                 + [str(self.position_control_variables.x_error.position.z)]
-                                 
-                                 + [str(self.position_control_variables.dt)]
-                                 + [str(self.position_control_variables.del_theta_pan)]
-                                 + [str(self.position_control_variables.del_theta_tilt)]
-
-                                 + [str(value) for value in self.position_control_variables.theta_actual_relative]
-                                 
-                                 + [str(self.external_force.x * 0.001)]
-                                 + [str(self.external_force.y * 0.001)]
-                                 + [str(actual_force.x * 0.001)]
-                                 + [str(actual_force.y * 0.001)]
-                                 + [str(actual_force_kalman.x * 0.001)]
-                                 + [str(actual_force_kalman.y * 0.001)]
-        )
+                                    + [str(value) for value in self.position_control_variables.theta_actual_relative]
+                                    
+                                    + [str(self.external_force.x * 0.001)]
+                                    + [str(self.external_force.y * 0.001)]
+                                    + [str(actual_force.x * 0.001)]
+                                    + [str(actual_force.y * 0.001)]
+                                    + [str(actual_force_kalman.x * 0.001)]
+                                    + [str(actual_force_kalman.y * 0.001)]
+            )
         
         self.csv_file_controller.flush()
         pass
