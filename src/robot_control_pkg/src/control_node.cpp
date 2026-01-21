@@ -89,10 +89,13 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   //===============================
   surgical_tool_pose_publisher_ =
     this->create_publisher<geometry_msgs::msg::Twist>("surgical_tool_pose", QoS_RKL10V);
+  tool_endeffector_pose_publisher_ = 
+    this->create_publisher<std_msgs::msg::Float64MultiArray>("tool_endeffector_pose", QoS_RKL10V);
   wire_length_publisher_ = 
     this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length", QoS_RKL10V);
   wire_length_velocity_publisher_ = 
     this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length_velocity", QoS_RKL10V);
+  this->tool_endeffector_pose_.data.resize(3);
   this->wire_length_.data.resize(NUM_OF_MOTORS);
   this->wire_length_velocity_.data.resize(NUM_OF_MOTORS);
 
@@ -164,7 +167,20 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         }
       }
     );
-  
+
+
+    //===============================
+  this->motor_control_target_val_.target_position.resize(NUM_OF_MOTORS);
+  this->motor_control_target_val_.target_velocity_profile.resize(NUM_OF_MOTORS);
+  for(int i=0; i<NUM_OF_MOTORS; i++) {
+    this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100;
+  }
+
+
+  this->segment_angle_relative_.data.resize(NUM_OF_JOINT);
+  for(int i=0; i<NUM_OF_JOINT; i++) {
+    this->segment_angle_relative_.data[i] = 0;
+  }
   segment_angle_relative_subscriber_ =
     this->create_subscription<std_msgs::msg::Float64MultiArray>(
       "estimated_segment_angle/relative",
@@ -1177,7 +1193,8 @@ void ControlNode::run_position_with_admittance_control_thread() {
           // DEBUG
           // this->f_env_(0) = 0.0; // N
           // this->f_env_(1) = 0.1; // N
-
+          this->f_desired_(0) = 0.02;
+          this->f_desired_(1) = 0.02;
           this->del_xf_ = this->HRM_admittance_controller_.compute(this->f_desired_, this->f_env_, admittance_params::DT);
           // calculate admittance - END
 
@@ -1304,7 +1321,7 @@ void ControlNode::run_position_with_admittance_control_thread() {
         #else
           // x_err_(1) : y-axis error
           int target_vel_profile = int(std::round(std::abs(HRM_position_controller_.x_err_(1) * 1000.0 * 10)));
-          target_vel_profile = std::min(70, target_vel_profile);
+          target_vel_profile = std::min(80, target_vel_profile);
           target_vel_profile = std::max(10, target_vel_profile);
           // std::cout << "target_vel_profile: " << target_vel_profile << std::endl;
           for (int i=0; i<NUM_OF_MOTORS; i++) { 
@@ -1441,6 +1458,25 @@ void ControlNode::run_position_with_admittance_control_thread() {
       } catch (const std::runtime_error & e) {
         RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
       }
+    }
+
+    // Update end-effector pose estimation
+    try {
+      // calculate end-effector pose
+      this->theta_actual_ = std::vector<double>(this->segment_angle_relative_.data.begin(), this->segment_angle_relative_.data.end());
+      auto tf_matrices = this->HRM_position_controller_.surgical_tool_.computeBaseToJointsTransformationMatrices(this->theta_actual_);
+      auto joints_xy = this->HRM_position_controller_.surgical_tool_.computeJointPositions(tf_matrices);
+      Eigen::Vector2d eef_xy = joints_xy.back();  // get end-effector (x,y)
+      this->x_actual_(0) = eef_xy.x();  // = eef_xy(0)
+      this->x_actual_(1) = eef_xy.y();  // = eef_xy(1)
+      tool_endeffector_pose_.data[0] = this->x_actual_(0);
+      tool_endeffector_pose_.data[1] = this->x_actual_(1);
+      
+      this->tool_endeffector_pose_publisher_->publish(tool_endeffector_pose_);
+
+      loop_rate_position_with_admittance_.sleep();
+    } catch (const std::runtime_error & e) {
+      RCLCPP_WARN(this->get_logger(), "[Update end-effector pose] Error: %s", e.what());
     }
   }
 }

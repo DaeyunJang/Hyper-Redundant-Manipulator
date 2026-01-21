@@ -241,6 +241,8 @@ private:
 
   geometry_msgs::msg::Twist surgical_tool_pose_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr surgical_tool_pose_publisher_;
+  std_msgs::msg::Float64MultiArray tool_endeffector_pose_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr tool_endeffector_pose_publisher_;
   std_msgs::msg::Float64MultiArray wire_length_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr wire_length_publisher_;
   std_msgs::msg::Float64MultiArray wire_length_velocity_;
@@ -292,7 +294,7 @@ private:
 
   rclcpp::TimerBase::SharedPtr timer_;  // 타이머는 시작과 중지를 위해 nullptr로 관리
   int timer_period_ms_ = 10;
-  float amp_deg_ = 60;  // degeree
+  float amp_deg_ = 35;  // degeree
   float amp_mm_ = 0.04;  // mm
   float period_ = 20; // secs
   float count_ = 0;

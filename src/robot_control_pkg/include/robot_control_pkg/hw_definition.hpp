@@ -26,7 +26,7 @@
 #define DIRECTION_COUPLER   1      // if not, use 1
 
 #define MOTOR_SOFTWARE_LIMIT 700000
-#define TENSION_LIMIT 3000
+#define TENSION_LIMIT 2000
 
 /** Motor control mode **/
 /**
@@ -42,7 +42,8 @@
 #define DOF               1     // Degree of freedom
 
 #define NUM_OF_JOINT      9     // ea
-#define SEGMENT_ARC       5.0  // mm
+// #define SEGMENT_ARC       5.0  // mm
+#define SEGMENT_ARC       5.85  // mm
 #define SEGMENT_DIAMETER  9     // mm
 #define WIRE_DISTANCE     3.63   // mm
 #define TOTAL_LENGTH      10.125     // mm
