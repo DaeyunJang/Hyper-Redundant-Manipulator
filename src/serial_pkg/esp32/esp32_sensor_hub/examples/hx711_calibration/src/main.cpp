@@ -17,7 +17,7 @@ void changeSavedCalFactor();
 
 void setup()
 {
-    Serial.begin(57600);
+    Serial.begin(921600);
     delay(10);
     Serial.println();
     Serial.println("Starting HX711 calibration...");
