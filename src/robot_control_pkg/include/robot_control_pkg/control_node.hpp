@@ -294,9 +294,9 @@ private:
 
   rclcpp::TimerBase::SharedPtr timer_;  // 타이머는 시작과 중지를 위해 nullptr로 관리
   int timer_period_ms_ = 10;
-  float amp_deg_ = 35;  // degeree
-  float amp_mm_ = 0.04;  // mm
-  float period_ = 20; // secs
+  float amp_deg_ = 43.5;  // degeree  38 deg is almost same in 0.03 m in position mode
+  float amp_mm_ = 0.02;  // m
+  float period_ = 30; // secs
   float count_ = 0;
   float count_add_ = timer_period_ms_ / 1000.0;
   float trajectory_ = 0;

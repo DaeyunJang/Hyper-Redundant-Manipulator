@@ -173,7 +173,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   this->motor_control_target_val_.target_position.resize(NUM_OF_MOTORS);
   this->motor_control_target_val_.target_velocity_profile.resize(NUM_OF_MOTORS);
   for(int i=0; i<NUM_OF_MOTORS; i++) {
-    this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100;
+    this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100*0.7;
   }
 
 
@@ -1321,7 +1321,7 @@ void ControlNode::run_position_with_admittance_control_thread() {
         #else
           // x_err_(1) : y-axis error
           int target_vel_profile = int(std::round(std::abs(HRM_position_controller_.x_err_(1) * 1000.0 * 10)));
-          target_vel_profile = std::min(80, target_vel_profile);
+          target_vel_profile = std::min(70, target_vel_profile);
           target_vel_profile = std::max(10, target_vel_profile);
           // std::cout << "target_vel_profile: " << target_vel_profile << std::endl;
           for (int i=0; i<NUM_OF_MOTORS; i++) { 

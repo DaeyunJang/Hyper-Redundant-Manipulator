@@ -26,8 +26,8 @@ namespace dynamics_params {
 
 // fast version MasterMACS 2000-100 - double of upper values
 inline constexpr double KP  = 250.0;
-inline constexpr double KI  = 1.0;
-inline constexpr double KD  = 30.0;
+inline constexpr double KI  = 5.0;
+inline constexpr double KD  = 50.0;
 
 inline constexpr double SAMPLING_HZ = 30.0;
 inline constexpr double DT = 1.0 / SAMPLING_HZ;
