@@ -42,8 +42,8 @@
 #define DOF               1     // Degree of freedom
 
 #define NUM_OF_JOINT      9     // ea
-// #define SEGMENT_ARC       5.0  // mm
-#define SEGMENT_ARC       5.85  // mm
+#define SEGMENT_ARC       5.0  // mm
+// #define SEGMENT_ARC       5.85  // mm
 #define SEGMENT_DIAMETER  9     // mm
 #define WIRE_DISTANCE     3.63   // mm
 #define TOTAL_LENGTH      10.125     // mm

@@ -175,6 +175,16 @@ class RecordNode(Node):
             Twist, "surgical_tool_pose", self.read_surgical_tool_pose, 1
         )
 
+        self.segment_angle_absolute_flag = False
+        self.segment_angle_absolute = Float64MultiArray()
+        self.segment_angle_absolute_subscriber = self.create_subscription(
+            Float64MultiArray,
+            "estimated_segment_angle/absolute",
+            self.read_segment_angle_absolute,
+            1,
+        )
+        self.get_logger().info("segment_angle_relative subscriber is created.")
+
         self.segment_angle_relative_flag = False
         self.segment_angle_relative = Float64MultiArray()
         self.end_effector_angle = 0
@@ -498,6 +508,11 @@ class RecordNode(Node):
         self.surgical_tool_pose_flag = True
         self.surgical_tool_pose = msg
 
+    def read_segment_angle_absolute(self, msg):
+        self.segment_angle_absolute_flag = True
+        self.segment_angle_absolute = msg
+        # self.end_effector_angle = msg.data
+
     def read_segment_angle_relative(self, msg):
         self.segment_angle_relative_flag = True
         self.segment_angle_relative = msg
@@ -611,6 +626,8 @@ class RecordNode(Node):
         for i in range(self.numofjoints):
             self.csv_headers[f"theta_actual_rel_#{i}"] = []
 
+        self.csv_headers["theta_actual_abs_eef"] = []
+
         self.csv_file = open(self.csv_file_name, mode="w")
         self.csv_writer = csv.writer(self.csv_file)
         self.csv_writer.writerow(self.csv_headers.keys())
@@ -674,6 +691,7 @@ class RecordNode(Node):
                 + [str(self.tool_endeffector_pose.data[1])]
                 + [str(self.tool_endeffector_pose.data[0])]
                 + [str(value) for value in self.segment_angle_relative.data]
+                + [str(self.segment_angle_absolute.data[-1])]
             )
             self.csv_file.flush()
         except Exception as e:
