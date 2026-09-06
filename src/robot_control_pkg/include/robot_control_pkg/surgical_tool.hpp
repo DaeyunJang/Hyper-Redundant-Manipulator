@@ -146,22 +146,22 @@ public:
    * @brief get <x,y> from given transform matrix
    * 
    * @param T Homogeneous Transfrom Matrix
-   * @return Eigen::Vector2d 
+   * @return Eigen::Vector3d
    * @example
    *  // e.g. Total 60 deg with 6 joints(10 deg each)
    *  std::vector<double> joint_angles = [0.17, 0.17, 0.17, 0.17, 0.17, 0.17];
    *  auto tf_matrices = computeBaseToJointsTransformationMatrices(joint_angles);
-   *  auto joints_xy = computeJointPositions(tf_matrices);
-   *  std::cout << joints_xy << std::endl;
+   *  auto joints_xyz = computeJointPositions(tf_matrices);
+   *  std::cout << joints_xyz << std::endl;
    */
-  Eigen::Vector2d extractXYfromTransformMatrix(const Eigen::Matrix4d& T);
+  Eigen::Vector3d extractXYZfromTransformMatrix(const Eigen::Matrix4d& T);
 
   /**
    * @brief Get the Joint Positions object
    * @param frame Group of the homogeneous transform matrix
-   * @return std::vector<Eigen::Vector2d> 
+   * @return std::vector<Eigen::Vector3d> 
    */
-  std::vector<Eigen::Vector2d> computeJointPositions(const std::vector<Eigen::Matrix4d>& transforms);
+  std::vector<Eigen::Vector3d> computeJointPositions(const std::vector<Eigen::Matrix4d>& transforms);
 
   /**
    * @brief make input variable to 'mm' unit

@@ -3,7 +3,6 @@
 #define DYNAMICS_CONTROLLER_HPP
 
 #include "HRM_dynamics_model.hpp"
-#include "damping_friction_model.hpp"
 #include "PID_controller.hpp"
 #include "surgical_tool.hpp"
 
@@ -24,7 +23,6 @@ public:
     // PID 제어기의 게인 설정
     PIDController pid_controller_;
     HRMDynamicsModel hrm_dynamics_model_;
-    DampingFrictionModel damping_friction_model_;
     SurgicalTool surgical_tool_;
 
     void initialize();

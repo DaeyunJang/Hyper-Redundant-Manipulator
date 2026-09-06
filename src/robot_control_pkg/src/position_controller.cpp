@@ -57,7 +57,7 @@ std::vector<double> PositionController::update(
    * @brief get wire length from IK.
    * @warning If operate 2-DOF manipulation, then substitute the tilt-anle
    */
-  auto wire_length_to_move = this->surgical_tool_.get_IK_result(final_theta_input_pan, del_theta_tilt_, 0);
+  auto wire_length_to_move = this->surgical_tool_.get_IK_result(final_theta_input_pan, final_theta_input_tilt, 0);
 
   return wire_length_to_move;
 }

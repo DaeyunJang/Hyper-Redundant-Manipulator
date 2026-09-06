@@ -22,6 +22,7 @@ set(msg_files
   "msg/DynamicMIMOValues.msg"
   "msg/AdmittanceControl.msg"
   "msg/PositionControl.msg"
+  "msg/SegmentAngle.msg"
 )
 
 set(srv_files

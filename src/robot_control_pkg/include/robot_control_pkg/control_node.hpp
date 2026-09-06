@@ -68,6 +68,7 @@
 #include "custom_interfaces/msg/dynamic_mimo_values.hpp"
 #include "custom_interfaces/msg/admittance_control.hpp"
 #include "custom_interfaces/msg/position_control.hpp"
+#include "custom_interfaces/msg/segment_angle.hpp"
 #include "custom_interfaces/srv/move_motor_direct.hpp"
 #include "custom_interfaces/srv/move_tool_angle.hpp"
 #include "custom_interfaces/srv/set_goal_position.hpp"
@@ -102,14 +103,17 @@ public:
   using DynamicMIMOValues = custom_interfaces::msg::DynamicMIMOValues;
   using AdmittanceControl = custom_interfaces::msg::AdmittanceControl;
   using PositionControl = custom_interfaces::msg::PositionControl;
+  using SegmentAngle = custom_interfaces::msg::SegmentAngle;
   using MoveMotorDirect = custom_interfaces::srv::MoveMotorDirect;
   using MoveToolAngle = custom_interfaces::srv::MoveToolAngle;
   using SetGoalPosition = custom_interfaces::srv::SetGoalPosition;
   using SetControlMode = custom_interfaces::srv::SetControlMode;
 
   // Common values
-  std::vector<double> theta_actual_;
-  std::vector<double> omega_actual_;
+  std::vector<double> theta_pan_actual_;
+  std::vector<double> theta_tilt_actual_;
+  std::vector<double> omega_pan_actual_;
+  std::vector<double> omega_tilt_actual_;
 
 
   /**
@@ -261,18 +265,10 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr external_force_subscriber_;
 
   bool segment_angle_op_flag_ = false;
-  std_msgs::msg::Float64MultiArray segment_angle_relative_;
-  std_msgs::msg::Float64MultiArray segment_angle_relative_prev_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angle_relative_subscriber_;
-  std_msgs::msg::Float64MultiArray segment_angle_absolute_;
-  std_msgs::msg::Float64MultiArray segment_angle_absolute_prev_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angle_absolute_subscriber_;
-
-  bool segment_angular_velocity_op_flag_ = false;
-  std_msgs::msg::Float64MultiArray segment_angular_velocity_relative_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angular_velocity_relative_subscriber_;
-  std_msgs::msg::Float64MultiArray segment_angular_velocity_absolute_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angular_velocity_absolute_subscriber_;
+  SegmentAngle segment_angle_;
+  std::vector<double> segment_angle_pan_absolute_prev_;
+  std::vector<double> segment_angle_tilt_absolute_prev_;
+  rclcpp::Subscription<SegmentAngle>::SharedPtr segment_angle_subscriber_;
 
 
   /**

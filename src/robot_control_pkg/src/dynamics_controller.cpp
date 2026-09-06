@@ -31,7 +31,6 @@ std::vector<double> DynamicsController::compute(
      * @todo length of manipulator should be calculated from the segment_estimation_package
      */
     double kLength = TOTAL_LENGTH * 0.001;    // temp
-    double kCenterToHole = WIRE_DISTANCE * 0.001;    // mm
     // data initializing
     theta_actual_ = theta_actual;
     dtheta_dt_actual_ = dtheta_dt_actual;
@@ -55,28 +54,8 @@ std::vector<double> DynamicsController::compute(
     torque_input_ = pid_controller_.compute_output(theta_desired, end_effector_theta_actual_, dt);
 
     if (hrm_controller_enable == true) {
-        // Find B and F_friction
-        int mode = damping_friction_model_.mode_;
-
-        // 각 요소의 값
-        double divided_value = cable_velocity_actual_[0] / NUM_OF_JOINT;
-        double divided_prev_value = cable_velocity_actual_prev_[0] /NUM_OF_JOINT;
-        // n개 크기의 배열 생성 및 값 할당
-        std::vector<double> cable_velocity(NUM_OF_JOINT, divided_value);
-        std::vector<double> cable_prev_velocity(NUM_OF_JOINT, divided_prev_value);
-
-        auto [B, res_friction, cmode] = damping_friction_model_.compute_dampingCoeff_and_friction(
-            theta_actual_,
-            dtheta_dt_actual_,
-            cable_velocity,
-            theta_actual_prev_,
-            dtheta_dt_actual_prev_,
-            cable_prev_velocity,
-            tension,
-            mode);
-        
-        // hrm_dynamics_model_.update_inertia(0.02);
-        hrm_dynamics_model_.update_damping_coefficient(B);
+        // The damping/friction estimation model is not used.
+        hrm_dynamics_model_.update_damping_coefficient(dynamics_params::DAMPING);
 
         /**
          * @brief
@@ -89,7 +68,7 @@ std::vector<double> DynamicsController::compute(
          */
         // std::cout << "dandf0: " << dandf_[0] << " dandf1: " << dandf_[1] << std::endl;
         tau_ext_ = (-1) * kLength * (force_external[0]*cos(end_effector_theta_actual_) - force_external[1]*sin(end_effector_theta_actual_));
-        tau_friction_ = kCenterToHole * res_friction;
+        tau_friction_ = 0.0;
 
         // calculate angular acceleration
         theta_ddot_input_ = hrm_dynamics_model_.compute_angular_acceleration(

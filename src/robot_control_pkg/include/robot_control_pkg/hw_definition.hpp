@@ -15,7 +15,7 @@
 // Motor Parameters
 //===============================
 #define OP_MODE             0x08  // CSP:0x08 CSV:0x09
-#define NUM_OF_MOTORS       2
+#define NUM_OF_MOTORS       4
 #define GEAR_RATIO          51
 #define GEAR_RATIO_44       44
 #define GEAR_RATIO_3_9      3.9

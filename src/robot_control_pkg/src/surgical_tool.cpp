@@ -122,14 +122,14 @@ std::vector<Eigen::Matrix4d> SurgicalTool::computeBaseToJointsTransformationMatr
 	return transform_matrices;
 }
 
-Eigen::Vector2d SurgicalTool::extractXYfromTransformMatrix(const Eigen::Matrix4d& T) {
-    return Eigen::Vector2d(T(0, 3), T(1, 3));
+Eigen::Vector3d SurgicalTool::extractXYZfromTransformMatrix(const Eigen::Matrix4d& T) {
+    return Eigen::Vector3d(T(0, 3), T(1, 3), T(2,3));
 }
 
-std::vector<Eigen::Vector2d> SurgicalTool::computeJointPositions(const std::vector<Eigen::Matrix4d>& transforms) {
-    std::vector<Eigen::Vector2d> positions;
+std::vector<Eigen::Vector3d> SurgicalTool::computeJointPositions(const std::vector<Eigen::Matrix4d>& transforms) {
+    std::vector<Eigen::Vector3d> positions;
     for (const auto& T : transforms) {
-        positions.push_back(extractXYfromTransformMatrix(T));
+        positions.push_back(extractXYZfromTransformMatrix(T));
     }
     return positions;
 }
