@@ -40,8 +40,6 @@ inline constexpr double INERTIA = 0.01;
 inline constexpr double DAMPING = 0.0;
 inline constexpr double STIFFNESS = 2.0;
 
-inline constexpr int FRICTION_MODE = 2;
-
 } // namespace dynamics
 
 

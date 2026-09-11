@@ -32,7 +32,7 @@
  * @author DY
  * @brief Setting Motor
  */
-#define NUM_OF_MOTORS 2
+#define NUM_OF_MOTORS 4
 #define SINEWAVE_TEST 0  // setting mode : 0-non sine wave / 1-sine wave
 #define TCP_SHOW 0       // 0 : none / 1-show send & recv msg of devices
 

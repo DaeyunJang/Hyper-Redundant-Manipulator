@@ -24,7 +24,7 @@ from std_srvs.srv import SetBool
 from custom_interfaces.msg import LoadcellState
 from custom_interfaces.msg import DataFilterSetting
 
-usb_device_path = "/dev/ttyACM0"  # USB 장치의 경로에 맞게 변경하세요
+usb_device_path = "/dev/ttyUSB0"  # USB 장치의 경로에 맞게 변경하세요
 
 # USB 장치에 대한 권한 변경 명령어
 command = f"sudo chmod 666 {usb_device_path}"
@@ -33,7 +33,7 @@ class SerialNode(Node):
 
     def __init__(self):
         super().__init__('serial_node')
-        self.declare_parameter('qos_depth', 10)
+        self.declare_parameter('qos_depth', 1)
         qos_depth = self.get_parameter('qos_depth').value
         # self.declare_parameter('')
         # self.add_on_set_parameters_callback(self.update_parameter)
@@ -60,7 +60,7 @@ class SerialNode(Node):
             'fts_data_offset',
             QOS_RKL10V
         )
-        
+
         self.loadcell_publisher = self.create_publisher(
             LoadcellState,
             'loadcell_state',
@@ -79,7 +79,6 @@ class SerialNode(Node):
             QOS_RKL10V
         )
 
-        
         # self.LPF_state = Bool()
         # self.LPF_state.data = False
         # self.get_logger().info(f'LPF_state: {self.LPF_state.data}')
@@ -106,8 +105,8 @@ class SerialNode(Node):
 
         self.create_service(SetBool, '/serial_data/set_zero', self.set_zero_callback)
 
-        self.serial_port = '/dev/ttyACM0'  # 사용하는 시리얼 포트(COM 포트)를 지정하세요.
-        self.baudrate = 115200  # 아두이노와 통신하는 속도
+        self.serial_port = usb_device_path  # 사용하는 시리얼 포트(COM 포트)를 지정하세요.
+        self.baudrate = 921600  # 아두이노와 통신하는 속도
         self.ser = None
         while self.ser is None or not self.ser.is_open:
             try:
@@ -127,18 +126,18 @@ class SerialNode(Node):
 
         self.offset_force3d = np.zeros((1,3))
         self.offset_torque3d = np.zeros((1,3))
-        self.offset_loadcell_weight = np.zeros((1,2))
+        self.offset_loadcell_weight = np.zeros((1,4))
 
-        self.loadcell_weight = np.zeros((1,2))
+        self.loadcell_weight = np.zeros((1,4))
 
         self.data_filter_setting = DataFilterSetting()
         self.filter_weight_sensitivity = 0.3
         self.size_maf = 5   # default size of moving average filter
-        
+
         self.buffer_count = 0
         self.force3d_buffer = np.zeros((self.size_maf,3))
         self.torque3d_buffer = np.zeros((self.size_maf,3))
-        self.loadcell_weight_buffer = np.zeros((self.size_maf,2))
+        self.loadcell_weight_buffer = np.zeros((self.size_maf,4))
 
         self.serial_lock = threading.Lock()
         while True:
@@ -148,7 +147,6 @@ class SerialNode(Node):
                 break
         self.serial_thread = threading.Thread(target=self.read_serial_data)
         self.serial_thread.start()
-        
 
     def data_filter_setting_callback(self, msg):
         self.data_filter_setting = msg
@@ -156,10 +154,9 @@ class SerialNode(Node):
             self.size_maf = msg.maf_buffer_size
             self.force3d_buffer = np.zeros((self.size_maf,3))
             self.torque3d_buffer = np.zeros((self.size_maf,3))
-            self.loadcell_weight_buffer = np.zeros((self.size_maf,2))
+            self.loadcell_weight_buffer = np.zeros((self.size_maf,4))
 
         # self.force3d_buffer
-    
 
     # def LPF_state_callback(self, msg):
     #     self.LPF_state = msg
@@ -209,6 +206,8 @@ class SerialNode(Node):
         msg.header.frame_id = 'loadcell_state'
         msg.stress.append(self.loadcell_weight.squeeze()[0])
         msg.stress.append(self.loadcell_weight.squeeze()[1])
+        msg.stress.append(self.loadcell_weight.squeeze()[2])
+        msg.stress.append(self.loadcell_weight.squeeze()[3])
         # msg.stress.append(self.loadcell_weight.squeeze()[1]+80)
         self.loadcell_publisher.publish(msg)
 
@@ -218,7 +217,7 @@ class SerialNode(Node):
         offset_msg.stress.append(self.offset_loadcell_weight.squeeze()[0])
         offset_msg.stress.append(self.offset_loadcell_weight.squeeze()[1])
         self.loadcell_offset_publisher.publish(offset_msg)
-    
+
     # Function of creating 'Kalman filter' - filterpy
     def create_kalman_filter(self, dim_x=1, dim_z=1, F=1, H=1, x_init=0, P=1, Q=1e-1, R=1e2):
         kf = KalmanFilter(dim_x=dim_x, dim_z=dim_z)
@@ -235,7 +234,7 @@ class SerialNode(Node):
             self.get_logger().info('Start serial reading')
             while True:
                 with self.serial_lock:
-                # 시리얼 데이터 읽기
+                    # 시리얼 데이터 읽기
                     try:
                         # serial_data = ser.readline()  # binary(ASCII)
                         serial_data = self.ser.readline().decode('utf-8', errors='ignore').rstrip()
@@ -253,20 +252,19 @@ class SerialNode(Node):
                             if self.data_filter_setting.set_lpf == True:
                                 self.force3d = (1-self.data_filter_setting.lpf_weight) * self.force3d + self.data_filter_setting.lpf_weight * (np.asarray(parsing_data[0:3]) - self.offset_force3d)
                                 self.torque3d = (1-self.data_filter_setting.lpf_weight) * self.torque3d + self.data_filter_setting.lpf_weight * (np.asarray(parsing_data[3:6]) - self.offset_torque3d)
-                                self.loadcell_weight = (1-self.data_filter_setting.lpf_weight) * self.loadcell_weight + self.data_filter_setting.lpf_weight * (np.asarray(parsing_data[6:8]) - self.offset_loadcell_weight)
+                                self.loadcell_weight = (1-self.data_filter_setting.lpf_weight) * self.loadcell_weight + self.data_filter_setting.lpf_weight * (np.asarray(parsing_data[6:10]) - self.offset_loadcell_weight)
                                 # self.get_logger().info(f'LPF: {self.force3d}')
-                                
+
                             else:   # raw data
                                 # self.get_logger().info(f'Raw(offset X): {np.asarray(parsing_data[0:3])}')
                                 self.force3d = np.asarray(parsing_data[0:3]) - np.asarray(self.offset_force3d)
                                 self.torque3d = np.asarray(parsing_data[3:6]) - np.asarray(self.offset_torque3d)
-                                self.loadcell_weight = np.asarray(parsing_data[6:8]) - np.asarray(self.offset_loadcell_weight)
+                                self.loadcell_weight = np.asarray(parsing_data[6:10]) - np.asarray(self.offset_loadcell_weight)
                                 # self.get_logger().info(f'Raw(offset O): {self.force3d}')
-                                
+
                             self.force3d = np.reshape(self.force3d, (1,3))
                             self.torque3d = np.reshape(self.torque3d, (1,3))
-                            self.loadcell_weight = np.reshape(self.loadcell_weight, (1,2))
-                            
+                            self.loadcell_weight = np.reshape(self.loadcell_weight, (1,4))
 
                             ############################################################################################
                             if self.data_filter_setting.set_maf == True:
@@ -275,7 +273,7 @@ class SerialNode(Node):
                                 self.torque3d = self.MovingAverageFilter(self.torque3d_buffer, self.torque3d)
                                 self.loadcell_weight = self.MovingAverageFilter(self.loadcell_weight_buffer, self.loadcell_weight)
                                 # self.get_logger().info(f'MAF result_dim {self.force3d.ndim} / shape={self.force3d.shape}')
-                                
+
                                 # Moving average buffer set
                                 self.force3d_buffer = np.delete(self.force3d_buffer, 0, axis=0)
                                 self.force3d_buffer = np.append(self.force3d_buffer, self.force3d, axis=0)
@@ -303,20 +301,19 @@ class SerialNode(Node):
                                 kf.predict()
                                 kf.update(self.forcetorque6d[ft_sensor_id])
                                 self.forcetorque6d_kalman[ft_sensor_id] = kf.x[0]
-                            
+
                             self.force3d_kf = self.forcetorque6d_kalman[:3].reshape(1, 3)
                             self.torque3d_kf = self.forcetorque6d_kalman[3:].reshape(1, 3)
-                            
 
                             # self.get_logger().info(f'Final: {self.force3d}')
                             # self.get_logger().info(f'==========================================')
 
                             self.publishall()
-                            
+
                         except ValueError as e:
                             self.get_logger().warning(f'(read) Error : {e}')
                             pass
-                        
+
         except KeyboardInterrupt:
             self.get_logger().warning('Keyboard Interrupt')
         finally:
@@ -362,7 +359,7 @@ class SerialNode(Node):
                                         # self.get_logger().info(f'[{count}]parsing data = {parsing_data}')
                                         force_3d.append(parsing_data[0:3])
                                         torque_3d.append(parsing_data[3:6])
-                                        # lc.append(parsing_data[6:8])
+                                        # lc.append(parsing_data[6:10])
                                         count = count + 1
                                     # self.publishall()
                                 except ValueError as e:
@@ -375,9 +372,9 @@ class SerialNode(Node):
                         serial_data = ''
                     finally:
                         pass
-            
+
             self.get_logger().info(f'{self.serial_lock}')
-            
+
             # self.offset_force3d = int(np.array(force_3d).mean(axis=0))
             # self.offset_torque3d = int(np.array(torque_3d).mean(axis=0))
             # self.offset_loadcell_weight = int(np.array(lc).mean(axis=0))
@@ -385,7 +382,7 @@ class SerialNode(Node):
             self.offset_force3d = np.asarray(force_3d).mean(axis=0).astype(int)
             self.offset_torque3d = np.asarray(torque_3d).mean(axis=0).astype(int)
             # self.offset_loadcell_weight = np.asarray(lc).mean(axis=0).astype(int)
-            
+
             self.get_logger().warning(f'offset_force3d : {self.offset_force3d}')
             self.get_logger().warning(f'offset_torque3d: {self.offset_torque3d}')
             self.get_logger().warning(f'offset_loadcell_weight: {self.offset_loadcell_weight}')
@@ -418,7 +415,7 @@ class SerialNode(Node):
             response.success = False
             response.message = 'Error is up during setting zero.'
             pass
-        
+
         return response
 
     def parse_serial_data(self, str: str):
@@ -438,7 +435,6 @@ class SerialNode(Node):
             self.get_logger().warning(f'Error while parsing input string: {e}')
             return None
 
-
     def MovingAverageFilter(self, prev_data, new_data):
         # self.get_logger().info(f'[{self.buffer_count}] prev: {prev_data} / new: {new_data}')
         # if len(prev_data[0]) != len(new_data):
@@ -452,7 +448,6 @@ class SerialNode(Node):
         self.buffer_count = self.buffer_count +1
         return avg
 
-    
 
 def main(args=None):
     rclpy.init(args=args)

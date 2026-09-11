@@ -16,7 +16,7 @@ PositionController::~PositionController() {};
 void PositionController::initialize() {
     pid_controller_pan_.set_PID_gains(position_control_params::KP, position_control_params::KI, position_control_params::KD);
     pid_controller_tilt_.set_PID_gains(position_control_params::KP, position_control_params::KI, position_control_params::KD);
-    surgical_tool_.init_surgical_tool(NUM_OF_JOINT, SEGMENT_ARC, SEGMENT_DIAMETER, WIRE_DISTANCE, SHIFT, SEGMENT_ARC_CENTER_TO_SEGMENT_CENTER);
+    surgical_tool_.init_surgical_tool(NUM_OF_JOINT_PAIRS, SEGMENT_ARC, SEGMENT_DIAMETER, WIRE_DISTANCE, SHIFT, SEGMENT_ARC_CENTER_TO_SEGMENT_CENTER);
 }
 
 std::vector<double> PositionController::update(
@@ -57,7 +57,7 @@ std::vector<double> PositionController::update(
    * @brief get wire length from IK.
    * @warning If operate 2-DOF manipulation, then substitute the tilt-anle
    */
-  auto wire_length_to_move = this->surgical_tool_.get_IK_result(final_theta_input_pan, del_theta_tilt_, 0);
+  auto wire_length_to_move = this->surgical_tool_.get_IK_result(final_theta_input_pan, final_theta_input_tilt, 0);
 
   return wire_length_to_move;
 }

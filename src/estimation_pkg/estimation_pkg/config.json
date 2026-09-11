@@ -1,0 +1,41 @@
+{
+    "num_of_segments": 19,
+    "num_of_bending_joints": 18,
+    "num_of_joint_pairs": 9,
+    "num_of_pan_joints": 9,
+    "num_of_tilt_joints": 9,
+    "length_of_segment": 4.33,
+    "proximal_offset_length": 4.33,
+    "bending_joint_spacing": 4.33,
+    "distal_offset_length": 4.33,
+    "curve_dense_samples": 1001,
+    "base_frame_id": "hrm_base",
+    "base_in_camera_rotation_y_deg": -90.0,
+    "base_in_camera_rotation_z_deg": -45.0,
+    "performance": {
+        "opencv_num_threads": 1,
+        "debug_timing_enabled": false,
+        "debug_rate_enabled": false,
+        "timing_log_interval_frames": 60,
+        "rate_log_interval_sec": 5.0,
+        "visualization_curve_max_points": 251
+    },
+    "filters": {
+        "base_origin_initial_average": {
+            "enabled": true,
+            "sample_count": 15
+        },
+        "depth_neighborhood_median": {
+            "enabled": true,
+            "kernel_size": 5,
+            "min_valid_samples": 3
+        },
+        "joint_kalman": {
+            "enabled": true,
+            "measurement_std_deg": 0.5,
+            "process_acceleration_std_deg_s2": 300.0,
+            "initial_angle_std_deg": 5.0,
+            "initial_velocity_std_deg_s": 20.0
+        }
+    }
+}

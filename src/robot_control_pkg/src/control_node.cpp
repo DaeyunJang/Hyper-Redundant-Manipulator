@@ -18,10 +18,21 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   loop_rate_dynamics_(dynamics_params::SAMPLING_HZ),
   loop_rate_position_with_admittance_(position_control_params::SAMPLING_HZ)
 {
-  this->declare_parameter("qos_depth", 10);
-  int8_t qos_depth = this->get_parameter("qos_depth", qos_depth);
-
-  this->declare_parameter<int>("control_mode", ControlMode::kKinematics);
+  const int qos_depth = std::max(
+    1, static_cast<int>(this->declare_parameter<int>("qos_depth", 1)));
+  const int initial_control_mode = static_cast<int>(
+    this->declare_parameter<int>(
+      "control_mode", ControlMode::kKinematics));
+  if (initial_control_mode >= ControlMode::kKinematics &&
+      initial_control_mode <= ControlMode::kAdmittance)
+  {
+    control_mode_ = static_cast<ControlMode>(initial_control_mode);
+  } else {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "Invalid initial control_mode=%d; using kinematics.",
+      initial_control_mode);
+  }
   std::cout << "------------------------------------" <<std::endl;
   std::cout << "control_mode_: " << control_mode_ << std::endl;
   std::cout << "------------------------------------" <<std::endl;
@@ -29,7 +40,6 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   this->declare_parameter<double>("dynamics/p_gain", dynamics_params::KP);
   this->declare_parameter<double>("dynamics/i_gain", dynamics_params::KI);
   this->declare_parameter<double>("dynamics/d_gain", dynamics_params::KD);
-  this->declare_parameter<int>("dynamics/friction_mode", dynamics_params::FRICTION_MODE);
   this->declare_parameter<bool>("dynamics/HRM_controller_enable", true);
 
   // admittance controller
@@ -47,8 +57,11 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
     std::bind(&ControlNode::parameter_callback, this, std::placeholders::_1)
   );
 
-  const auto QoS_RKL10V =
+  const auto qos_reliable_latest =
   rclcpp::QoS(rclcpp::KeepLast(qos_depth)).reliable().durability_volatile();
+
+  fk_tf_broadcaster_ =
+    std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
   //===============================
   // target value publisher
@@ -58,7 +71,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   for(int i=0; i<NUM_OF_MOTORS; i++) {
     this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100;
   }
-  motor_control_publisher_ = this->create_publisher<MotorCommand>("motor_command", QoS_RKL10V);
+  motor_control_publisher_ = this->create_publisher<MotorCommand>("motor_command", qos_reliable_latest);
   RCLCPP_INFO(this->get_logger(), "Publisher 'motor_command' is created.");
   
   //===============================
@@ -69,16 +82,16 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   // for(int i=0; i<NUM_OF_MOTORS; i++) {
   //   this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100/10;
   // }
-  dynamic_MIMO_values_publisher_ = this->create_publisher<DynamicMIMOValues>("dynamic_MIMO_values", QoS_RKL10V);
+  dynamic_MIMO_values_publisher_ = this->create_publisher<DynamicMIMOValues>("dynamic_MIMO_values", qos_reliable_latest);
   RCLCPP_INFO(this->get_logger(), "Publisher 'dynamic_MIMO_values' is created.");
 
-  admittance_control_msgs_publisher_ = this->create_publisher<AdmittanceControl>("admittance_controller", QoS_RKL10V);
+  admittance_control_msgs_publisher_ = this->create_publisher<AdmittanceControl>("admittance_controller", qos_reliable_latest);
   RCLCPP_INFO(this->get_logger(), "Publisher 'admittance_controller' is created.");
 
-  position_control_msgs_publisher_ = this->create_publisher<PositionControl>("position_controller", QoS_RKL10V);
+  position_control_msgs_publisher_ = this->create_publisher<PositionControl>("position_controller", qos_reliable_latest);
   RCLCPP_INFO(this->get_logger(), "Publisher 'position_controller' is created.");
 
-  control_mode_msgs_publisher_ = this->create_publisher<std_msgs::msg::String>("control_mode", QoS_RKL10V);
+  control_mode_msgs_publisher_ = this->create_publisher<std_msgs::msg::String>("control_mode", qos_reliable_latest);
   RCLCPP_INFO(this->get_logger(), "Publisher 'control_mode' is created.");
   // publish control mode
   control_mode_msgs_.data = ControlModeToString(this->control_mode_);
@@ -88,13 +101,13 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   // surgical tool pose(degree) publisher
   //===============================
   surgical_tool_pose_publisher_ =
-    this->create_publisher<geometry_msgs::msg::Twist>("surgical_tool_pose", QoS_RKL10V);
+    this->create_publisher<geometry_msgs::msg::Twist>("surgical_tool_pose", qos_reliable_latest);
   tool_endeffector_pose_publisher_ = 
-    this->create_publisher<std_msgs::msg::Float64MultiArray>("tool_endeffector_pose", QoS_RKL10V);
+    this->create_publisher<std_msgs::msg::Float64MultiArray>("tool_endeffector_pose", qos_reliable_latest);
   wire_length_publisher_ = 
-    this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length", QoS_RKL10V);
+    this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length", qos_reliable_latest);
   wire_length_velocity_publisher_ = 
-    this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length_velocity", QoS_RKL10V);
+    this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length_velocity", qos_reliable_latest);
   this->tool_endeffector_pose_.data.resize(3);
   this->wire_length_.data.resize(NUM_OF_MOTORS);
   this->wire_length_velocity_.data.resize(NUM_OF_MOTORS);
@@ -109,7 +122,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   motor_state_subscriber_ =
     this->create_subscription<MotorState>(
       "motor_state",
-      QoS_RKL10V,
+      qos_reliable_latest,
       [this] (const MotorState::SharedPtr msg) -> void
       {
         RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /motor_state.");
@@ -136,7 +149,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   loadcell_data_subscriber_ =
     this->create_subscription<custom_interfaces::msg::LoadcellState>(
       "loadcell_state",
-      QoS_RKL10V,
+      qos_reliable_latest,
       [this] (const custom_interfaces::msg::LoadcellState::SharedPtr msg) -> void
       {
         try {
@@ -154,7 +167,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   external_force_subscriber_ =
     this->create_subscription<geometry_msgs::msg::Vector3>(
       "estimated_external_force",
-      QoS_RKL10V,
+      qos_reliable_latest,
       [this] (const geometry_msgs::msg::Vector3::SharedPtr msg) -> void
       {
         try {
@@ -177,72 +190,55 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   }
 
 
-  this->segment_angle_relative_.data.resize(NUM_OF_JOINT);
-  for(int i=0; i<NUM_OF_JOINT; i++) {
-    this->segment_angle_relative_.data[i] = 0;
-  }
-  segment_angle_relative_subscriber_ =
-    this->create_subscription<std_msgs::msg::Float64MultiArray>(
-      "estimated_segment_angle/relative",
-      QoS_RKL10V,
-      [this] (const std_msgs::msg::Float64MultiArray::SharedPtr msg) -> void
+  this->segment_angle_.pan_relative.resize(NUM_OF_BENDING_JOINTS, 0.0);
+  this->segment_angle_.pan_absolute.resize(NUM_OF_BENDING_JOINTS, 0.0);
+  this->segment_angle_.tilt_relative.resize(NUM_OF_BENDING_JOINTS, 0.0);
+  this->segment_angle_.tilt_absolute.resize(NUM_OF_BENDING_JOINTS, 0.0);
+  this->segment_angle_.pan_angular_velocity_relative.resize(NUM_OF_BENDING_JOINTS, 0.0);
+  this->segment_angle_.pan_angular_velocity_absolute.resize(NUM_OF_BENDING_JOINTS, 0.0);
+  this->segment_angle_.tilt_angular_velocity_relative.resize(NUM_OF_BENDING_JOINTS, 0.0);
+  this->segment_angle_.tilt_angular_velocity_absolute.resize(NUM_OF_BENDING_JOINTS, 0.0);
+
+  segment_angle_subscriber_ =
+    this->create_subscription<SegmentAngle>(
+      "estimated_segment_angle",
+      qos_reliable_latest,
+      [this] (const SegmentAngle::SharedPtr msg) -> void
       {
         try {
-          this->segment_angle_op_flag_ = true;
-          this->segment_angle_relative_.data = msg->data;
+          const auto joint_count =
+            static_cast<std::size_t>(NUM_OF_BENDING_JOINTS);
+          if (msg->pan_relative.size() != joint_count ||
+              msg->pan_absolute.size() != joint_count ||
+              msg->tilt_relative.size() != joint_count ||
+              msg->tilt_absolute.size() != joint_count ||
+              msg->pan_angular_velocity_relative.size() != joint_count ||
+              msg->pan_angular_velocity_absolute.size() != joint_count ||
+              msg->tilt_angular_velocity_relative.size() != joint_count ||
+              msg->tilt_angular_velocity_absolute.size() != joint_count)
+          {
+            RCLCPP_WARN(
+              this->get_logger(),
+              "Ignoring estimated_segment_angle: every array must contain %d joints.",
+              NUM_OF_BENDING_JOINTS);
+            return;
+          }
 
-          RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/relative.");
-        } catch (const std::runtime_error & e) {
-          RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
-        }
-      }
-    );
-  segment_angle_absolute_subscriber_ =
-    this->create_subscription<std_msgs::msg::Float64MultiArray>(
-      "estimated_segment_angle/absolute",
-      QoS_RKL10V,
-      [this] (const std_msgs::msg::Float64MultiArray::SharedPtr msg) -> void
-      {
-        try {
-          this->segment_angle_op_flag_ = true;
-          this->segment_angle_absolute_.data = msg->data;
-
-          RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/absolute.");
-        } catch (const std::runtime_error & e) {
-          RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
-        }
-      }
-    );
-
-  segment_angular_velocity_relative_subscriber_ =
-    this->create_subscription<std_msgs::msg::Float64MultiArray>(
-      "estimated_segment_angular_velocity/relative",
-      QoS_RKL10V,
-      [this] (const std_msgs::msg::Float64MultiArray::SharedPtr msg) -> void
-      {
-        try {
-          this->segment_angular_velocity_op_flag_ = true;
-          this->segment_angular_velocity_relative_.data = msg->data;
-
-          RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/relative.");
-        } catch (const std::runtime_error & e) {
-          RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
-        }
-      }
-    );
-
-  segment_angular_velocity_absolute_subscriber_ =
-    this->create_subscription<std_msgs::msg::Float64MultiArray>(
-      "estimated_segment_angular_velocity/absolute",
-      QoS_RKL10V,
-      [this] (const std_msgs::msg::Float64MultiArray::SharedPtr msg) -> void
-      {
-        try {
-          this->segment_angular_velocity_op_flag_ = true;
-          this->segment_angular_velocity_absolute_.data = msg->data;
-
-          RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle/absolute.");
-        } catch (const std::runtime_error & e) {
+          {
+            std::lock_guard<std::mutex> lock(this->segment_angle_mutex_);
+            this->segment_angle_ = *msg;
+            this->segment_angle_op_flag_ = true;
+          }
+          const auto fk_transforms =
+            this->HRM_position_controller_.surgical_tool_.
+            computeBaseToJointsTransformationMatrices(
+              msg->pan_relative, msg->tilt_relative);
+          this->publish_fk_transforms(
+            msg->header.stamp,
+            msg->header.frame_id.empty() ? "hrm_base" : msg->header.frame_id,
+            fk_transforms);
+          RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /estimated_segment_angle.");
+        } catch (const std::exception & e) {
           RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
         }
       }
@@ -710,6 +706,59 @@ ControlNode::~ControlNode() {
   }
 }
 
+void ControlNode::publish_fk_transforms(
+  const builtin_interfaces::msg::Time& stamp,
+  const std::string& base_frame_id,
+  const std::vector<Eigen::Matrix4d>& transforms)
+{
+  std::vector<geometry_msgs::msg::TransformStamped> messages;
+  messages.reserve(transforms.size() + 1);
+
+  for (std::size_t index = 0; index < transforms.size(); ++index) {
+    const Eigen::Matrix4d& transform = transforms[index];
+    Eigen::Quaterniond quaternion(transform.block<3, 3>(0, 0));
+    quaternion.normalize();
+
+    geometry_msgs::msg::TransformStamped message;
+    message.header.stamp = stamp;
+    message.header.frame_id = base_frame_id;
+    message.child_frame_id = "hrm_fk_joint_";
+    if (index + 1 < 10) {
+      message.child_frame_id += "0";
+    }
+    message.child_frame_id += std::to_string(index + 1);
+    message.transform.translation.x = transform(0, 3);
+    message.transform.translation.y = transform(1, 3);
+    message.transform.translation.z = transform(2, 3);
+    message.transform.rotation.x = quaternion.x();
+    message.transform.rotation.y = quaternion.y();
+    message.transform.rotation.z = quaternion.z();
+    message.transform.rotation.w = quaternion.w();
+    messages.push_back(message);
+  }
+
+  const Eigen::Matrix4d tip_transform =
+    this->HRM_position_controller_.surgical_tool_.
+    computeEndEffectorTransformation(transforms);
+  Eigen::Quaterniond tip_quaternion(tip_transform.block<3, 3>(0, 0));
+  tip_quaternion.normalize();
+
+  geometry_msgs::msg::TransformStamped tip_message;
+  tip_message.header.stamp = stamp;
+  tip_message.header.frame_id = base_frame_id;
+  tip_message.child_frame_id = "hrm_fk_tip";
+  tip_message.transform.translation.x = tip_transform(0, 3);
+  tip_message.transform.translation.y = tip_transform(1, 3);
+  tip_message.transform.translation.z = tip_transform(2, 3);
+  tip_message.transform.rotation.x = tip_quaternion.x();
+  tip_message.transform.rotation.y = tip_quaternion.y();
+  tip_message.transform.rotation.z = tip_quaternion.z();
+  tip_message.transform.rotation.w = tip_quaternion.w();
+  messages.push_back(tip_message);
+
+  this->fk_tf_broadcaster_->sendTransform(messages);
+}
+
 void ControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gAngle) {
   /* code */
   /* input : actual pos & actual velocity & controller input */
@@ -737,6 +786,8 @@ void ControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gA
   this->motor_control_target_val_.header.frame_id = "kinematics_motor_target_position";
   this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
   this->motor_control_target_val_.target_position[1] = DIRECTION_COUPLER * f_val[1] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+  this->motor_control_target_val_.target_position[2] = DIRECTION_COUPLER * f_val[2] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+  this->motor_control_target_val_.target_position[3] = DIRECTION_COUPLER * f_val[3] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
   // this->motor_control_target_val_.target_position[0] = this->motor_state_.actual_position[0] + DIRECTION_COUPLER * f_val[0] * 2 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
   // this->motor_control_target_val_.target_position[1] = this->motor_state_.actual_position[1] + DIRECTION_COUPLER * f_val[1] * 2 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
   
@@ -926,10 +977,6 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       double d_gain = param.as_double();
       HRM_controller_.pid_controller_.kd_ = d_gain;
       RCLCPP_INFO(this->get_logger(), "Updated D gain: %f", d_gain);
-    } else if (param.get_name() == "dynamics/friction_mode") {
-      int friction_mode = param.as_int();
-      HRM_controller_.damping_friction_model_.mode_ = friction_mode;
-      RCLCPP_INFO(this->get_logger(), "Updated friction mode: %d", HRM_controller_.damping_friction_model_.mode_);
     } else if (param.get_name() == "dynamics/HRM_controller_enable") {
       bool enable = param.as_bool();
       HRM_controller_.hrm_controller_enable_ = enable;
@@ -988,6 +1035,17 @@ void ControlNode::run_dynamic_control_thread() {
   while (rclcpp::ok()) {
     if (control_mode_ == ControlMode::kDynamics) {
       try {
+        SegmentAngle segment_angle_snapshot;
+        bool segment_angle_updated = false;
+        {
+          std::lock_guard<std::mutex> lock(this->segment_angle_mutex_);
+          segment_angle_snapshot = this->segment_angle_;
+          segment_angle_updated = this->segment_angle_op_flag_;
+          if (segment_angle_updated) {
+            this->segment_angle_op_flag_ = false;
+          }
+        }
+
         // run dynamics() code
         /*** 
          * @warning
@@ -1002,8 +1060,9 @@ void ControlNode::run_dynamic_control_thread() {
         
         // if using std::vector<double> a = msg.data
         // The type must be conversion from float(msg.data) to double
-        std::vector<double> theta_actual(this->segment_angle_relative_.data.begin(), this->segment_angle_relative_.data.end());
-        std::vector<double> omega_actual(this->segment_angular_velocity_relative_.data.begin(), this->segment_angular_velocity_relative_.data.end());
+        std::vector<double> theta_actual = segment_angle_snapshot.pan_relative;
+        std::vector<double> omega_actual =
+          segment_angle_snapshot.pan_angular_velocity_relative;
 
         //************************** */
         // End-effector theta
@@ -1015,15 +1074,18 @@ void ControlNode::run_dynamic_control_thread() {
         // absolute
         double alpha = 0.5;
         double angle_filtered = 0;
-        if (!segment_angle_absolute_.data.empty() && !segment_angle_absolute_prev_.data.empty()) {
-          angle_filtered = alpha*segment_angle_absolute_.data.back() + (1-alpha)*segment_angle_absolute_prev_.data.back();
+        if (!segment_angle_snapshot.pan_absolute.empty() &&
+            !segment_angle_pan_absolute_prev_.empty()) {
+          angle_filtered = alpha * segment_angle_snapshot.pan_absolute.back() +
+            (1 - alpha) * segment_angle_pan_absolute_prev_.back();
         } else {
-          segment_angle_absolute_prev_.data = segment_angle_absolute_.data;
+          angle_filtered = segment_angle_snapshot.pan_absolute.back();
         }
-        segment_angle_absolute_prev_.data = segment_angle_absolute_.data;
+        segment_angle_pan_absolute_prev_ = segment_angle_snapshot.pan_absolute;
 
         double end_effector_theta_actual = angle_filtered;
-        double end_effector_omega_actual = segment_angular_velocity_absolute_.data.back();
+        double end_effector_omega_actual =
+          segment_angle_snapshot.pan_angular_velocity_absolute.back();
 
         //************************** */
         double dt = dynamics_params::DT;
@@ -1051,7 +1113,7 @@ void ControlNode::run_dynamic_control_thread() {
           this->HRM_controller_.hrm_controller_enable_);
 
         // publish dynamic MIMO values
-        if (this->segment_angle_op_flag_ == true) {
+        if (segment_angle_updated) {
           // 데이터 생성
           dynamic_MIMO_values_.header.stamp = this->get_clock()->now();
           dynamic_MIMO_values_.header.frame_id = "dynamics_MIMO_values";
@@ -1069,11 +1131,11 @@ void ControlNode::run_dynamic_control_thread() {
           dynamic_MIMO_values_.torque_input = HRM_controller_.torque_input_;
           dynamic_MIMO_values_.external_force = external_force;                   // 예제 데이터
           dynamic_MIMO_values_.external_torque = HRM_controller_.tau_ext_;
-          dynamic_MIMO_values_.friction_mode = HRM_controller_.damping_friction_model_.mode_;
+          dynamic_MIMO_values_.friction_mode = 0;
           dynamic_MIMO_values_.friction_torque = HRM_controller_.tau_friction_;
-          dynamic_MIMO_values_.damping_coefficient = HRM_controller_.damping_friction_model_.B_;
-          dynamic_MIMO_values_.res_friction = HRM_controller_.damping_friction_model_.res_friction_;
-          dynamic_MIMO_values_.cmode = HRM_controller_.damping_friction_model_.cmode_;
+          dynamic_MIMO_values_.damping_coefficient = dynamics_params::DAMPING;
+          dynamic_MIMO_values_.res_friction = 0.0;
+          dynamic_MIMO_values_.cmode = 0;
           dynamic_MIMO_values_.input_alpha = HRM_controller_.theta_ddot_input_;
           dynamic_MIMO_values_.input_omega = HRM_controller_.theta_dot_input_;
           dynamic_MIMO_values_.input_theta = HRM_controller_.theta_input_;
@@ -1083,7 +1145,6 @@ void ControlNode::run_dynamic_control_thread() {
           // publish control mode
           control_mode_msgs_.data = ControlModeToString(this->control_mode_);
           control_mode_msgs_publisher_->publish(control_mode_msgs_);
-          this->segment_angle_op_flag_ = false;
         }
 
         double f_val[5];
@@ -1144,14 +1205,13 @@ void ControlNode::run_dynamic_control_thread() {
         // surgical_tool_pose.angular.y = theta_desired;
         this->surgical_tool_pose_publisher_->publish(surgical_tool_pose);
 
-
-        loop_rate_dynamics_.sleep();
       } catch (const std::runtime_error & e) {
         RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
       }
-    } else {  // kinematics
-      //
     }
+    // Always yield at the configured rate, including inactive control modes.
+    // The previous empty kinematics branch busy-spun one CPU core.
+    loop_rate_dynamics_.sleep();
   }
 }
 
@@ -1162,6 +1222,17 @@ void ControlNode::run_position_with_admittance_control_thread() {
   while (rclcpp::ok()) {
     if (control_mode_ == ControlMode::kPosition || control_mode_ == ControlMode::kAdmittance) {
       try {
+        SegmentAngle segment_angle_snapshot;
+        bool segment_angle_updated = false;
+        {
+          std::lock_guard<std::mutex> lock(this->segment_angle_mutex_);
+          segment_angle_snapshot = this->segment_angle_;
+          segment_angle_updated = this->segment_angle_op_flag_;
+          if (segment_angle_updated) {
+            this->segment_angle_op_flag_ = false;
+          }
+        }
+
         /***
          * @note loop_late_
          * loop_late_ is the sampling rate of the controller 
@@ -1238,16 +1309,16 @@ void ControlNode::run_position_with_admittance_control_thread() {
         // segment_angle_relative_prev_.data = segment_angle_relative_.data;
 
         /**
-         * @brief Get end-effector pose (x,y)
-         * @todo Extend from 2 DOF to 3 DOF(or 6 DOF)
+         * @brief Get the 3D end-effector position from 18-joint D-H FK.
          */
-        this->theta_actual_ = std::vector<double>(this->segment_angle_relative_.data.begin(), this->segment_angle_relative_.data.end());
-        auto tf_matrices = this->HRM_position_controller_.surgical_tool_.computeBaseToJointsTransformationMatrices(this->theta_actual_);
-        auto joints_xy = this->HRM_position_controller_.surgical_tool_.computeJointPositions(tf_matrices);
-        Eigen::Vector2d eef_xy = joints_xy.back();  // get end-effector (x,y)
-        // Eigen::Vector2d eef_xy = Eigen::Vector2d::Zero(2);  // get end-effector (x,y)
-        this->x_actual_(0) = eef_xy.x();  // = eef_xy(0)
-        this->x_actual_(1) = eef_xy.y();  // = eef_xy(1)
+        this->theta_pan_actual_ = segment_angle_snapshot.pan_relative;
+        this->theta_tilt_actual_ = segment_angle_snapshot.tilt_relative;
+        auto tf_matrices = this->HRM_position_controller_.surgical_tool_.computeBaseToJointsTransformationMatrices(
+          this->theta_pan_actual_, this->theta_tilt_actual_);
+        Eigen::Vector3d eef_xyz = this->HRM_position_controller_.surgical_tool_.computeEndEffectorPosition(tf_matrices);
+        this->x_actual_(0) = eef_xyz.x();
+        this->x_actual_(1) = eef_xyz.y();
+        this->x_actual_(2) = eef_xyz.z();
 
         // ************************ Print Values ************************
         // std::cout << "--------------------------" << std::endl;
@@ -1289,9 +1360,16 @@ void ControlNode::run_position_with_admittance_control_thread() {
         this->motor_control_target_val_.header.stamp = this->now();
         this->motor_control_target_val_.header.frame_id = "motor_target_position";
 
-        if (this->loadcell_data_.stress[0] < TENSION_LIMIT && this->loadcell_data_.stress[1] < TENSION_LIMIT) {
+        if (
+        this->loadcell_data_.stress[0] < TENSION_LIMIT
+        && this->loadcell_data_.stress[1] < TENSION_LIMIT
+        && this->loadcell_data_.stress[2] < TENSION_LIMIT
+        && this->loadcell_data_.stress[3] < TENSION_LIMIT)
+        {
           this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
           this->motor_control_target_val_.target_position[1] = DIRECTION_COUPLER * f_val[1] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+          this->motor_control_target_val_.target_position[2] = DIRECTION_COUPLER * f_val[2] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+          this->motor_control_target_val_.target_position[3] = DIRECTION_COUPLER * f_val[3] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
         }
         else {// for prevent wire cut off 
           for (int i=0; i<NUM_OF_MOTORS; i++) {
@@ -1336,7 +1414,7 @@ void ControlNode::run_position_with_admittance_control_thread() {
 
         // publish variables
         // std::cout << "publishing position controller data...";
-        if (this->segment_angle_op_flag_ == true) {
+        if (segment_angle_updated) {
           // time
           builtin_interfaces::msg::Time time;
           time = this->get_clock()->now();
@@ -1428,10 +1506,11 @@ void ControlNode::run_position_with_admittance_control_thread() {
           position_control_msgs_.del_theta_tilt = HRM_position_controller_.del_theta_tilt_;
 
           // joint(segment) angle information
-          std::vector<double> theta_actual_rel(this->segment_angle_relative_.data.begin(), this->segment_angle_relative_.data.end());
-          std::vector<double> theta_actual_abs(this->segment_angle_absolute_.data.begin(), this->segment_angle_absolute_.data.end());
-          position_control_msgs_.theta_actual_relative = theta_actual_rel;
-          position_control_msgs_.theta_actual_absolute = theta_actual_abs;
+          // Legacy fields carry pan values until PositionControl.msg is extended.
+          position_control_msgs_.theta_actual_relative =
+            segment_angle_snapshot.pan_relative;
+          position_control_msgs_.theta_actual_absolute =
+            segment_angle_snapshot.pan_absolute;
 
           // publish data of controllers
           admittance_control_msgs_publisher_->publish(admittance_control_msgs_);
@@ -1451,10 +1530,7 @@ void ControlNode::run_position_with_admittance_control_thread() {
           surgical_tool_pose.angular.y = HRM_position_controller_.surgical_tool_.tAngle_;
           this->surgical_tool_pose_publisher_->publish(surgical_tool_pose);
 
-          this->segment_angle_op_flag_ = false;
         }
-
-        loop_rate_position_with_admittance_.sleep();
       } catch (const std::runtime_error & e) {
         RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
       }
@@ -1462,21 +1538,31 @@ void ControlNode::run_position_with_admittance_control_thread() {
 
     // Update end-effector pose estimation
     try {
+      SegmentAngle segment_angle_snapshot;
+      {
+        std::lock_guard<std::mutex> lock(this->segment_angle_mutex_);
+        segment_angle_snapshot = this->segment_angle_;
+      }
       // calculate end-effector pose
-      this->theta_actual_ = std::vector<double>(this->segment_angle_relative_.data.begin(), this->segment_angle_relative_.data.end());
-      auto tf_matrices = this->HRM_position_controller_.surgical_tool_.computeBaseToJointsTransformationMatrices(this->theta_actual_);
-      auto joints_xy = this->HRM_position_controller_.surgical_tool_.computeJointPositions(tf_matrices);
-      Eigen::Vector2d eef_xy = joints_xy.back();  // get end-effector (x,y)
-      this->x_actual_(0) = eef_xy.x();  // = eef_xy(0)
-      this->x_actual_(1) = eef_xy.y();  // = eef_xy(1)
+      this->theta_pan_actual_ = segment_angle_snapshot.pan_relative;
+      this->theta_tilt_actual_ = segment_angle_snapshot.tilt_relative;
+      auto tf_matrices = this->HRM_position_controller_.surgical_tool_.computeBaseToJointsTransformationMatrices(
+        this->theta_pan_actual_, this->theta_tilt_actual_);
+      Eigen::Vector3d eef_xyz = this->HRM_position_controller_.surgical_tool_.computeEndEffectorPosition(tf_matrices);
+      this->x_actual_(0) = eef_xyz.x();
+      this->x_actual_(1) = eef_xyz.y();
+      this->x_actual_(2) = eef_xyz.z();
       tool_endeffector_pose_.data[0] = this->x_actual_(0);
       tool_endeffector_pose_.data[1] = this->x_actual_(1);
+      tool_endeffector_pose_.data[2] = this->x_actual_(2);
       
       this->tool_endeffector_pose_publisher_->publish(tool_endeffector_pose_);
 
-      loop_rate_position_with_admittance_.sleep();
     } catch (const std::runtime_error & e) {
       RCLCPP_WARN(this->get_logger(), "[Update end-effector pose] Error: %s", e.what());
     }
+    // Exactly one sleep per loop. Position/admittance mode previously slept
+    // twice and therefore ran at roughly half the configured frequency.
+    loop_rate_position_with_admittance_.sleep();
   }
 }

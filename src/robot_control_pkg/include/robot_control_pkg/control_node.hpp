@@ -34,6 +34,8 @@
 #include <cmath>
 #include <signal.h>
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <tuple>
 #include <cstdint>
 #include <stdexcept>
@@ -41,6 +43,7 @@
 #include <numeric>
 #include <iterator>
 #include <Eigen/Dense>
+#include <Eigen/Geometry>
 
 // Surgical Tool Class
 #include "hw_definition.hpp"
@@ -62,12 +65,15 @@
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
+#include "tf2_ros/transform_broadcaster.h"
 #include "custom_interfaces/msg/motor_state.hpp"
 #include "custom_interfaces/msg/motor_command.hpp"
 #include "custom_interfaces/msg/loadcell_state.hpp"
 #include "custom_interfaces/msg/dynamic_mimo_values.hpp"
 #include "custom_interfaces/msg/admittance_control.hpp"
 #include "custom_interfaces/msg/position_control.hpp"
+#include "custom_interfaces/msg/segment_angle.hpp"
 #include "custom_interfaces/srv/move_motor_direct.hpp"
 #include "custom_interfaces/srv/move_tool_angle.hpp"
 #include "custom_interfaces/srv/set_goal_position.hpp"
@@ -102,14 +108,22 @@ public:
   using DynamicMIMOValues = custom_interfaces::msg::DynamicMIMOValues;
   using AdmittanceControl = custom_interfaces::msg::AdmittanceControl;
   using PositionControl = custom_interfaces::msg::PositionControl;
+  using SegmentAngle = custom_interfaces::msg::SegmentAngle;
   using MoveMotorDirect = custom_interfaces::srv::MoveMotorDirect;
   using MoveToolAngle = custom_interfaces::srv::MoveToolAngle;
   using SetGoalPosition = custom_interfaces::srv::SetGoalPosition;
   using SetControlMode = custom_interfaces::srv::SetControlMode;
 
   // Common values
-  std::vector<double> theta_actual_;
-  std::vector<double> omega_actual_;
+  std::vector<double> theta_pan_actual_;
+  std::vector<double> theta_tilt_actual_;
+  std::vector<double> omega_pan_actual_;
+  std::vector<double> omega_tilt_actual_;
+
+  void publish_fk_transforms(
+    const builtin_interfaces::msg::Time& stamp,
+    const std::string& base_frame_id,
+    const std::vector<Eigen::Matrix4d>& transforms);
 
 
   /**
@@ -175,7 +189,7 @@ private:
   /**
    * @brief ROS2 parameters 
    */
-  ControlMode control_mode_;
+  std::atomic<ControlMode> control_mode_;
   bool hrm_controller_enable_;
   rcl_interfaces::msg::SetParametersResult parameter_callback(const std::vector<rclcpp::Parameter> &parameters);
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
@@ -247,6 +261,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr wire_length_publisher_;
   std_msgs::msg::Float64MultiArray wire_length_velocity_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr wire_length_velocity_publisher_;
+  std::unique_ptr<tf2_ros::TransformBroadcaster> fk_tf_broadcaster_;
 
   /**
    * @author DY
@@ -261,18 +276,11 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr external_force_subscriber_;
 
   bool segment_angle_op_flag_ = false;
-  std_msgs::msg::Float64MultiArray segment_angle_relative_;
-  std_msgs::msg::Float64MultiArray segment_angle_relative_prev_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angle_relative_subscriber_;
-  std_msgs::msg::Float64MultiArray segment_angle_absolute_;
-  std_msgs::msg::Float64MultiArray segment_angle_absolute_prev_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angle_absolute_subscriber_;
-
-  bool segment_angular_velocity_op_flag_ = false;
-  std_msgs::msg::Float64MultiArray segment_angular_velocity_relative_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angular_velocity_relative_subscriber_;
-  std_msgs::msg::Float64MultiArray segment_angular_velocity_absolute_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angular_velocity_absolute_subscriber_;
+  SegmentAngle segment_angle_;
+  std::mutex segment_angle_mutex_;
+  std::vector<double> segment_angle_pan_absolute_prev_;
+  std::vector<double> segment_angle_tilt_absolute_prev_;
+  rclcpp::Subscription<SegmentAngle>::SharedPtr segment_angle_subscriber_;
 
 
   /**
