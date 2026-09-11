@@ -113,17 +113,6 @@ class RBSC:
 
     def poly3d(self, x, a, b, c):
         return a * x ** 3 + b * x ** 2 + c * x
-
-    @staticmethod
-    def fit_poly4d_through_origin(x, y):
-        """Fit a*x^4+b*x^3+c*x^2+d*x using one linear least-squares solve."""
-        design_matrix = np.column_stack((x ** 4, x ** 3, x ** 2, x))
-        coefficients, _, rank, _ = np.linalg.lstsq(
-            design_matrix, y, rcond=None
-        )
-        if rank < 4 or not np.all(np.isfinite(coefficients)):
-            raise ValueError('Origin-constrained 2D quartic fit is ill-conditioned.')
-        return coefficients
     def log(self, x, a, b):
         return a * np.log(b * (x + 1))
     def poly4d_sigmoid(self, x, a, b, c, d, L, k, x0):
@@ -335,15 +324,16 @@ class RBSC:
                 )
 
             radius = kernel_size // 2
+            depth_float = np.asarray(depth_image, dtype=np.float64)
             padded_depth = np.pad(
-                depth_image,
+                depth_float,
                 radius,
                 mode='constant',
-                constant_values=0,
+                constant_values=np.nan,
             )
             neighborhoods = np.lib.stride_tricks.sliding_window_view(
                 padded_depth, (kernel_size, kernel_size)
-            )[v, u].astype(np.float64, copy=False)
+            )[v, u]
             neighborhood_valid = (
                 np.isfinite(neighborhoods) & (neighborhoods > 0.0)
             )
@@ -596,27 +586,15 @@ class RBSC:
     def project_segment_directions_to_joint_planes(self, timestamp_sec=None):
         """Project raw segment directions onto sequential DH joint planes.
 
-        The first of the 19 geometric segments is the fixed proximal ``os``
-        segment. The remaining 18 directions correspond to q1 through q18.
         Table 1 is interpreted with the orientation recursion
         R_B_i = R_B_(i-1) * Rx(alpha_(i-1)) * Rz(q_i). The first
         joint is pan (alpha_0=0), followed by alternating +90/-90 degree
         twists. All saved axes and directions are expressed in ``hrm_base``.
         """
-        all_raw_directions = self.segment_directions_xyz
-        num_segments = len(all_raw_directions)
-        num_joints = int(self.config['num_of_bending_joints'])
-        if num_segments != num_joints + 1:
-            raise ValueError(
-                'The geometric segment count must equal the bending-joint '
-                'count plus the fixed proximal segment.'
-            )
-
-        self.fixed_base_segment_direction_raw_xyz = (
-            all_raw_directions[0].copy()
-        )
-        raw_directions = all_raw_directions[1:]
-        self.joint_segment_directions_raw_xyz = raw_directions.copy()
+        raw_directions = self.segment_directions_xyz
+        num_joints = len(raw_directions)
+        if num_joints == 0:
+            raise ValueError('No segment directions are available to project.')
 
         twist_degrees = np.zeros(num_joints, dtype=float)
         if num_joints > 1:
@@ -647,7 +625,7 @@ class RBSC:
             projected_norm = np.linalg.norm(direction_projected)
             if projected_norm <= 1e-9:
                 raise ValueError(
-                    f'Segment {index + 2} direction is parallel to its '
+                    f'Segment {index + 1} direction is parallel to its '
                     'estimated DH joint axis.'
                 )
             direction_projected /= projected_norm
@@ -672,14 +650,10 @@ class RBSC:
             )
             rotation_base_from_previous = rotation_base_from_current
 
-        # Preserve all 19 visualization directions. Segment zero is the fixed
-        # proximal link and therefore has the Base-frame +X direction; the
-        # remaining 18 entries are the model-constrained moving segments.
-        self.joint_segment_directions_projected_xyz = projected_directions
-        self.segment_directions_projected_xyz = np.vstack((
-            base_x,
-            projected_directions,
-        ))
+        # Preserve both the unmodified measurements and their model-constrained
+        # counterparts. The angles are preliminary DH projection results used
+        # by the ROS publisher and still require real-robot validation.
+        self.segment_directions_projected_xyz = projected_directions
         self.segment_projection_residuals = residuals
         self.segment_projection_residual_vectors_xyz = (
             residuals[:, None] * joint_axes
@@ -747,7 +721,7 @@ class RBSC:
 
         # Reconstruct DH-constrained directions once more using filtered q.
         # Raw and projection-only vectors above remain unchanged for comparison.
-        filtered_joint_directions = np.empty_like(raw_directions)
+        filtered_directions = np.empty_like(raw_directions)
         filtered_frame_rotations = np.empty(
             (num_joints, 3, 3), dtype=float
         )
@@ -762,7 +736,7 @@ class RBSC:
                 rotation_base_from_prejoint
                 * Rotation.from_euler('z', joint_angle)
             )
-            filtered_joint_directions[index] = (
+            filtered_directions[index] = (
                 rotation_base_from_current.apply(base_x)
             )
             filtered_frame_rotations[index] = (
@@ -778,17 +752,7 @@ class RBSC:
             filtered_joint_velocities
         )
         self.dh_joint_frame_rotations_filtered = filtered_frame_rotations
-        self.joint_segment_directions_filtered_xyz = (
-            filtered_joint_directions
-        )
-        self.segment_directions_filtered_xyz = np.vstack((
-            base_x,
-            filtered_joint_directions,
-        ))
-        self.segment_center_frame_rotations_filtered = np.concatenate((
-            np.eye(3, dtype=float)[None, :, :],
-            filtered_frame_rotations,
-        ), axis=0)
+        self.segment_directions_filtered_xyz = filtered_directions
 
         # Relative arrays retain one entry per physical joint. The inactive
         # axis of each alternating one-DOF joint is explicitly zero.
@@ -808,14 +772,14 @@ class RBSC:
         # Absolute pan/tilt describe each filtered outgoing segment direction
         # in the fixed HRM Base axes: X axial, Y pan, and Z tilt.
         self.pan_absolute_rad = np.arctan2(
-            filtered_joint_directions[:, 1],
-            filtered_joint_directions[:, 0],
+            filtered_directions[:, 1],
+            filtered_directions[:, 0],
         )
         self.tilt_absolute_rad = np.arctan2(
-            filtered_joint_directions[:, 2],
+            filtered_directions[:, 2],
             np.hypot(
-                filtered_joint_directions[:, 0],
-                filtered_joint_directions[:, 1],
+                filtered_directions[:, 0],
+                filtered_directions[:, 1],
             ),
         )
 
@@ -834,54 +798,8 @@ class RBSC:
             points = points[keep]
 
         num_segments = int(self.config['num_of_segments'])
-        num_bending_joints = int(self.config['num_of_bending_joints'])
-        num_joint_pairs = int(self.config['num_of_joint_pairs'])
-        num_pan_joints = int(self.config['num_of_pan_joints'])
-        num_tilt_joints = int(self.config['num_of_tilt_joints'])
-        if num_segments != num_bending_joints + 1:
-            raise ValueError(
-                'num_of_segments must equal num_of_bending_joints + 1.'
-            )
-        if num_bending_joints != 2 * num_joint_pairs:
-            raise ValueError(
-                'num_of_bending_joints must equal 2 * num_of_joint_pairs.'
-            )
-        if (num_pan_joints != num_joint_pairs or
-                num_tilt_joints != num_joint_pairs):
-            raise ValueError(
-                'The pan and tilt joint counts must equal '
-                'num_of_joint_pairs.'
-            )
         segment_length_m = float(self.config['length_of_segment']) * 1e-3
-        proximal_length_m = (
-            float(self.config['proximal_offset_length']) * 1e-3
-        )
-        joint_spacing_m = (
-            float(self.config['bending_joint_spacing']) * 1e-3
-        )
-        distal_length_m = (
-            float(self.config['distal_offset_length']) * 1e-3
-        )
-        self.segment_lengths_m = np.concatenate((
-            [proximal_length_m],
-            np.full(num_bending_joints - 1, joint_spacing_m),
-            [distal_length_m],
-        ))
-        if len(self.segment_lengths_m) != num_segments:
-            raise ValueError('The configured DH link lengths are inconsistent.')
-        if (np.any(self.segment_lengths_m <= 0.0) or
-                segment_length_m <= 0.0):
-            raise ValueError('All configured segment lengths must be positive.')
-        if not np.allclose(
-                self.segment_lengths_m,
-                segment_length_m,
-                rtol=0.0,
-                atol=1e-12):
-            raise ValueError(
-                'This reconstruction currently requires os, l, and le to '
-                'equal length_of_segment.'
-            )
-        self.hardware_length_m = float(np.sum(self.segment_lengths_m))
+        self.hardware_length_m = num_segments * segment_length_m
         if self.hardware_length_m <= 0.0:
             raise ValueError('The configured hardware length must be positive.')
 
@@ -939,26 +857,6 @@ class RBSC:
                 curve_length_normalized <= 1e-9):
             raise ValueError('The fitted 3D curve has near-zero length.')
 
-        # Depth and endpoint extraction can make the measured fitted curve a
-        # few percent too long or too short. The physical centerline length is
-        # fixed, so apply one isotropic Base-anchored scale before selecting
-        # segment boundaries. Directions and joint angles are unchanged, while
-        # P0...P19 and the model FK now share the same 82.27 mm arc length.
-        self.fitted_curve_length_before_hardware_scaling_3d = (
-            curve_length_normalized * self.hardware_length_m
-        )
-        self.hardware_length_scale = 1.0 / curve_length_normalized
-        self.coef_x *= self.hardware_length_scale
-        self.coef_y *= self.hardware_length_scale
-        self.coef_z *= self.hardware_length_scale
-        self.curve_dense_normalized *= self.hardware_length_scale
-        dense_cumulative_length *= self.hardware_length_scale
-        curve_length_normalized = dense_cumulative_length[-1]
-        self.curve_dense_xyz = (
-            self.curve_dense_normalized * self.hardware_length_m
-            + self.curve_base_xyz
-        )
-
         # Remove zero-length interpolation intervals while preserving endpoints.
         interp_keep = np.concatenate((
             [True],
@@ -967,12 +865,8 @@ class RBSC:
         interp_length = dense_cumulative_length[interp_keep]
         interp_s = self.s_dense[interp_keep]
 
-        hardware_boundary_lengths_m = np.concatenate((
-            [0.0],
-            np.cumsum(self.segment_lengths_m),
-        ))
-        target_lengths = (
-            hardware_boundary_lengths_m / self.hardware_length_m
+        target_lengths = np.linspace(
+            0.0, curve_length_normalized, num_segments + 1
         )
         self.s_segment = np.interp(target_lengths, interp_length, interp_s)
         self.segment_points_xyz_normalized = np.column_stack((
@@ -985,15 +879,12 @@ class RBSC:
             + self.curve_base_xyz
         )
 
-        # Sample once more at the arc-length center of each of the 19
-        # reconstructed segments. These are distinct from the 20 boundaries.
-        hardware_center_lengths_m = (
-            hardware_boundary_lengths_m[:-1]
-            + 0.5 * self.segment_lengths_m
-        )
+        # Sample once more at the arc-length center of each of the 18
+        # reconstructed segments. These are distinct from the 19 boundaries.
+        segment_arc_length = curve_length_normalized / num_segments
         center_target_lengths = (
-            hardware_center_lengths_m / self.hardware_length_m
-        )
+            np.arange(num_segments, dtype=float) + 0.5
+        ) * segment_arc_length
         self.s_segment_center = np.interp(
             center_target_lengths, interp_length, interp_s
         )
@@ -1007,7 +898,7 @@ class RBSC:
             + self.curve_base_xyz
         )
 
-        # Analytic tangent of the fitted parametric curve at all 20 segment
+        # Analytic tangent of the fitted parametric curve at all 19 segment
         # boundary points. Isotropic normalization does not change direction.
         tangent_vectors = np.column_stack((
             np.polyval(np.polyder(self.coef_x), self.s_segment),
@@ -1115,7 +1006,6 @@ class RBSC:
     def postprocess(
             self,
             image,
-            color_encoding='bgr8',
             depth_image=None,
             camera_intrinsics=None,
             depth_scale=1.0,
@@ -1124,7 +1014,6 @@ class RBSC:
             timestamp_sec=None,
             binary_thresh=120,
             filfinder_flag=False):
-        timing_start = time.perf_counter()
         try:
             # ========== post processing ==========
             # 1. read as grayscale
@@ -1133,24 +1022,8 @@ class RBSC:
                 # print("Error: image : {image}")
                 return
 
-            # Keep the camera's native RGB/BGR order. Converting the complete
-            # incoming frame to BGR in the ROS callback unnecessarily copies
-            # hundreds of kilobytes before the ROI is selected.
-            normalized_color_encoding = color_encoding.lower()
-            if normalized_color_encoding == 'rgb8':
-                hsv_code = cv2.COLOR_RGB2HSV
-                gray_code = cv2.COLOR_RGB2GRAY
-            elif normalized_color_encoding == 'bgr8':
-                hsv_code = cv2.COLOR_BGR2HSV
-                gray_code = cv2.COLOR_BGR2GRAY
-            else:
-                raise ValueError(
-                    f'Unsupported color encoding: {color_encoding}. '
-                    'Expected rgb8 or bgr8.'
-                )
-
             # 2. 색상 제거 전처리: HSV 색공간 변환
-            hsv = cv2.cvtColor(image, hsv_code)
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
             # 붉은색 범위 지정 (두 구간으로 나눔)
             lower_red1 = np.array([0, 50, 50])   # BGR에서 R이 강하고 B나 G가 상대적으로 작음
@@ -1170,13 +1043,15 @@ class RBSC:
             mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
 
             # 전체 마스크: 붉은색 또는 파란색
-            mask = cv2.bitwise_or(mask_red, mask_blue)
+            mask = mask_red | mask_blue
 
-            # Convert only once to grayscale and mask there. Creating a second
-            # full BGR image and assigning three channels produced the same
-            # binary result but caused avoidable memory traffic every frame.
-            self.gray_image = cv2.cvtColor(image, gray_code)
-            self.gray_image[mask != 0] = 0
+            # 원본 이미지에서 해당 색상 제거 (검정색으로 덮기)
+            image_cleaned = image.copy()
+            image_cleaned[mask > 0] = (0, 0, 0)
+            self.cleaned_image = image_cleaned
+            # cv2.imwrite("image_clean.jpg", image_cleaned)
+            # 3. Grayscale 변환
+            self.gray_image = cv2.cvtColor(image_cleaned, cv2.COLOR_BGR2GRAY)
             # self.gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             # self.gray_image = cv2.imread(self.image_path, cv2.IMREAD_GRAYSCALE)
             self.image_w, self.image_h = self.gray_image.shape[1], self.gray_image.shape[0]
@@ -1185,7 +1060,6 @@ class RBSC:
             # 임계값 설정 (예: 127)
             thresh_value = binary_thresh
             _, self.binary_image = cv2.threshold(self.gray_image, thresh_value, 255, cv2.THRESH_BINARY)
-            timing_color_mask_done = time.perf_counter()
 
             # 3. Find connected commponets
             num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(self.binary_image, connectivity=8)
@@ -1198,14 +1072,12 @@ class RBSC:
             # 5. Leave only the largest commpent (it is body)
             self.body_image_origin = (labels == max_label).astype(np.uint8) * 255
             self.body_image = self.smoothing(binary=self.body_image_origin, k_size=15)
-            timing_body_mask_done = time.perf_counter()
 
             # print(f'{self.image} / {self.image.shape} / {self.image.size} ')
             # print(f'{self.body_image} / {self.body_image.shape} / {self.body_image.size} ')
             # ========== Find skeleton of backbone ==========
             # perform skeletonization
             self.skeleton = skeletonize(self.body_image, method='lee')
-            timing_skeleton_done = time.perf_counter()
 
             ####################################################################
             '''
@@ -1226,7 +1098,6 @@ class RBSC:
             ####################################################################
 
             self.pixel_to_orthogonal_coordinate(self.longest_backbone_image)
-            timing_preprocess_done = time.perf_counter()
         except Exception as e:
             print(f'postprocess error : {e}', flush=True)
             return
@@ -1241,15 +1112,15 @@ class RBSC:
             # weights[-num:] = sigma
             # sigma = 1 / weights
 
+            # test
+            self.popt, _ = curve_fit(self.poly4d, self.norm_xy_coords[:, 0], self.norm_xy_coords[:, 1], maxfev=2000)
+            self.fitted_y = self.poly4d(self.norm_xy_coords[:, 0], *self.popt)
+
             # 1. Rotate the points clockwise 90 degree
             self.trans_xy_coords = self.rotation_matrix(self.norm_xy_coords, theta=-90)
 
-            # 2. The quartic is linear in its coefficients. A direct least-
-            # squares solve is equivalent to curve_fit here and avoids its
-            # iterative optimizer and covariance calculation.
-            self.temp_popt_poly4d = self.fit_poly4d_through_origin(
-                self.trans_xy_coords[:, 0], self.trans_xy_coords[:, 1]
-            )
+            # 2. curve fitting
+            self.temp_popt_poly4d, _ = curve_fit(self.poly4d, self.trans_xy_coords[:, 0], self.trans_xy_coords[:, 1], maxfev=2000)
             # self.popt_poly4d, _ = curve_fit(self.poly4d, self.trans_xy_coords[:, 0], self.trans_xy_coords[:, 1], sigma=sigma, maxfev=2000)
             self.fitted_y_poly4d = self.poly4d(self.trans_xy_coords[:, 0], *self.temp_popt_poly4d)
             self.func_poly4d = lambda x: self.poly4d(x, *self.temp_popt_poly4d)
@@ -1283,9 +1154,7 @@ class RBSC:
             TODO
             곡선 연장후 재피팅 안해줄 경우 skeleton 끝이 테두리로 삐져나갔을 때 대처가 안됌
             """
-            self.popt_poly4d = self.fit_poly4d_through_origin(
-                ext_coords_x, ext_coords_y
-            )
+            self.popt_poly4d, _ = curve_fit(self.poly4d, ext_coords_x, ext_coords_y, maxfev=2000)
             self.fitted_y_poly4d = self.poly4d(ext_coords_x, *self.popt_poly4d)
             self.func_poly4d = lambda x: self.poly4d(x, *self.popt_poly4d)
 
@@ -1311,14 +1180,12 @@ class RBSC:
             )
 
             # Remove curve points outside the boundary
-            self.extended_skeleton = np.logical_and(
-                self.body_image != 0, self.extended_curve != 0
-            )
+            body_image = np.copy(self.body_image) / 255.0
+            self.extended_skeleton = np.logical_and(body_image, self.extended_curve).astype(int)
             inside_body = self.extended_skeleton[
                 ordered_extended_yx[:, 0], ordered_extended_yx[:, 1]
             ] > 0
             ordered_extended_yx = ordered_extended_yx[inside_body]
-            timing_curve_2d_done = time.perf_counter()
 
             self.extended_yx_coords, self.points_xyz_camera = (
                 self.deproject_skeleton_to_3d(
@@ -1329,7 +1196,6 @@ class RBSC:
                     roi_offset,
                 )
             )
-            timing_deprojection_done = time.perf_counter()
             self.points_xyz_base = self.transform_camera_points_to_base(
                 self.points_xyz_camera,
                 transform_camera_from_base,
@@ -1340,36 +1206,6 @@ class RBSC:
             self.reconstruct_3d_segments(
                 self.points_xyz, timestamp_sec=timestamp_sec
             )
-            timing_reconstruction_done = time.perf_counter()
-            self.last_stage_times_ms = {
-                'preprocess': (
-                    timing_preprocess_done - timing_start
-                ) * 1e3,
-                'color_mask': (
-                    timing_color_mask_done - timing_start
-                ) * 1e3,
-                'body_mask': (
-                    timing_body_mask_done - timing_color_mask_done
-                ) * 1e3,
-                'skeleton': (
-                    timing_skeleton_done - timing_body_mask_done
-                ) * 1e3,
-                'coordinates': (
-                    timing_preprocess_done - timing_skeleton_done
-                ) * 1e3,
-                'curve_2d': (
-                    timing_curve_2d_done - timing_preprocess_done
-                ) * 1e3,
-                'deprojection': (
-                    timing_deprojection_done - timing_curve_2d_done
-                ) * 1e3,
-                'reconstruction_3d': (
-                    timing_reconstruction_done - timing_deprojection_done
-                ) * 1e3,
-                'total': (
-                    timing_reconstruction_done - timing_start
-                ) * 1e3,
-            }
             return True
 
         except Exception as e:

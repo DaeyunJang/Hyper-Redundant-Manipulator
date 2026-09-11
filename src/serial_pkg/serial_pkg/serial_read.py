@@ -33,7 +33,7 @@ class SerialNode(Node):
 
     def __init__(self):
         super().__init__('serial_node')
-        self.declare_parameter('qos_depth', 10)
+        self.declare_parameter('qos_depth', 1)
         qos_depth = self.get_parameter('qos_depth').value
         # self.declare_parameter('')
         # self.add_on_set_parameters_callback(self.update_parameter)

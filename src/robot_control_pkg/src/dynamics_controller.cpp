@@ -12,7 +12,7 @@ DynamicsController::~DynamicsController() {}
 void DynamicsController::initialize() {
     pid_controller_.set_PID_gains(dynamics_params::KP, dynamics_params::KI, dynamics_params::KD);
     hrm_dynamics_model_.set_parameters(dynamics_params::INERTIA, dynamics_params::DAMPING, dynamics_params::STIFFNESS);
-    surgical_tool_.init_surgical_tool(NUM_OF_JOINT, SEGMENT_ARC, SEGMENT_DIAMETER, WIRE_DISTANCE, SHIFT, SEGMENT_ARC_CENTER_TO_SEGMENT_CENTER);
+    surgical_tool_.init_surgical_tool(NUM_OF_JOINT_PAIRS, SEGMENT_ARC, SEGMENT_DIAMETER, WIRE_DISTANCE, SHIFT, SEGMENT_ARC_CENTER_TO_SEGMENT_CENTER);
 }
 
 std::vector<double> DynamicsController::compute(
