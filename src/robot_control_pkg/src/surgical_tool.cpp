@@ -69,12 +69,10 @@ std::vector<double> SurgicalTool::get_IK_result(
 void SurgicalTool::inverse_kinematics()
 {
 	// y = kx (k=SHIFT/SHIFT_THRESHOLD)
-
-	const double twice_joint_pair_count = 2.0 * surgicaltool_.num_joint_pairs;
-	this->wrLengthEast_  = 2 * surgicaltool_.arc * surgicaltool_.num_joint_pairs * ( cos(alpha_) - cos(alpha_ - (pAngle_ / twice_joint_pair_count)) + 1 - cos(tAngle_ / twice_joint_pair_count));
-	this->wrLengthWest_  = 2 * surgicaltool_.arc * surgicaltool_.num_joint_pairs * ( cos(alpha_) - cos(alpha_ + (pAngle_ / twice_joint_pair_count)) + 1 - cos(tAngle_ / twice_joint_pair_count));
-	this->wrLengthSouth_ = 2 * surgicaltool_.arc * surgicaltool_.num_joint_pairs * ( cos(alpha_) - cos(alpha_ - (tAngle_ / twice_joint_pair_count)) + 1 - cos(pAngle_ / twice_joint_pair_count));
-	this->wrLengthNorth_ = 2 * surgicaltool_.arc * surgicaltool_.num_joint_pairs * ( cos(alpha_) - cos(alpha_ + (tAngle_ / twice_joint_pair_count)) + 1 - cos(pAngle_ / twice_joint_pair_count));
+	this->wrLengthEast_  = 2 * surgicaltool_.arc * surgicaltool_.num_joint_pairs * ( cos(alpha_) - cos(alpha_ - (pAngle_ / (2*surgicaltool_.num_joint_pairs))) + 1 - cos(tAngle_ / ((2*surgicaltool_.num_joint_pairs))));
+	this->wrLengthWest_  = 2 * surgicaltool_.arc * surgicaltool_.num_joint_pairs * ( cos(alpha_) - cos(alpha_ + (pAngle_ / (2*surgicaltool_.num_joint_pairs))) + 1 - cos(tAngle_ / ((2*surgicaltool_.num_joint_pairs))));
+	this->wrLengthSouth_ = 2 * surgicaltool_.arc * surgicaltool_.num_joint_pairs * ( cos(alpha_) - cos(alpha_ - (tAngle_ / (2*surgicaltool_.num_joint_pairs))) + 1 - cos(pAngle_ / ((2*surgicaltool_.num_joint_pairs))));
+	this->wrLengthNorth_ = 2 * surgicaltool_.arc * surgicaltool_.num_joint_pairs * ( cos(alpha_) - cos(alpha_ + (tAngle_ / (2*surgicaltool_.num_joint_pairs))) + 1 - cos(pAngle_ / ((2*surgicaltool_.num_joint_pairs))));
 
 	// // Gain for released wire
 	// if (this->wrLengthEast_ < 0) { this->wrLengthEast_ = this->wrLengthEast_ * this->release_gain_; }
@@ -133,12 +131,17 @@ SurgicalTool::computeBaseToJointsTransformationMatrices(
 
 	std::vector<Eigen::Matrix4d> transform_matrices;
 	transform_matrices.reserve(bending_joint_count);
+	// hrm_base is the fixed D-H base itself. Its X axis is the undeformed
+	// centerline and q1 rotates directly about Base +Z, bending the following
+	// segment toward +Y for a positive angle. No pre-rotation is applied.
 	Eigen::Matrix4d transform_base_from_previous = Eigen::Matrix4d::Identity();
 
 	for (std::size_t index = 0; index < bending_joint_count; ++index) {
-		const bool is_pan_joint = index % 2 == 0;
+		// The physical stack starts with the South/North tilt joint, followed
+		// by the East/West pan joint.
+		const bool is_tilt_joint = index % 2 == 0;
 		const double joint_angle =
-			is_pan_joint ? pan_angles[index] : tilt_angles[index];
+			is_tilt_joint ? tilt_angles[index] : pan_angles[index];
 
 		double twist_angle = 0.0;
 		if (index > 0) {

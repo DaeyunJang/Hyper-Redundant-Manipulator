@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>hrm_image_shm</transport_id>
+        <type>SHM</type>
+        <!-- The default 512 KiB segment is smaller than ONE RGB/depth frame.
+             Reserve room for simultaneous input and visualization messages. -->
+        <segment_size>67108864</segment_size>
+        <maxMessageSize>4194304</maxMessageSize>
+      </transport_descriptor>
+      <transport_descriptor>
+        <transport_id>hrm_udp</transport_id>
+        <type>UDPv4</type>
+      </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="hrm_image_participant" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>hrm_image_shm</transport_id>
+          <transport_id>hrm_udp</transport_id>
+        </userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

@@ -14,6 +14,8 @@
     "base_in_camera_rotation_z_deg": -45.0,
     "performance": {
         "opencv_num_threads": 1,
+        "blas_num_threads": 1,
+        "max_depth_age_sec": 0.1,
         "debug_timing_enabled": false,
         "debug_rate_enabled": false,
         "timing_log_interval_frames": 60,

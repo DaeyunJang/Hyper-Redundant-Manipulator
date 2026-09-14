@@ -64,6 +64,7 @@ class RBSC:
         self.joint_kalman_states = None
         self.joint_kalman_covariances = None
         self.joint_kalman_timestamp_sec = None
+        self.last_error = None
         pass
 
     def load_config(self, config_file):
@@ -107,6 +108,22 @@ class RBSC:
         rotation_matrix = np.array([[np.cos(np.deg2rad(theta)), -np.sin(np.deg2rad(theta))],
                                     [np.sin(np.deg2rad(theta)), np.cos(np.deg2rad(theta))]])
         return np.dot(coords, rotation_matrix.T)
+
+    @staticmethod
+    def skeletonize_body(body_image):
+        """Run the original Lee thinning only over the nonzero bounding box.
+
+        Lee pads its input with background. Removing all-background margins
+        therefore preserves the skeleton pixels, including at image edges.
+        Return them in the original ROI coordinates for extrapolation/depth.
+        """
+        x, y, width, height = cv2.boundingRect(body_image)
+        skeleton = np.zeros(body_image.shape, dtype=np.uint8)
+        if width and height:
+            skeleton[y:y + height, x:x + width] = skeletonize(
+                body_image[y:y + height, x:x + width], method='lee'
+            )
+        return skeleton
     def poly4d(self, x, a, b, c, d):
         return a * x ** 4 + b * x ** 3 + c * x ** 2 + d * x
         # return a * (x+2) ** 4 + b * (x+2) ** 3 + c * (x+2) ** 2 + d * (x+2)
@@ -599,9 +616,11 @@ class RBSC:
         The first of the 19 geometric segments is the fixed proximal ``os``
         segment. The remaining 18 directions correspond to q1 through q18.
         Table 1 is interpreted with the orientation recursion
-        R_B_i = R_B_(i-1) * Rx(alpha_(i-1)) * Rz(q_i). The first
-        joint is pan (alpha_0=0), followed by alternating +90/-90 degree
-        twists. All saved axes and directions are expressed in ``hrm_base``.
+        R_B_i = R_B_(i-1) * Rx(alpha_(i-1)) * Rz(q_i). ``hrm_base``
+        is the fixed D-H base without a preliminary rotation. Therefore q1
+        rotates about Base +Z and a positive q1 bends +X toward +Y. The first
+        joint is named tilt, followed by pan and alternating +90/-90 degree
+        twists.
         """
         all_raw_directions = self.segment_directions_xyz
         num_segments = len(all_raw_directions)
@@ -690,7 +709,7 @@ class RBSC:
         self.dh_joint_angles_projected_degree = np.degrees(joint_angles)
         self.dh_joint_frame_rotations = joint_frame_rotations
         self.dh_joint_types = [
-            'pan' if index % 2 == 0 else 'tilt'
+            'tilt' if index % 2 == 0 else 'pan'
             for index in range(num_joints)
         ]
 
@@ -794,24 +813,25 @@ class RBSC:
         # axis of each alternating one-DOF joint is explicitly zero.
         self.pan_relative_rad = np.zeros(num_joints, dtype=float)
         self.tilt_relative_rad = np.zeros(num_joints, dtype=float)
-        self.pan_relative_rad[0::2] = filtered_joint_angles[0::2]
-        self.tilt_relative_rad[1::2] = filtered_joint_angles[1::2]
+        self.tilt_relative_rad[0::2] = filtered_joint_angles[0::2]
+        self.pan_relative_rad[1::2] = filtered_joint_angles[1::2]
         self.pan_relative_velocity_rad_s = np.zeros(num_joints, dtype=float)
         self.tilt_relative_velocity_rad_s = np.zeros(num_joints, dtype=float)
-        self.pan_relative_velocity_rad_s[0::2] = (
+        self.tilt_relative_velocity_rad_s[0::2] = (
             filtered_joint_velocities[0::2]
         )
-        self.tilt_relative_velocity_rad_s[1::2] = (
+        self.pan_relative_velocity_rad_s[1::2] = (
             filtered_joint_velocities[1::2]
         )
 
-        # Absolute pan/tilt describe each filtered outgoing segment direction
-        # in the fixed HRM Base axes: X axial, Y pan, and Z tilt.
-        self.pan_absolute_rad = np.arctan2(
+        # Absolute tilt/pan describe each filtered outgoing segment direction
+        # in the fixed HRM Base axes. q1 tilt is the X-Y bending plane and q2
+        # pan is the orthogonal X-Z bending plane.
+        self.tilt_absolute_rad = np.arctan2(
             filtered_joint_directions[:, 1],
             filtered_joint_directions[:, 0],
         )
-        self.tilt_absolute_rad = np.arctan2(
+        self.pan_absolute_rad = np.arctan2(
             filtered_joint_directions[:, 2],
             np.hypot(
                 filtered_joint_directions[:, 0],
@@ -1125,12 +1145,13 @@ class RBSC:
             binary_thresh=120,
             filfinder_flag=False):
         timing_start = time.perf_counter()
+        self.last_error = None
         try:
             # ========== post processing ==========
             # 1. read as grayscale
             self.image = image
             if image is None or image.size == 0:
-                # print("Error: image : {image}")
+                self.last_error = 'The color ROI is empty; check ROI bounds.'
                 return
 
             # Keep the camera's native RGB/BGR order. Converting the complete
@@ -1189,7 +1210,8 @@ class RBSC:
 
             # 3. Find connected commponets
             num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(self.binary_image, connectivity=8)
-            if num_labels < 1:
+            if num_labels <= 1:
+                self.last_error = 'No HRM body detected; check lighting and ROI.'
                 return
 
             # 4. Find the largest componnet
@@ -1204,7 +1226,7 @@ class RBSC:
             # print(f'{self.body_image} / {self.body_image.shape} / {self.body_image.size} ')
             # ========== Find skeleton of backbone ==========
             # perform skeletonization
-            self.skeleton = skeletonize(self.body_image, method='lee')
+            self.skeleton = self.skeletonize_body(self.body_image)
             timing_skeleton_done = time.perf_counter()
 
             ####################################################################
@@ -1228,7 +1250,7 @@ class RBSC:
             self.pixel_to_orthogonal_coordinate(self.longest_backbone_image)
             timing_preprocess_done = time.perf_counter()
         except Exception as e:
-            print(f'postprocess error : {e}', flush=True)
+            self.last_error = f'2D preprocessing failed: {e}'
             return
 
         # ========== Curve fitting ==========
@@ -1373,7 +1395,7 @@ class RBSC:
             return True
 
         except Exception as e:
-            print(f"postprocess() error : {e}", flush=True)
+            self.last_error = f'Curve/depth reconstruction failed: {e}'
             return None
 
     def draw_arrows(self, image):

@@ -1,79 +1,37 @@
 #!/usr/bin/env python3
-# Copyright 2021 OROCA
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
-import os
+"""Start the operator GUI, which owns the remaining system processes."""
 
-from launch import LaunchDescription
-from launch_ros.actions import Node
+from pathlib import Path
+
 from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+
 
 def generate_launch_description():
-  apriltag_param_file = os.path.join(
-        get_package_share_directory('apriltag_ros'),
-        'cfg',
-        'tags_36h11.yaml'
+    auto_start_components = LaunchConfiguration('auto_start_components')
+    gui_launch = (
+        Path(get_package_share_directory('gui_py_pkg'))
+        / 'launch/_launch.py'
     )
-  
-  return LaunchDescription([
-    
-    # IncludeLaunchDescription(
-    #   PythonLaunchDescriptionSource(
-    #     [get_package_share_directory('fts_pkg'), '/launch/_launch.py']),
-    # ),
-    IncludeLaunchDescription(
-      PythonLaunchDescriptionSource(
-        [get_package_share_directory('launcher'), '/launch/cuda_realsense.launch.py']),
-    ),
-    IncludeLaunchDescription(
-      PythonLaunchDescriptionSource(
-        [get_package_share_directory('serial_pkg'), '/launch/_launch.py']),
-    ),
-    IncludeLaunchDescription(
-      PythonLaunchDescriptionSource(
-        [get_package_share_directory('robot_control_pkg'), '/launch/_launch.py'])
-    ),
-    
-    IncludeLaunchDescription(      
-      PythonLaunchDescriptionSource(
-        [get_package_share_directory('tcp_pkg'), '/launch/_launch.py'])
-    ),
-    
-    IncludeLaunchDescription(
-      PythonLaunchDescriptionSource(
-        [get_package_share_directory('gui_py_pkg'), '/launch/_launch.py']),
-    ),
-    IncludeLaunchDescription(
-      PythonLaunchDescriptionSource(
-        [get_package_share_directory('record_pkg'), '/launch/_launch.py']),
-    ),
-    IncludeLaunchDescription(
-      PythonLaunchDescriptionSource(
-        [get_package_share_directory('estimation_pkg'), '/launch/_launch.py']),
-    ),
-    
-    Node(
-      package='apriltag_ros',
-      executable='apriltag_node',
-      name='apriltag_node',
-      output='screen',
-      parameters=[apriltag_param_file],
-      remappings=[
-        ('image_rect', '/camera/camera/color/image_raw'),
-        ('camera_info', '/camera/camera/color/camera_info')
-      ]
-    ),
-  ])
+
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'auto_start_components',
+            default_value='false',
+            description=(
+                'Start components selected in the GUI configuration after '
+                'the GUI opens.'
+            ),
+        ),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(str(gui_launch)),
+            launch_arguments={
+                'auto_start_components': auto_start_components,
+            }.items(),
+        ),
+    ])

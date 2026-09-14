@@ -16,6 +16,7 @@
   <depend>tf2_ros</depend>
   <depend>visualization_msgs</depend>
   <depend>custom_interfaces</depend>
+  <exec_depend>python3-threadpoolctl</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

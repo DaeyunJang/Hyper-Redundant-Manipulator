@@ -1,6 +1,9 @@
 # Hyper-Redundant-Manipulator
 HRM(Hyper-Redundant-Manipulator) motion control on ROS system
 
+현재 GUI/CUDA 카메라 실행 방법과 30 Hz 추정 점검은
+[실시간 실행 가이드](docs/REALTIME_ESTIMATION.md)를 참고하세요.
+
 ## Download the project
 ```
 # clone repository with the submodule

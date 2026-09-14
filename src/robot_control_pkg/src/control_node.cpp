@@ -33,6 +33,8 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       "Invalid initial control_mode=%d; using kinematics.",
       initial_control_mode);
   }
+  motor_output_enabled_ =
+    this->declare_parameter<bool>("motor_output_enabled", false);
   std::cout << "------------------------------------" <<std::endl;
   std::cout << "control_mode_: " << control_mode_ << std::endl;
   std::cout << "------------------------------------" <<std::endl;
@@ -108,9 +110,18 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
     this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length", qos_reliable_latest);
   wire_length_velocity_publisher_ = 
     this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length_velocity", qos_reliable_latest);
+  target_wire_length_publisher_ =
+    this->create_publisher<std_msgs::msg::Float64MultiArray>(
+      "kinematics/target_wire_length", qos_reliable_latest);
   this->tool_endeffector_pose_.data.resize(3);
   this->wire_length_.data.resize(NUM_OF_MOTORS);
   this->wire_length_velocity_.data.resize(NUM_OF_MOTORS);
+  this->target_wire_length_.data.resize(NUM_OF_MOTORS);
+  RCLCPP_WARN(
+    this->get_logger(),
+    "Motor output is %s. IK preview topic: /kinematics/target_wire_length "
+    "([East, West, South, North], mm).",
+    motor_output_enabled_ ? "ENABLED" : "DISABLED (dry-run)");
 
   //===============================
   // motor status subscriber
@@ -272,10 +283,10 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       // std::cout << this->motor_state_.actual_position [0] << std::endl;
       // std::cout << this->motor_control_target_val_.target_position[0] << std::endl;
 
-      // publish and response for service from client
+      // Direct motor commands never bypass the explicit actuator safety gate.
       if(this->op_mode_ == kEnable) {
-        this->motor_control_publisher_->publish(this->motor_control_target_val_);
-        response->success = true;
+        response->success = this->publish_motor_command_if_enabled(
+          "move_motor_direct");
         RCLCPP_INFO(this->get_logger(), "Service <MoveMotorDirect> accept the request");
       }
       else response->success = false;
@@ -299,12 +310,14 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         return;
       }
 
-      if(this->op_mode_ == kEnable) {
+      // IK preview is available without a motor connection. Actual actuator
+      // output additionally requires motor_output_enabled and motor state.
+      if(this->op_mode_ == kEnable || !motor_output_enabled_) {
         if(request->mode == 0) {
           // MOVE ABSOLUTELY
           RCLCPP_INFO(this->get_logger(), "MODE: %d, tilt: %.2f, pan: %.2f, grip: %.2f", request->mode, request->tiltangle, request->panangle, request->gripangle);
           this->cal_inverse_kinematics(request->panangle, request->tiltangle, request->gripangle);
-          this->motor_control_publisher_->publish(this->motor_control_target_val_);
+          this->publish_motor_command_if_enabled("kinematics/move_tool_angle");
           this->surgical_tool_pose_publisher_->publish(this->surgical_tool_pose_);
         }
         else if (request->mode == 1) {
@@ -315,7 +328,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 
           RCLCPP_INFO(this->get_logger(), "MODE: %d, tilt: %.2f, pan: %.2f, grip: %.2f", request->mode, tilt_angle, pan_angle, grip_angle);
           this->cal_inverse_kinematics(pan_angle, tilt_angle, grip_angle);
-          this->motor_control_publisher_->publish(this->motor_control_target_val_);
+          this->publish_motor_command_if_enabled("kinematics/move_tool_angle");
           this->surgical_tool_pose_publisher_->publish(this->surgical_tool_pose_);
         }
         response->success = true;
@@ -766,8 +779,10 @@ void ControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gA
   this->current_pan_angle_ = pAngle;
   this->current_tilt_angle_ = tAngle;
   this->current_grip_angle_ = gAngle;
-  this->surgical_tool_pose_.angular.y = tAngle * M_PI/180;
-  this->surgical_tool_pose_.angular.z = pAngle * M_PI/180;
+  // Aggregate command representation at the straight configuration:
+  // q1 tilt rotates about Base Z; q2 pan is the orthogonal bending component.
+  this->surgical_tool_pose_.angular.z = tAngle * M_PI/180;
+  this->surgical_tool_pose_.angular.y = pAngle * M_PI/180;
   this->HRM_controller_.surgical_tool_.get_IK_result(this->current_pan_angle_, this->current_tilt_angle_, this->current_grip_angle_);
   // this->ST_.get_IK_result(this->current_pan_angle_, this->current_tilt_angle_, this->current_grip_angle_);
 
@@ -777,6 +792,15 @@ void ControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gA
   f_val[2] = this->HRM_controller_.surgical_tool_.wrLengthSouth_;
   f_val[3] = this->HRM_controller_.surgical_tool_.wrLengthNorth_;
   f_val[4] = this->HRM_controller_.surgical_tool_.wrLengthGrip;
+
+  for (int index = 0; index < NUM_OF_MOTORS; ++index) {
+    this->target_wire_length_.data[index] = f_val[index];
+  }
+  this->target_wire_length_publisher_->publish(this->target_wire_length_);
+  RCLCPP_INFO(
+    this->get_logger(),
+    "IK target [mm] East=%+.5f, West=%+.5f, South=%+.5f, North=%+.5f",
+    f_val[0], f_val[1], f_val[2], f_val[3]);
 
   for (int i=0; i<5; i++)
   {
@@ -824,6 +848,26 @@ void ControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gA
   // std::cout << "fin" <<std::endl;
 }
 
+bool ControlNode::publish_motor_command_if_enabled(const char * command_source)
+{
+  if (!motor_output_enabled_) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 2000,
+      "Dry-run: blocked motor_command from %s.", command_source);
+    return false;
+  }
+  if (this->op_mode_ != kEnable) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 2000,
+      "Blocked motor_command from %s: no valid motor_state received.",
+      command_source);
+    return false;
+  }
+
+  this->motor_control_publisher_->publish(this->motor_control_target_val_);
+  return true;
+}
+
 double ControlNode::gear_encoder_ratio_conversion(double gear_ratio, int e_channel, int e_resolution) {
   return gear_ratio * e_channel * e_resolution;
 }
@@ -845,7 +889,7 @@ void ControlNode::publish_sine_wave()
     double omega = 2.0 * M_PI / period_;
     trajectory_ = amp_deg_ * std::sin(omega * count_);
     cal_inverse_kinematics(trajectory_, 0, 0);
-    motor_control_publisher_->publish(motor_control_target_val_);
+    publish_motor_command_if_enabled("motion/move_sine_wave");
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
     // std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
@@ -874,7 +918,7 @@ void ControlNode::publish_sine_wave_1time()
     double omega = 2.0 * M_PI / period_;
     trajectory_ = amp_deg_ * std::sin(omega * count_);
     cal_inverse_kinematics(trajectory_, 0, 0);
-    motor_control_publisher_->publish(motor_control_target_val_);
+    publish_motor_command_if_enabled("motion/move_sine_wave_1time");
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
     // std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
@@ -924,7 +968,7 @@ void ControlNode::publish_circle_motion()
     double pan_deg = amp_deg_ * std::sin(omega * count_);
     double tilt_deg = amp_deg_ * std::cos(omega * count_);
     cal_inverse_kinematics(pan_deg, 0, 0);
-    motor_control_publisher_->publish(motor_control_target_val_);
+    publish_motor_command_if_enabled("kinematics/move_circle_motion");
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
     // std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
@@ -938,7 +982,7 @@ void ControlNode::publish_moebius_motion()
     double pan_deg = 0.5 * amp_deg_ * std::sin((omega*2.0) * count_);
     double tilt_deg = amp_deg_ * std::sin(omega * count_);
     cal_inverse_kinematics(pan_deg, tilt_deg, 0);
-    motor_control_publisher_->publish(motor_control_target_val_);
+    publish_motor_command_if_enabled("kinematics/move_moebius_motion");
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
     count_ += count_add_;
     // std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
@@ -963,7 +1007,12 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       } else {
         RCLCPP_WARN(this->get_logger(), "Unknown mode. Keeping previous mode.");
       }
-    } 
+    } else if (param.get_name() == "motor_output_enabled") {
+      motor_output_enabled_ = param.as_bool();
+      RCLCPP_WARN(
+        this->get_logger(), "Motor output %s.",
+        motor_output_enabled_ ? "ENABLED" : "DISABLED (dry-run)");
+    }
     // dynamics control
     else if (param.get_name() == "dynamics/p_gain") {
       double p_gain = param.as_double();
@@ -1198,7 +1247,7 @@ void ControlNode::run_dynamic_control_thread() {
           }
         #endif
         
-        this->motor_control_publisher_->publish(this->motor_control_target_val_);
+        this->publish_motor_command_if_enabled("dynamics control");
 
         geometry_msgs::msg::Twist surgical_tool_pose;
         surgical_tool_pose.angular.z = theta_desired;
@@ -1409,7 +1458,7 @@ void ControlNode::run_position_with_admittance_control_thread() {
         #endif
         
         // send motor command
-        this->motor_control_publisher_->publish(this->motor_control_target_val_);
+        this->publish_motor_command_if_enabled("position/admittance control");
 
 
         // publish variables

@@ -53,6 +53,21 @@ def generate_launch_description():
     camera_config = Path(
         get_package_share_directory('estimation_pkg')
     ) / 'config/realsense_d405.yaml'
+    # A 512 KiB default Fast DDS segment is smaller than one 848x480 image.
+    # Both the GUI button and run_realsense_cuda.sh use this launch, so give
+    # the camera writer enough SHM space regardless of how it is started.
+    transport_environment = []
+    if (os.environ.get('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp') in
+            ('rmw_fastrtps_cpp', 'rmw_fastrtps_dynamic_cpp')
+            and not os.environ.get('FASTRTPS_DEFAULT_PROFILES_FILE')
+            and not os.environ.get('FASTDDS_DEFAULT_PROFILES_FILE')):
+        image_profile = camera_config.parent / 'fastdds_images.xml'
+        if not image_profile.is_file():
+            raise RuntimeError('Rebuild estimation_pkg to install fastdds_images.xml.')
+        transport_environment = [
+            SetEnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE', str(image_profile)),
+            LogInfo(msg=f'Using image-sized DDS shared memory: {image_profile}'),
+        ]
 
     ament_prefix_path = _prepend_path(
         realsense_ros_prefix, os.environ.get('AMENT_PREFIX_PATH', '')
@@ -68,6 +83,7 @@ def generate_launch_description():
     os.environ['LD_LIBRARY_PATH'] = library_path
 
     return LaunchDescription([
+        *transport_environment,
         SetEnvironmentVariable('AMENT_PREFIX_PATH', ament_prefix_path),
         SetEnvironmentVariable('LD_LIBRARY_PATH', library_path),
         LogInfo(

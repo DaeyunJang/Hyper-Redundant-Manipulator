@@ -16,9 +16,11 @@ from custom_interfaces.msg import SegmentAngle
 from cv_bridge import CvBridge
 from ament_index_python.packages import get_package_share_directory
 from scipy.spatial.transform import Rotation
+from threadpoolctl import threadpool_limits
 from tf2_ros import TransformBroadcaster
 
 from estimation_pkg.postprocess import RBSC
+from estimation_pkg.runtime import configure_image_transport
 # from postprocess import RBSC
 
 import threading
@@ -47,10 +49,6 @@ class SegmentEstimationNode(Node):
         self.depth_scale = None
         self.camera_intrinsics = None
         self.camera_frame_id = None
-        self.result_stamp = None
-        self.result_frame_id = None
-        self.result_image_encoding = None
-        self.result_geometry_frame_id = None
         self.received_first_color = False
         self.received_first_depth = False
         self.received_first_camera_info = False
@@ -60,6 +58,10 @@ class SegmentEstimationNode(Node):
         self.previous_angle_arrays = None
         self.previous_angle_stamp_sec = None
         self.processed_frame_count = 0
+        self.failed_frame_count = 0
+        self.overwritten_frame_count = 0
+        self.last_processing_ms = 0.0
+        self.last_result_age_ms = 0.0
         self.visualized_frame_count = 0
         self.color_received_count = 0
         self.depth_received_count = 0
@@ -69,12 +71,24 @@ class SegmentEstimationNode(Node):
         self.rate_window_processed_count = 0
         self.frame_lock = threading.Lock()
         self.result_lock = threading.Lock()
+        self.latest_visualization = None
+        self.latest_crop = None
+        self.previous_marker_keys = None
         self.rbsc = RBSC()
         performance_config = self.rbsc.config.get('performance', {})
         self.opencv_num_threads = max(
             1, int(performance_config.get('opencv_num_threads', 1))
         )
         cv2.setNumThreads(self.opencv_num_threads)
+        # Tiny quartic/3x3 solves do not benefit from a 24-thread BLAS pool.
+        # Apply this for ros2 run as well as launch and retain the controller.
+        self.blas_thread_limit = threadpool_limits(
+            limits=max(1, int(performance_config.get('blas_num_threads', 1))),
+            user_api='blas',
+        )
+        self.max_depth_age_sec = max(
+            0.0, float(performance_config.get('max_depth_age_sec', 0.1))
+        )
         self.debug_timing_enabled = bool(
             performance_config.get('debug_timing_enabled', False)
         )
@@ -100,6 +114,12 @@ class SegmentEstimationNode(Node):
         print("============================")
 
         super().__init__('segment_estimation_node')
+        self.declare_parameter('debug_timing_enabled', self.debug_timing_enabled)
+        self.declare_parameter('debug_rate_enabled', self.debug_rate_enabled)
+        self.debug_timing_enabled = self.get_parameter('debug_timing_enabled').value
+        self.debug_rate_enabled = self.get_parameter('debug_rate_enabled').value
+        if self.debug_rate_enabled and self.rate_log_interval_sec > 0.0:
+            self.create_timer(self.rate_log_interval_sec, self.report_rates)
         self.base_tf_broadcaster = TransformBroadcaster(self)
         self.declare_parameter('qos_depth', 1)
         self.declare_parameter(
@@ -229,11 +249,11 @@ class SegmentEstimationNode(Node):
         self.roi_x:self.roi_x + self.roi_w,
         ]
         if self.segment_crop_image_publisher.get_subscription_count() > 0:
-            crop_image_msg = self.br_rgb.cv2_to_imgmsg(
-                color_roi, data.encoding
-            )
-            crop_image_msg.header = data.header
-            self.segment_crop_image_publisher.publish(crop_image_msg)
+            # Keep DDS image callbacks short. Serialization/publication belongs
+            # to the visualization worker, even if depth or the fit is missing.
+            with self.result_lock:
+                self.latest_crop = (color_roi, data.header, data.encoding)
+                self.event.set()
 
         if not self.received_first_color:
             self.get_logger().info(
@@ -242,6 +262,8 @@ class SegmentEstimationNode(Node):
             self.received_first_color = True
 
         with self.frame_lock:
+            if self.current_frame_flag:
+                self.overwritten_frame_count += 1
             self.current_frame_flag = True
             self.color_stamp = data.header.stamp
             self.current_frame_ROI = color_roi
@@ -351,11 +373,9 @@ class SegmentEstimationNode(Node):
             )
 
         transforms = []
-        for index, (center_xyz, rotation_matrix) in enumerate(zip(
-                center_points_xyz, frame_rotations)):
-            quaternion_xyzw = Rotation.from_matrix(
-                rotation_matrix
-            ).as_quat()
+        quaternions = Rotation.from_matrix(frame_rotations).as_quat()
+        for index, (center_xyz, quaternion_xyzw) in enumerate(zip(
+                center_points_xyz, quaternions)):
 
             transform = TransformStamped()
             transform.header.stamp = stamp
@@ -496,6 +516,7 @@ class SegmentEstimationNode(Node):
                         color_encoding = self.current_frame_encoding
                         depth_roi = self.current_depth
                         color_stamp = self.color_stamp
+                        depth_stamp = self.depth_stamp
                         depth_scale = self.depth_scale
                         camera_intrinsics = self.camera_intrinsics.copy()
                         camera_frame_id = (
@@ -506,111 +527,72 @@ class SegmentEstimationNode(Node):
                 if not ready:
                     continue
 
-                with self.result_lock:
-                    success = self.rbsc.postprocess(
-              color_roi,
-              color_encoding=color_encoding,
-              depth_image=depth_roi,
-              camera_intrinsics=camera_intrinsics,
-              depth_scale=depth_scale,
-              roi_offset=(self.roi_x, self.roi_y),
-              timestamp_sec=self.stamp_to_seconds(color_stamp),
-          )
-                    if success is not None:
-                        self.result_stamp = color_stamp
-                        self.result_frame_id = camera_frame_id
-                        self.result_image_encoding = color_encoding
-                        self.result_geometry_frame_id = self.rbsc.base_frame_id
-                        base_origin_camera_xyz = (
-                            self.rbsc.base_origin_camera_xyz.copy()
-                        )
-                        quaternion_camera_from_base_xyzw = (
-                            self.rbsc.quaternion_camera_from_base_xyzw.copy()
-                        )
-                        segment_center_points_xyz = (
-                            self.rbsc.segment_center_points_xyz.copy()
-                        )
-                        segment_center_frame_rotations_filtered = (
-                            self.rbsc.segment_center_frame_rotations_filtered
-                            .copy()
-                        )
-                        pan_relative_rad = self.rbsc.pan_relative_rad.copy()
-                        pan_absolute_rad = self.rbsc.pan_absolute_rad.copy()
-                        tilt_relative_rad = self.rbsc.tilt_relative_rad.copy()
-                        tilt_absolute_rad = self.rbsc.tilt_absolute_rad.copy()
-                        if self.rbsc.joint_kalman_filter_enabled:
-                            pan_relative_velocity = (
-                                self.rbsc.pan_relative_velocity_rad_s.copy()
-                            )
-                            tilt_relative_velocity = (
-                                self.rbsc.tilt_relative_velocity_rad_s.copy()
-                            )
-                        else:
-                            pan_relative_velocity = None
-                            tilt_relative_velocity = None
-                        stage_times_ms = (
-                            self.rbsc.last_stage_times_ms.copy()
-                            if self.debug_timing_enabled else None
-                        )
+                # Allow a nearby latest depth frame, but do not estimate motor
+                # feedback indefinitely from a disconnected/stalled depth feed.
+                depth_age = abs(self.stamp_to_seconds(color_stamp)
+                                - self.stamp_to_seconds(depth_stamp))
+                if self.max_depth_age_sec and depth_age > self.max_depth_age_sec:
+                    self.failed_frame_count += 1
+                    self.get_logger().warning(
+                        f'Depth/color timestamp gap {depth_age * 1e3:.0f} ms; '
+                        'waiting for recent aligned depth.', throttle_duration_sec=2.0)
+                    continue
+
+                # Only this worker owns RBSC. Never hold the handoff lock while
+                # computing: visualization must be able to take the last result
+                # even when the next frame is already being processed.
+                success = self.rbsc.postprocess(
+                    color_roi,
+                    color_encoding=color_encoding,
+                    depth_image=depth_roi,
+                    camera_intrinsics=camera_intrinsics,
+                    depth_scale=depth_scale,
+                    roi_offset=(self.roi_x, self.roi_y),
+                    timestamp_sec=self.stamp_to_seconds(color_stamp),
+                )
                 if success is None:
+                    self.failed_frame_count += 1
+                    self.get_logger().warning(
+                        self.rbsc.last_error or 'Reconstruction failed.',
+                        throttle_duration_sec=2.0)
                     continue
                 if self.shutdown_event.is_set() or not rclpy.ok():
                     break
 
+                rbsc = self.rbsc
                 self.publish_base_transform(
                     color_stamp,
                     camera_frame_id,
-                    self.result_geometry_frame_id,
-                    base_origin_camera_xyz,
-                    quaternion_camera_from_base_xyzw,
+                    rbsc.base_frame_id,
+                    rbsc.base_origin_camera_xyz,
+                    rbsc.quaternion_camera_from_base_xyzw,
                 )
                 self.publish_estimated_segment_transforms(
                     color_stamp,
-                    self.result_geometry_frame_id,
-                    segment_center_points_xyz,
-                    segment_center_frame_rotations_filtered,
+                    rbsc.base_frame_id,
+                    rbsc.segment_center_points_xyz,
+                    rbsc.segment_center_frame_rotations_filtered,
                 )
                 self.publish_segment_angles(
                     color_stamp,
-                    self.result_geometry_frame_id,
-                    pan_relative_rad,
-                    pan_absolute_rad,
-                    tilt_relative_rad,
-                    tilt_absolute_rad,
-                    pan_relative_velocity,
-                    tilt_relative_velocity,
+                    rbsc.base_frame_id,
+                    rbsc.pan_relative_rad,
+                    rbsc.pan_absolute_rad,
+                    rbsc.tilt_relative_rad,
+                    rbsc.tilt_absolute_rad,
+                    (rbsc.pan_relative_velocity_rad_s
+                     if rbsc.joint_kalman_filter_enabled else None),
+                    (rbsc.tilt_relative_velocity_rad_s
+                     if rbsc.joint_kalman_filter_enabled else None),
                 )
 
                 self.processed_frame_count += 1
-                rate_now = time.monotonic()
-                rate_elapsed = rate_now - self.rate_window_start
-                if (self.debug_rate_enabled and
-                        self.rate_log_interval_sec > 0.0 and
-                        rate_elapsed >= self.rate_log_interval_sec):
-                    color_delta = (
-                        self.color_received_count
-                        - self.rate_window_color_count
-                    )
-                    depth_delta = (
-                        self.depth_received_count
-                        - self.rate_window_depth_count
-                    )
-                    processed_delta = (
-                        self.processed_frame_count
-                        - self.rate_window_processed_count
-                    )
-                    self.get_logger().info(
-                        'Internal rate [Hz] '
-                        f'color={color_delta / rate_elapsed:.1f}, '
-                        f'aligned_depth={depth_delta / rate_elapsed:.1f}, '
-                        f'processed={processed_delta / rate_elapsed:.1f}'
-                    )
-                    self.rate_window_start = rate_now
-                    self.rate_window_color_count = self.color_received_count
-                    self.rate_window_depth_count = self.depth_received_count
-                    self.rate_window_processed_count = (
-                        self.processed_frame_count
-                    )
+                self.last_processing_ms = rbsc.last_stage_times_ms['total']
+                self.last_result_age_ms = (
+                    self.get_clock().now().nanoseconds * 1e-9
+                    - self.stamp_to_seconds(color_stamp)
+                ) * 1e3
+                stage_times_ms = rbsc.last_stage_times_ms
                 if (self.debug_timing_enabled and
                         self.timing_log_interval_frames > 0 and
                         self.processed_frame_count %
@@ -629,13 +611,57 @@ class SegmentEstimationNode(Node):
                         f"total={stage_times_ms['total']:.1f}"
                     )
 
-                # Wake the visualization thread after TF and angle publication.
-                self.event.set()
+                self.queue_visualization(color_stamp, camera_frame_id, color_encoding)
             except Exception as e:
                 if not self.shutdown_event.is_set() and rclpy.ok():
                     self.get_logger().error(
-                        f'process() function exception error : {e}'
+                        f'process() function exception error : {e}',
+                        throttle_duration_sec=2.0,
                     )
+
+    def report_rates(self):
+        """Report actual input/success rates even when reconstruction fails."""
+        now = time.monotonic()
+        elapsed = now - self.rate_window_start
+        color = self.color_received_count
+        depth = self.depth_received_count
+        processed = self.processed_frame_count
+        self.get_logger().info(
+            'Internal rate [Hz] '
+            f'color={(color - self.rate_window_color_count) / elapsed:.1f}, '
+            f'aligned_depth={(depth - self.rate_window_depth_count) / elapsed:.1f}, '
+            f'processed={(processed - self.rate_window_processed_count) / elapsed:.1f}; '
+            f'last compute={self.last_processing_ms:.1f} ms, '
+            f'source-to-angle={self.last_result_age_ms:.1f} ms; '
+            f'failed_total={self.failed_frame_count}, '
+            f'overwritten_input_total={self.overwritten_frame_count}'
+        )
+        self.rate_window_start = now
+        self.rate_window_color_count = color
+        self.rate_window_depth_count = depth
+        self.rate_window_processed_count = processed
+
+    def queue_visualization(self, stamp, camera_frame_id, encoding):
+        """Snapshot one successful frame; replace rather than queue old frames."""
+        packet = dict(stamp=stamp, camera_frame_id=camera_frame_id,
+                      encoding=encoding, base_frame_id=self.rbsc.base_frame_id)
+        if self.segment_skeleton_image_publisher.get_subscription_count():
+            packet['overlay'] = self.rbsc.image.copy()
+            packet['extended_yx_coords'] = self.rbsc.extended_yx_coords.copy()
+        if self.segment_body_binary_image_publisher.get_subscription_count():
+            packet['body_image'] = self.rbsc.body_image.copy()
+        if self.centerline_points_publisher.get_subscription_count():
+            packet['points_xyz'] = self.rbsc.points_xyz.copy()
+        if self.reconstruction_markers_publisher.get_subscription_count():
+            for name in (
+                    'curve_dense_xyz', 'segment_points_xyz', 'segment_tangents_xyz',
+                    'segment_center_points_xyz', 'segment_center_tangents_xyz',
+                    'segment_directions_xyz', 'segment_directions_projected_xyz',
+                    'segment_directions_filtered_xyz'):
+                packet[name] = getattr(self.rbsc, name).copy()
+        with self.result_lock:
+            self.latest_visualization = packet
+            self.event.set()
 
     def realtime_show(self):
         self.get_logger().info('Waiting the first curvefit process...')
@@ -644,27 +670,28 @@ class SegmentEstimationNode(Node):
         while not self.shutdown_event.is_set() and rclpy.ok():
             if not self.event.wait(timeout=0.1):
                 continue
-            self.event.clear()
+            # Take-and-clear under the same short lock as producers. A crop
+            # wakeup must not publish the previous reconstruction a second time.
+            with self.result_lock:
+                self.event.clear()
+                crop = self.latest_crop
+                packet = self.latest_visualization
+                self.latest_crop = None
+                self.latest_visualization = None
             if self.shutdown_event.is_set() or not rclpy.ok():
                 break
 
             try:
-                publish_skeleton = (
-                    self.segment_skeleton_image_publisher
-                    .get_subscription_count() > 0
-                )
-                publish_body = (
-                    self.segment_body_binary_image_publisher
-                    .get_subscription_count() > 0
-                )
-                publish_cloud = (
-                    self.centerline_points_publisher.get_subscription_count()
-                    > 0
-                )
-                publish_markers = (
-                    self.reconstruction_markers_publisher
-                    .get_subscription_count() > 0
-                )
+                if crop is not None:
+                    crop_image_msg = self.br_rgb.cv2_to_imgmsg(crop[0], crop[2])
+                    crop_image_msg.header = crop[1]
+                    self.segment_crop_image_publisher.publish(crop_image_msg)
+                if packet is None:
+                    continue
+                publish_skeleton = 'overlay' in packet
+                publish_body = 'body_image' in packet
+                publish_cloud = 'points_xyz' in packet
+                publish_markers = 'curve_dense_xyz' in packet
                 if not any((
                         publish_skeleton,
                         publish_body,
@@ -673,43 +700,10 @@ class SegmentEstimationNode(Node):
                     continue
 
                 visualization_start = time.perf_counter()
-                with self.result_lock:
-                    if publish_skeleton:
-                        overlay = self.rbsc.image.copy()
-                        extended_yx_coords = (
-                            self.rbsc.extended_yx_coords.copy()
-                        )
-                    if publish_body:
-                        body_image = self.rbsc.body_image.copy()
-                    if publish_cloud:
-                        points_xyz = self.rbsc.points_xyz.copy()
-                    if publish_markers:
-                        curve_dense_xyz = self.rbsc.curve_dense_xyz.copy()
-                        segment_points_xyz = (
-                            self.rbsc.segment_points_xyz.copy()
-                        )
-                        segment_tangents_xyz = (
-                            self.rbsc.segment_tangents_xyz.copy()
-                        )
-                        segment_center_points_xyz = (
-                            self.rbsc.segment_center_points_xyz.copy()
-                        )
-                        segment_center_tangents_xyz = (
-                            self.rbsc.segment_center_tangents_xyz.copy()
-                        )
-                        segment_directions_xyz = (
-                            self.rbsc.segment_directions_xyz.copy()
-                        )
-                        segment_directions_projected_xyz = (
-                            self.rbsc.segment_directions_projected_xyz.copy()
-                        )
-                        segment_directions_filtered_xyz = (
-                            self.rbsc.segment_directions_filtered_xyz.copy()
-                        )
-                    result_stamp = self.result_stamp
-                    result_frame_id = self.result_frame_id
-                    result_image_encoding = self.result_image_encoding
-                    result_geometry_frame_id = self.result_geometry_frame_id
+                result_stamp = packet['stamp']
+                result_frame_id = packet['camera_frame_id']
+                result_image_encoding = packet['encoding']
+                result_geometry_frame_id = packet['base_frame_id']
                 visualization_copy_done = time.perf_counter()
                 if first_result:
                     self.get_logger().info(
@@ -721,7 +715,8 @@ class SegmentEstimationNode(Node):
                     image_header.stamp = result_stamp
                     image_header.frame_id = result_frame_id
                 if publish_skeleton:
-                    curve_pixels_xy = extended_yx_coords[:, [1, 0]].astype(
+                    overlay = packet['overlay']
+                    curve_pixels_xy = packet['extended_yx_coords'][:, [1, 0]].astype(
                         np.int32, copy=False
                     )
                     cv2.polylines(
@@ -740,7 +735,7 @@ class SegmentEstimationNode(Node):
                     )
                 if publish_body:
                     segment_body_binary_image_msg = self.br_rgb.cv2_to_imgmsg(
-                        body_image, 'mono8'
+                        packet['body_image'], 'mono8'
                     )
                     segment_body_binary_image_msg.header = image_header
                     self.segment_body_binary_image_publisher.publish(
@@ -755,7 +750,7 @@ class SegmentEstimationNode(Node):
                 if publish_cloud:
                     centerline_msg = point_cloud2.create_cloud_xyz32(
                         geometry_header,
-                        points_xyz.astype('float32').tolist(),
+                        packet['points_xyz'].astype('float32').tolist(),
                     )
                     self.centerline_points_publisher.publish(centerline_msg)
                 visualization_cloud_done = time.perf_counter()
@@ -763,14 +758,14 @@ class SegmentEstimationNode(Node):
                     self.reconstruction_markers_publisher.publish(
                         self.make_reconstruction_markers(
                             geometry_header,
-                            curve_dense_xyz,
-                            segment_points_xyz,
-                            segment_tangents_xyz,
-                            segment_center_points_xyz,
-                            segment_center_tangents_xyz,
-                            segment_directions_xyz,
-                            segment_directions_projected_xyz,
-                            segment_directions_filtered_xyz,
+                            packet['curve_dense_xyz'],
+                            packet['segment_points_xyz'],
+                            packet['segment_tangents_xyz'],
+                            packet['segment_center_points_xyz'],
+                            packet['segment_center_tangents_xyz'],
+                            packet['segment_directions_xyz'],
+                            packet['segment_directions_projected_xyz'],
+                            packet['segment_directions_filtered_xyz'],
                         )
                     )
                 visualization_done = time.perf_counter()
@@ -789,7 +784,8 @@ class SegmentEstimationNode(Node):
                     )
             except Exception as e:
                 if not self.shutdown_event.is_set() and rclpy.ok():
-                    self.get_logger().warning(f'Visualization error: {e}')
+                    self.get_logger().warning(
+                        f'Visualization error: {e}', throttle_duration_sec=2.0)
 
     def stop_workers(self):
         self.shutdown_event.set()
@@ -825,10 +821,13 @@ class SegmentEstimationNode(Node):
       segment_directions_filtered_xyz):
         markers = MarkerArray()
 
-        clear = Marker()
-        clear.header = header
-        clear.action = Marker.DELETEALL
-        markers.markers.append(clear)
+        # Stable (namespace, id) updates allow RViz to reuse each Ogre object.
+        # DELETEALL every frame forces ~100 arrows to be destroyed/recreated.
+        if self.previous_marker_keys is None:
+            clear = Marker()
+            clear.header = header
+            clear.action = Marker.DELETEALL
+            markers.markers.append(clear)
 
         fitted_curve = Marker()
         fitted_curve.header = header
@@ -980,10 +979,20 @@ class SegmentEstimationNode(Node):
                 ]
                 markers.markers.append(vector_marker)
 
+        current_keys = {(m.ns, m.id) for m in markers.markers if m.action == Marker.ADD}
+        for namespace, marker_id in (self.previous_marker_keys or set()) - current_keys:
+            removed = Marker()
+            removed.header = header
+            removed.ns = namespace
+            removed.id = marker_id
+            removed.action = Marker.DELETE
+            markers.markers.append(removed)
+        self.previous_marker_keys = current_keys
         return markers
 
 
 def main(args=None):
+    configure_image_transport()
     rclpy.init(args=args)
     estimator = SegmentEstimationNode()
     # Image callbacks use the default mutually-exclusive callback group, while

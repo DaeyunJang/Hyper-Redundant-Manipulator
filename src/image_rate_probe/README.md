@@ -42,3 +42,19 @@ buffer size.
 
 Use `qos_depth:=10` only as an A/B test for reader-queue loss. A depth of 1 is
 the desired latest-frame behavior for the estimator.
+
+## Complete estimation pipeline
+
+```bash
+ros2 run image_rate_probe pipeline_rate_probe
+```
+
+Reports color/aligned depth/crop/skeleton/angle/MarkerArray rates and source
+timestamp age p50/p95 every 5 s. It counts repeated/backwards stamps and estimates
+missing 30 Hz periods. Run on the camera host with the same ROS clock. The first
+window includes startup/discovery, so judge steady windows. It subscribes to
+visualization outputs (thus activating their publication); use
+`--ros-args -p visualization:=false` for camera/angle inputs only.
+
+See [the real-time guide](../../docs/REALTIME_ESTIMATION.md) for the Fast DDS
+image-sized SHM configuration and controlled test results.

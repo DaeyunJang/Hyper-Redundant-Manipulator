@@ -1,0 +1,77 @@
+{
+  "components": [
+    {
+      "id": "camera",
+      "label": "RealSense camera (CUDA)",
+      "package": "launcher",
+      "launch_file": "cuda_realsense.launch.py",
+      "expected_nodes": ["/camera/camera"],
+      "auto_start": true,
+      "delay_sec": 0.0,
+      "description": "Color and aligned-depth camera streams"
+    },
+    {
+      "id": "serial",
+      "label": "Serial sensors",
+      "package": "serial_pkg",
+      "launch_file": "_launch.py",
+      "expected_nodes": ["/serial_read"],
+      "auto_start": true,
+      "delay_sec": 1.0,
+      "description": "Load cells and force/torque sensor"
+    },
+    {
+      "id": "tcp",
+      "label": "Motor TCP bridge",
+      "package": "tcp_pkg",
+      "launch_file": "_launch.py",
+      "expected_nodes": ["/tcpclient"],
+      "auto_start": true,
+      "delay_sec": 2.0,
+      "description": "Linux ROS 2 to the Windows motor server"
+    },
+    {
+      "id": "robot_control",
+      "label": "Robot control",
+      "package": "robot_control_pkg",
+      "launch_file": "_launch.py",
+      "expected_nodes": ["/robot_control"],
+      "auto_start": true,
+      "delay_sec": 3.0,
+      "description": "IK, FK and motor command generation",
+      "arguments": {
+        "motor_output_enabled": "{motor_output_enabled}"
+      }
+    },
+    {
+      "id": "estimation",
+      "label": "Segment estimation",
+      "package": "estimation_pkg",
+      "launch_file": "_launch.py",
+      "expected_nodes": ["/segment_angle_estimator"],
+      "auto_start": true,
+      "delay_sec": 4.0,
+      "description": "Skeleton, 3D reconstruction and joint angles"
+    },
+    {
+      "id": "record",
+      "label": "Data recorder",
+      "package": "record_pkg",
+      "launch_file": "_launch.py",
+      "expected_nodes": ["/record"],
+      "auto_start": false,
+      "delay_sec": 5.0,
+      "description": "Legacy recorder (manual; dataset migration pending)"
+    },
+    {
+      "id": "apriltag",
+      "label": "AprilTag",
+      "package": "launcher",
+      "launch_file": "apriltag.launch.py",
+      "expected_nodes": ["/apriltag_node"],
+      "auto_start": false,
+      "delay_sec": 6.0,
+      "description": "Optional camera-based tag tracking"
+    }
+  ]
+}

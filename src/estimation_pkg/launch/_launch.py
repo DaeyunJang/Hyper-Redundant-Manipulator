@@ -41,6 +41,11 @@ def generate_launch_description():
                 executable="segment_angle_estimator",
                 name="segment_angle_estimator",
                 output="screen",
+                additional_env={
+                    'OPENBLAS_NUM_THREADS': '1',
+                    'OMP_NUM_THREADS': '1',
+                    'MKL_NUM_THREADS': '1',
+                },
                 # prefix='taskset -c 2 3'
             ),
         ]

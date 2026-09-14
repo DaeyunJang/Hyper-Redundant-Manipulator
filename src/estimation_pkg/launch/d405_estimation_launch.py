@@ -5,12 +5,19 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
+from launch.actions import SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
+from estimation_pkg.runtime import configure_image_transport
 
 
 def generate_launch_description():
     estimation_share = get_package_share_directory('estimation_pkg')
+    profile = configure_image_transport()
+    transport_actions = (
+        [SetEnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE', profile)]
+        if profile else []
+    )
     realsense_share = get_package_share_directory('realsense2_camera')
 
     camera = IncludeLaunchDescription(
@@ -30,4 +37,4 @@ def generate_launch_description():
         output='screen',
     )
 
-    return LaunchDescription([camera, estimator])
+    return LaunchDescription([*transport_actions, camera, estimator])

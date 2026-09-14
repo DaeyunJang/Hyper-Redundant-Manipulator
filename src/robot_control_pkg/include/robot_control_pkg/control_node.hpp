@@ -162,7 +162,7 @@ public:
   virtual ~ControlNode();
 
   /**
-   * @author DY, JKim
+   * @author DY
    * @def    cal_inverse_kinematics
    * @ref    A Stiffness-Adjustable Hyperredundant Manipulator Using a Variable Neutral-Line Mechanism for Minimally Invasive Surgery
    * @brief  calculate target values(length of wire) from the surgical tool kinematics,
@@ -170,6 +170,9 @@ public:
    * @return target values
   */
   void cal_inverse_kinematics(double pAngle, double tAngle, double gAngle);
+
+  /** Publish an actuator command only when the explicit safety gate is open. */
+  bool publish_motor_command_if_enabled(const char * command_source);
 
   /**
    * @author DY
@@ -190,6 +193,7 @@ private:
    * @brief ROS2 parameters 
    */
   std::atomic<ControlMode> control_mode_;
+  std::atomic_bool motor_output_enabled_{false};
   bool hrm_controller_enable_;
   rcl_interfaces::msg::SetParametersResult parameter_callback(const std::vector<rclcpp::Parameter> &parameters);
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
@@ -261,6 +265,8 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr wire_length_publisher_;
   std_msgs::msg::Float64MultiArray wire_length_velocity_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr wire_length_velocity_publisher_;
+  std_msgs::msg::Float64MultiArray target_wire_length_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr target_wire_length_publisher_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> fk_tf_broadcaster_;
 
   /**

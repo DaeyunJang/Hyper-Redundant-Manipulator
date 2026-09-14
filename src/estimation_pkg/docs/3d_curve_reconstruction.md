@@ -6,8 +6,9 @@ This is the agreed RGB-D reconstruction and preliminary pan/tilt estimation
 stage. It reconstructs 19 straight HRM segments from an ordered 3D skeleton.
 The first segment is the fixed proximal offset `os`; the remaining 18 segment
 directions are projected into the alternating DH joint planes to estimate one
-relative angle per one-DOF joint. The result still requires real-hardware sign
-and convention validation before control use.
+relative angle per one-DOF joint. The physical order is q1=tilt
+(South/North), q2=pan (East/West), repeated. The result still requires
+real-hardware sign and convention validation before control use.
 
 ## Input assumptions
 
@@ -224,7 +225,10 @@ segment_directions  (19, 3)
 - It additionally broadcasts `estimated_segment_center_01` through `_19`
   directly under `hrm_base`. Each translation is the corresponding measured
   fitted-curve center point. The fixed first center uses the Base orientation;
-  centers 2 through 19 use the 18 filtered sequential D-H frame rotations.
+  centers 2 through 19 use the 18 filtered sequential D-H joint rotations.
+  The recursion begins at the identity orientation of fixed `hrm_base`, so
+  the first moving frame is identical to `hrm_base` at `q1=0` and displays
+  q1 as tilt about Base `+Z`.
   These measured center frames are geometrically distinct from the
   `hrm_fk_joint_*` boundary frames produced by `robot_control_pkg`.
 - Preserve all 19 raw boundary-to-boundary segment directions. Direction 0 is
@@ -236,10 +240,14 @@ segment_directions  (19, 3)
   the fixed first projected/filtered arrow is the Base +X direction.
   Projection residuals remain internal diagnostic arrays. A configurable
   constant-velocity Kalman filter maintains `[q, q_dot]` for each joint and
-  regenerates filtered DH direction arrows in green. Preliminary sequential
-  joint angles are published on `estimated_segment_angle`: relative arrays
-  contain one active alternating axis per joint, absolute arrays contain
-  Base-frame segment azimuth/elevation, relative velocities use filtered
+  regenerates filtered DH direction arrows in green. The recursion starts
+  directly from fixed `hrm_base` without a preliminary rotation. Therefore
+  q1 tilt rotates about Base +Z and positive q1 bends +X toward +Y.
+  Preliminary sequential joint angles are published on
+  `estimated_segment_angle`: relative arrays
+  contain one active alternating axis per joint. Absolute tilt is the Base
+  X-Y azimuth and absolute pan is the orthogonal elevation; relative velocities
+  use filtered
   `q_dot` when Kalman is enabled, and absolute velocities use wrapped temporal
   finite differences.
 - The three filters are independently selectable in `config.json`:
@@ -250,6 +258,23 @@ segment_directions  (19, 3)
 
 ## Runtime performance contract
 
+The current launch/diagnostic instructions and controlled 2026-09-13 measurements
+are in [the runtime guide](../../../docs/REALTIME_ESTIMATION.md).
+
+- CUDA camera and estimator automatically select 64 MiB Fast DDS SHM for large
+  images. The default 512 KiB segment caused transport loss even when the core
+  reconstruction had sufficient compute time. Explicit DDS/RMW overrides are
+  preserved. Restart both processes when applying the profile.
+- Lee skeletonization crops all-background margins without changing skeleton
+  pixels. The established body-clipped extrapolation still precedes depth.
+- Reconstruction hands off a complete independent latest snapshot under a short
+  lock. It never holds that lock while fitting. Crop serialization/publication
+  also runs outside the input callback. ARROW markers update persistent ns/id
+  objects instead of per-frame DELETEALL/recreation.
+- Latest depth is tolerated within `performance.max_depth_age_sec` (default
+  0.1 s); otherwise the frame produces no new angle. This is not exact sensor
+  synchronization. No-body failures are throttled warnings rather than 30 Hz
+  exception prints.
 - Quartic models are solved by linear least squares; the 3D model omits its
   constant term so `r(0)=(0,0,0)` remains exact.
 - The ROS color callback keeps native `rgb8`/`bgr8`, crops a passthrough NumPy
@@ -263,7 +288,7 @@ segment_directions  (19, 3)
   output is independently capped by `visualization_curve_max_points`.
 - `debug_timing_enabled` controls RBSC/visualization timing output and
   `debug_rate_enabled` controls internal Hz output; both default to false.
-  Their intervals, `opencv_num_threads`, and the RViz point cap live under
+  Their intervals, `opencv_num_threads`, `blas_num_threads`, and the RViz point cap live under
   `performance` in `config.json`.
 - With the live D405, core reconstruction normally measured 11-20 ms after the
   changes versus about 51-55 ms before them. Sensor metadata remained near

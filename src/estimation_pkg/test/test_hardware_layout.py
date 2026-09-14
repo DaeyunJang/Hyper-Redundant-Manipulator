@@ -47,6 +47,13 @@ def test_straight_19_segment_layout_produces_18_joint_angles():
     assert rbsc.segment_center_frame_rotations_filtered.shape == (19, 3, 3)
     np.testing.assert_allclose(rbsc.dh_joint_angles_filtered_rad, 0.0)
     np.testing.assert_allclose(
+        rbsc.dh_joint_frame_rotations_filtered[0], np.eye(3), atol=1e-12
+    )
+    np.testing.assert_allclose(rbsc.dh_joint_axes_xyz[0], [0.0, 0.0, 1.0])
+    np.testing.assert_allclose(
+        rbsc.dh_joint_axes_xyz[1], [0.0, -1.0, 0.0], atol=1e-12
+    )
+    np.testing.assert_allclose(
         rbsc.segment_center_points_xyz[0],
         [0.5 * config['length_of_segment'] * 1e-3, 0.0, 0.0],
         atol=1e-10,
@@ -104,6 +111,28 @@ def test_fixed_proximal_direction_is_excluded_from_18_joint_angles():
         rbsc.dh_joint_angles_filtered_rad,
         expected_angles,
         atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        rbsc.tilt_relative_rad[0::2],
+        expected_angles[0::2],
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(rbsc.tilt_relative_rad[1::2], 0.0)
+    np.testing.assert_allclose(
+        rbsc.pan_relative_rad[1::2],
+        expected_angles[1::2],
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(rbsc.pan_relative_rad[0::2], 0.0)
+    assert rbsc.dh_joint_types[0] == 'tilt'
+    assert rbsc.dh_joint_types[1] == 'pan'
+    np.testing.assert_allclose(rbsc.dh_joint_axes_xyz[0], [0.0, 0.0, 1.0])
+    expected_q2_axis = (
+        Rotation.from_euler('z', expected_angles[0])
+        * Rotation.from_euler('x', 90.0, degrees=True)
+    ).apply([0.0, 0.0, 1.0])
+    np.testing.assert_allclose(
+        rbsc.dh_joint_axes_xyz[1], expected_q2_axis, atol=1e-12
     )
 
 

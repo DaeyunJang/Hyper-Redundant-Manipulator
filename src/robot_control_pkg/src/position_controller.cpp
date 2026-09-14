@@ -32,16 +32,19 @@ std::vector<double> PositionController::update(
   /**
    * @brief compute PID output for pan and tilt angle
    * @warning Check the coordinate system of HRM
-   * Pan  : control(translation) on Y-axis
-   * Tilt : control(translation) on Z-axis
+   * Tilt : q1 rotates about hrm_base +Z and controls translation on +Y.
+   * Pan  : q2 is the orthogonal joint and controls translation on +Z in the
+   *        straight configuration.
    * X-axis value is passive about pan, tilt and external force.
    * If you want to control on X-axis, use robot arm or any other actuation
    * So,
-   * pan <- y of x_d : index 1
-   * tilt <- z of x_d : index 2
+   * tilt <- y of x_d : index 1
+   * pan <- z of x_d : index 2
    */
-  this->del_theta_pan_ = pid_controller_pan_.compute_output(x_desired(1), x_actual(1), dt);
-  this->del_theta_tilt_ =  pid_controller_tilt_.compute_output(x_desired(2), x_actual(2), dt);
+  this->del_theta_tilt_ =
+    pid_controller_tilt_.compute_output(x_desired(1), x_actual(1), dt);
+  this->del_theta_pan_ =
+    pid_controller_pan_.compute_output(x_desired(2), x_actual(2), dt);
 
   /**
    * @brief input for Inverse-Kinematics (Y.J. Kim)

@@ -144,8 +144,11 @@ public:
 
   /**
    * @brief Calculate Base-to-joint transforms for all 18 bending joints.
-   * @param pan_angles 18 entries; active at zero-based even indices
-   * @param tilt_angles 18 entries; active at zero-based odd indices
+   * @details The physical order is q1=tilt, q2=pan, repeated. hrm_base is the
+   * fixed D-H base with no initial rotation. q1 rotates about Base +Z, so a
+   * positive q1 bends the following segment from +X toward +Y.
+   * @param pan_angles 18 entries; active at zero-based odd indices
+   * @param tilt_angles 18 entries; active at zero-based even indices
    * @return std::vector<Eigen::Matrix4d>
    */
   std::vector<Eigen::Matrix4d> computeBaseToJointsTransformationMatrices(
