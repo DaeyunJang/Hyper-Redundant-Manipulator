@@ -1,36 +1,28 @@
-#!/usr/bin/env python3
-# Copyright 2021 OROCA
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+"""Launch an idle recorder; GUI controls /data/record independently."""
 
-import launch
+from pathlib import Path
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, Command, ThisLaunchFileDir
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
-from launch_ros.substitutions import FindPackageShare
-import os
-import xacro
-from launch_ros.descriptions import ParameterValue
+from launch_ros.parameter_descriptions import ParameterValue
+
 
 def generate_launch_description():
-    
+    share = Path(get_package_share_directory('record_pkg'))
     return LaunchDescription([
+        DeclareLaunchArgument('config_file', default_value=str(share / 'config' / 'recording.json')),
+        DeclareLaunchArgument('output_root', default_value=str(Path.cwd() / 'record')),
+        DeclareLaunchArgument('allow_incomplete', default_value='false'),
         Node(
-            package='record_pkg',
-            executable='record',
-            name='record',
-            output='screen',
+            package='record_pkg', executable='record', name='record', output='screen',
+            sigterm_timeout='20', sigkill_timeout='5',
+            parameters=[{
+                'config_file': LaunchConfiguration('config_file'),
+                'output_root': LaunchConfiguration('output_root'),
+                'allow_incomplete': ParameterValue(LaunchConfiguration('allow_incomplete'), value_type=bool),
+            }],
         ),
     ])

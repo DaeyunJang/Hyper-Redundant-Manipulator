@@ -23,12 +23,18 @@ class ComponentSpec:
     arguments: dict = field(default_factory=dict)
 
     def command(self, substitutions=None):
-        substitutions = substitutions or {}
+        substitutions = {
+            key: str(value).lower() if isinstance(value, bool) else value
+            for key, value in (substitutions or {}).items()
+        }
         command = ['ros2', 'launch', self.package, self.launch_file]
         for name, value in self.arguments.items():
             if isinstance(value, str):
                 value = value.format(**substitutions)
-            command.append(f'{name}:={str(value).lower()}')
+            if isinstance(value, bool):
+                value = str(value).lower()
+            # Device paths (ttyUSB/ttyACM/by-id) are case-sensitive.
+            command.append(f'{name}:={value}')
         return command
 
 

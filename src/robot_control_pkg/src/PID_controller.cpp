@@ -1,7 +1,8 @@
-#include "position_controller.hpp"
+#include "PID_controller.hpp"
+#include <cmath>
+#include <stdexcept>
 
-PIDController::PIDController()
-  : kp_(0), ki_(0), kd_(0), integral_(0), previous_error_(0), dt_(0) {}
+PIDController::PIDController() = default;
 PIDController::~PIDController() {}
 
 
@@ -9,6 +10,39 @@ void PIDController::set_PID_gains(double kp, double ki, double kd) {
   kp_ = kp;
   ki_ = ki;
   kd_ = kd;
+}
+
+void PIDController::reset(double desired_value, double measured_value) {
+  integral_ = 0.0;
+  previous_error_ = desired_value - measured_value;
+  previous_measurement_ = measured_value;
+  filtered_measurement_velocity_ = 0.0;
+  dt_ = 0.0;
+  integral_vector_.setZero();
+  previous_error_vector_.setZero();
+}
+
+double PIDController::compute_pd_output(
+  double desired_value, double measured_value, double dt,
+  double derivative_filter_sec)
+{
+  if (!std::isfinite(desired_value) || !std::isfinite(measured_value) ||
+      !std::isfinite(dt) || dt <= 0.0 ||
+      !std::isfinite(derivative_filter_sec) || derivative_filter_sec < 0.0 ||
+      !std::isfinite(kp_) || kp_ < 0.0 || !std::isfinite(kd_) || kd_ < 0.0 ||
+      !std::isfinite(ki_) || ki_ != 0.0)
+  {
+    throw std::invalid_argument("Position PD requires finite inputs, dt>0 and I=0.");
+  }
+  const double velocity = (measured_value - previous_measurement_) / dt;
+  const double alpha = dt / (derivative_filter_sec + dt);
+  filtered_measurement_velocity_ += alpha * (velocity - filtered_measurement_velocity_);
+  previous_measurement_ = measured_value;
+  previous_error_ = desired_value - measured_value;
+  integral_ = 0.0;
+  dt_ = dt;
+  // D on measurement: a target step alone must not create a derivative kick.
+  return kp_ * previous_error_ - kd_ * filtered_measurement_velocity_;
 }
 
 double PIDController::get_integral() {

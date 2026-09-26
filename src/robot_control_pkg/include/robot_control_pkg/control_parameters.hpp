@@ -49,9 +49,15 @@ inline constexpr double STIFFNESS = 2.0;
 namespace position_control_params {
 
 // PID controller ================
-inline constexpr double KP  = 250.0;
-inline constexpr double KI  = 5.0;
-inline constexpr double KD  = 100.0;
+// Initial software-test gains, NOT validated hardware tuning.
+// Output is an angular correction [rad], input is tip position [m].
+inline constexpr double KP  = 5.0;    // rad/m
+inline constexpr double KI  = 0.0;    // PD only for the current bring-up
+inline constexpr double KD  = 0.05;   // rad*s/m, derivative on measurement
+inline constexpr double DERIVATIVE_FILTER_SEC = 0.05;
+inline constexpr double MAX_ANGULAR_SPEED_DEG_S = 5.0;
+inline constexpr double FEEDBACK_TIMEOUT_SEC = 0.25;
+// Nominal reference for standalone tests; runtime dt comes from image stamps.
 inline constexpr double SAMPLING_HZ = 30.0;
 inline constexpr double DT = 1.0 / SAMPLING_HZ;
 } // namespace position_control_params

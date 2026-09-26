@@ -5,8 +5,8 @@
 #include <EEPROM.h>
 #endif
 
-constexpr int HX711_DOUT = 4;
-constexpr int HX711_SCK = 5;
+constexpr int HX711_DOUT = 15;
+constexpr int HX711_SCK = 16;
 constexpr int CAL_FACTOR_EEPROM_ADDRESS = 0;
 
 HX711_ADC loadCell(HX711_DOUT, HX711_SCK);

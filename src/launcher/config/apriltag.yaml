@@ -1,0 +1,21 @@
+# Baseline from the locally installed apriltag_ros/cfg/tags_36h11.yaml.
+# Full-resolution quad detection trial; hamming=1 comparison showed no ID1 gain
+# in the 2026-09-18 captured scene, so corrected-bit acceptance remains strict.
+# Measured outer black-border edge (excluding white margin): 20 mm, IDs 0 and 1.
+/**:
+  ros__parameters:
+    image_transport: raw
+    family: 36h11
+    size: 0.020
+    max_hamming: 0
+    detector:
+      threads: 1
+      decimate: 1.0
+      blur: 0.0
+      refine: true
+      sharpening: 0.25
+      debug: false
+    tag:
+      ids: [0, 1]
+      frames: [ID0, ID1]
+      sizes: [0.020, 0.020]

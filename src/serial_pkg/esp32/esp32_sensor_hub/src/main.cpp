@@ -7,12 +7,12 @@ constexpr uint32_t SERIAL_PERIOD_MS = 5;  // 200 Hz
 // atomically by the serial task.
 portMUX_TYPE gDataMutex = portMUX_INITIALIZER_UNLOCKED;
 float gHx711Data[4] = {};
-int32_t gFx = 0;
-int32_t gFy = 0;
-int32_t gFz = 0;
-int32_t gTx = 0;
-int32_t gTy = 0;
-int32_t gTz = 0;
+float gFx = 0.0f;
+float gFy = 0.0f;
+float gFz = 0.0f;
+float gTx = 0.0f;
+float gTy = 0.0f;
+float gTz = 0.0f;
 
 void hx711Begin();
 void hx711Poll();
@@ -44,7 +44,7 @@ void serialTask(void *)
     for (;;)
     {
         float hx[4];
-        int32_t fx, fy, fz, tx, ty, tz;
+        float fx, fy, fz, tx, ty, tz;
 
         portENTER_CRITICAL(&gDataMutex);
         for (uint8_t i = 0; i < 4; ++i)
@@ -60,10 +60,12 @@ void serialTask(void *)
         portEXIT_CRITICAL(&gDataMutex);
 
         // Legacy serial protocol, expanded from 8 to 10 fields.
-        Serial.printf("/%ld,%ld,%ld,%ld,%ld,%ld,%.2f,%.2f,%.2f,%.2f;\n",
-                      static_cast<long>(fx), static_cast<long>(fy), static_cast<long>(fz),
-                      static_cast<long>(tx), static_cast<long>(ty), static_cast<long>(tz),
-                      hx[0], hx[1], hx[2], hx[3]);
+        Serial.printf(
+            "/%.0f,%.0f,%.0f,%.1f,%.1f,%.1f,%.2f,%.2f,%.2f,%.2f;\n",
+            fx, fy, fz,
+            tx, ty, tz,
+            hx[0], hx[1], hx[2], hx[3]
+        );
         vTaskDelay(pdMS_TO_TICKS(SERIAL_PERIOD_MS));
     }
 }

@@ -2,13 +2,31 @@
   "components": [
     {
       "id": "camera",
-      "label": "RealSense camera (CUDA)",
+      "label": "HRM camera (CUDA)",
       "package": "launcher",
       "launch_file": "cuda_realsense.launch.py",
       "expected_nodes": ["/camera/camera"],
       "auto_start": true,
       "delay_sec": 0.0,
-      "description": "Color and aligned-depth camera streams"
+      "description": "CUDA color and aligned depth; select model and optional serial before Start",
+      "arguments": {
+        "device_type": "{camera_device_type}",
+        "serial_no": "{camera_serial_no}"
+      }
+    },
+    {
+      "id": "tag_camera",
+      "label": "Tag camera (CUDA)",
+      "package": "launcher",
+      "launch_file": "cuda_apriltag_camera.launch.py",
+      "expected_nodes": ["/tag_camera/tag_camera"],
+      "auto_start": true,
+      "delay_sec": 0.5,
+      "description": "Separate RGB camera for AprilTag; default D455",
+      "arguments": {
+        "device_type": "{tag_camera_device_type}",
+        "serial_no": "{tag_camera_serial_no}"
+      }
     },
     {
       "id": "serial",
@@ -18,7 +36,10 @@
       "expected_nodes": ["/serial_read"],
       "auto_start": true,
       "delay_sec": 1.0,
-      "description": "Load cells and force/torque sensor"
+      "description": "Load cells and force/torque sensor",
+      "arguments": {
+        "serial_port": "{serial_port}"
+      }
     },
     {
       "id": "tcp",
@@ -51,7 +72,13 @@
       "expected_nodes": ["/segment_angle_estimator"],
       "auto_start": true,
       "delay_sec": 4.0,
-      "description": "Skeleton, 3D reconstruction and joint angles"
+      "description": "Skeleton, 3D reconstruction and joint angles",
+      "arguments": {
+        "roi_x": "{roi_x}",
+        "roi_y": "{roi_y}",
+        "roi_width": "{roi_width}",
+        "roi_height": "{roi_height}"
+      }
     },
     {
       "id": "record",
@@ -61,17 +88,17 @@
       "expected_nodes": ["/record"],
       "auto_start": false,
       "delay_sec": 5.0,
-      "description": "Legacy recorder (manual; dataset migration pending)"
+      "description": "HRM crop PNGs plus numeric sensor/motor/angle/tag bag; automatic CSV after Record Stop"
     },
     {
       "id": "apriltag",
       "label": "AprilTag",
       "package": "launcher",
       "launch_file": "apriltag.launch.py",
-      "expected_nodes": ["/apriltag_node"],
-      "auto_start": false,
+      "expected_nodes": ["/apriltag_node", "/apriltag_pose", "/apriltag_preprocess/rectify_color"],
+      "auto_start": true,
       "delay_sec": 6.0,
-      "description": "Optional camera-based tag tracking"
+      "description": "Tag camera RGB rectification and 20 mm ID0/ID1 poses"
     }
   ]
 }

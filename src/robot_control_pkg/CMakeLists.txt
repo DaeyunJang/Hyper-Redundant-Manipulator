@@ -87,6 +87,14 @@ install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Reference snapshots for datasets; runtime hardware.* parameters identify the
+# constants actually compiled into the controller (these files may be newer).
+install(FILES
+  include/robot_control_pkg/hw_definition.hpp
+  include/robot_control_pkg/control_parameters.hpp
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   find_package(ament_cmake_gtest REQUIRED)
@@ -108,6 +116,15 @@ if(BUILD_TESTING)
     include/robot_control_pkg
   )
   ament_target_dependencies(test_surgical_tool_fk Eigen3)
+
+  ament_add_gtest(test_position_controller
+    test/test_position_controller.cpp
+    src/position_controller.cpp
+    src/PID_controller.cpp
+    src/surgical_tool.cpp
+  )
+  ament_target_dependencies(test_position_controller Eigen3)
+  ament_add_gtest(test_ik_sine_motion test/test_ik_sine_motion.cpp)
 endif()
 
 ament_package()

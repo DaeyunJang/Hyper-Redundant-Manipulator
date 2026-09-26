@@ -3,6 +3,8 @@ build
 install
 log
 .cuda_realsense/
+.isaac_ros_compare/
+.ros_image_proc/
 .git
 record
 .mypy_cache

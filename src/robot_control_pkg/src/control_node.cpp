@@ -1,8 +1,18 @@
 #include "control_node.hpp"
+#include "hardware_metadata.hpp"
 
 using MotorState = custom_interfaces::msg::MotorState;
 using MotorCommand = custom_interfaces::msg::MotorCommand;
 using namespace std::chrono_literals;
+
+namespace {
+int64_t stamp_ns(const builtin_interfaces::msg::Time& stamp) {
+  return static_cast<int64_t>(stamp.sec) * 1000000000LL + stamp.nanosec;
+}
+bool finite_values(const std::vector<double>& values) {
+  return std::all_of(values.begin(), values.end(), [](double value) {return std::isfinite(value);});
+}
+}  // namespace
 
 ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 : Node("ControlNode", node_options),
@@ -15,9 +25,9 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   x_t_(Eigen::VectorXd::Zero(6)),
   x_desired_(Eigen::VectorXd::Zero(6)),
   x_actual_(Eigen::VectorXd::Zero(6)),
-  loop_rate_dynamics_(dynamics_params::SAMPLING_HZ),
-  loop_rate_position_with_admittance_(position_control_params::SAMPLING_HZ)
+  loop_rate_dynamics_(dynamics_params::SAMPLING_HZ)
 {
+  declare_hardware_metadata(*this);
   const int qos_depth = std::max(
     1, static_cast<int>(this->declare_parameter<int>("qos_depth", 1)));
   const int initial_control_mode = static_cast<int>(
@@ -35,6 +45,14 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   }
   motor_output_enabled_ =
     this->declare_parameter<bool>("motor_output_enabled", false);
+  const hrm::SineConfig sine_defaults;
+  declare_parameter<std::vector<double>>("motion.sine.tilt",
+    std::vector<double>(sine_defaults.tilt.begin(), sine_defaults.tilt.end()));
+  declare_parameter<std::vector<double>>("motion.sine.pan",
+    std::vector<double>(sine_defaults.pan.begin(), sine_defaults.pan.end()));
+  declare_parameter<double>("motion.sine.period_sec", sine_defaults.period);
+  declare_parameter<double>("motion.sine.max_speed_deg_s", sine_defaults.speed);
+  sine_config().validate();
   std::cout << "------------------------------------" <<std::endl;
   std::cout << "control_mode_: " << control_mode_ << std::endl;
   std::cout << "------------------------------------" <<std::endl;
@@ -50,9 +68,29 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   this->declare_parameter<double>("admittance/K_d", admittance_params::K_d);
 
   // position controller
-  this->declare_parameter<double>("position_control/pid_controller_pan/p_gain", position_control_params::KP);
-  this->declare_parameter<double>("position_control/pid_controller_pan/i_gain", position_control_params::KI);
-  this->declare_parameter<double>("position_control/pid_controller_pan/d_gain", position_control_params::KD);
+  for (const std::string axis : {"pan", "tilt"}) {
+    const std::string prefix = "position_control/pid_controller_" + axis + "/";
+    const double p = declare_parameter<double>(prefix + "p_gain", position_control_params::KP);
+    const double i = declare_parameter<double>(prefix + "i_gain", position_control_params::KI);
+    const double d = declare_parameter<double>(prefix + "d_gain", position_control_params::KD);
+    if (!std::isfinite(p) || p < 0.0 || i != 0.0 || !std::isfinite(d) || d < 0.0) {
+      throw std::invalid_argument("Position PD requires finite nonnegative P/D and I=0.");
+    }
+    auto& pid = axis == "pan" ? HRM_position_controller_.pid_controller_pan_ : HRM_position_controller_.pid_controller_tilt_;
+    pid.set_PID_gains(p, i, d);
+  }
+  position_max_speed_deg_s_ = declare_parameter<double>(
+    "position_control/max_angular_speed_deg_s", position_control_params::MAX_ANGULAR_SPEED_DEG_S);
+  position_derivative_filter_sec_ = declare_parameter<double>(
+    "position_control/derivative_filter_sec", position_control_params::DERIVATIVE_FILTER_SEC);
+  position_feedback_timeout_sec_ = declare_parameter<double>(
+    "position_control/feedback_timeout_sec", position_control_params::FEEDBACK_TIMEOUT_SEC);
+  if (!std::isfinite(position_feedback_timeout_sec_) || position_feedback_timeout_sec_ <= 0.0 ||
+      position_feedback_timeout_sec_ > position_control_params::FEEDBACK_TIMEOUT_SEC)
+  {
+    throw std::invalid_argument("Position feedback timeout must be in (0, 0.25] seconds.");
+  }
+  HRM_position_controller_.set_limits(position_max_speed_deg_s_, position_derivative_filter_sec_);
 
   // 파라미터 변경 콜백 등록
   param_callback_handle_ = this->add_on_set_parameters_callback(
@@ -74,6 +112,10 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
     this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100;
   }
   motor_control_publisher_ = this->create_publisher<MotorCommand>("motor_command", qos_reliable_latest);
+  position_motor_preview_publisher_ = create_publisher<MotorCommand>(
+    "position/target_motor_command", qos_reliable_latest);
+  position_status_publisher_ = create_publisher<std_msgs::msg::String>(
+    "position/control_status", rclcpp::QoS(1).reliable().transient_local());
   RCLCPP_INFO(this->get_logger(), "Publisher 'motor_command' is created.");
   
   //===============================
@@ -98,6 +140,9 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   // publish control mode
   control_mode_msgs_.data = ControlModeToString(this->control_mode_);
   control_mode_msgs_publisher_->publish(control_mode_msgs_);
+  ik_sine_status_pub_ = create_publisher<std_msgs::msg::String>(
+    "kinematics/sine_status", rclcpp::QoS(1).reliable().transient_local());
+  stop_ik_sine("STOPPED: explicit Start required");
   
   //===============================
   // surgical tool pose(degree) publisher
@@ -106,6 +151,9 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
     this->create_publisher<geometry_msgs::msg::Twist>("surgical_tool_pose", qos_reliable_latest);
   tool_endeffector_pose_publisher_ = 
     this->create_publisher<std_msgs::msg::Float64MultiArray>("tool_endeffector_pose", qos_reliable_latest);
+  fk_tip_position_publisher_ =
+    this->create_publisher<geometry_msgs::msg::PointStamped>(
+      "kinematics/fk_tip_position", qos_reliable_latest);
   wire_length_publisher_ = 
     this->create_publisher<std_msgs::msg::Float64MultiArray>("wire_length", qos_reliable_latest);
   wire_length_velocity_publisher_ = 
@@ -136,6 +184,17 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       qos_reliable_latest,
       [this] (const MotorState::SharedPtr msg) -> void
       {
+        std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+        if (msg->actual_position.size() != NUM_OF_MOTORS ||
+            msg->actual_velocity.size() != NUM_OF_MOTORS)
+        {
+          valid_motor_feedback_ = false;
+          op_mode_ = kStop;
+          RCLCPP_WARN(get_logger(), "Ignoring malformed motor_state; expected four positions/velocities.");
+          return;
+        }
+        valid_motor_feedback_ = true;
+        motor_received_ = std::chrono::steady_clock::now();
         RCLCPP_INFO_ONCE(this->get_logger(), "Subscribing the /motor_state.");
         this->op_mode_ = kEnable;
         this->motorstate_op_flag_ = true;
@@ -163,6 +222,14 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       qos_reliable_latest,
       [this] (const custom_interfaces::msg::LoadcellState::SharedPtr msg) -> void
       {
+        std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+        if (msg->stress.size() != NUM_OF_MOTORS || !finite_values(msg->stress)) {
+          valid_loadcell_feedback_ = false;
+          RCLCPP_WARN(get_logger(), "Ignoring malformed loadcell_state; expected four finite stresses.");
+          return;
+        }
+        valid_loadcell_feedback_ = true;
+        loadcell_received_ = std::chrono::steady_clock::now();
         try {
           this->loadcell_op_flag_ = true;
           this->loadcell_data_.header = msg->header;
@@ -181,6 +248,10 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
       qos_reliable_latest,
       [this] (const geometry_msgs::msg::Vector3::SharedPtr msg) -> void
       {
+        std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+        valid_force_feedback_ = std::isfinite(msg->x) && std::isfinite(msg->y) && std::isfinite(msg->z);
+        if (!valid_force_feedback_) {return;}
+        force_received_ = std::chrono::steady_clock::now();
         try {
           this->external_force_op_flag_ = true;
           this->external_force_.x = msg->x;
@@ -237,9 +308,25 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
 
           {
             std::lock_guard<std::mutex> lock(this->segment_angle_mutex_);
+            if (msg->header.frame_id != "hrm_base" || stamp_ns(msg->header.stamp) <= 0 ||
+                stamp_ns(msg->header.stamp) <= stamp_ns(segment_angle_.header.stamp) ||
+                !finite_values(msg->pan_relative) || !finite_values(msg->tilt_relative) ||
+                !finite_values(msg->pan_absolute) || !finite_values(msg->tilt_absolute) ||
+                !finite_values(msg->pan_angular_velocity_relative) ||
+                !finite_values(msg->tilt_angular_velocity_relative) ||
+                !finite_values(msg->pan_angular_velocity_absolute) ||
+                !finite_values(msg->tilt_angular_velocity_absolute))
+            {
+              RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                "Ignoring invalid/duplicate angle frame; require finite hrm_base data and increasing source stamp.");
+              return;
+            }
             this->segment_angle_ = *msg;
             this->segment_angle_op_flag_ = true;
+            ++segment_angle_sequence_;
+            segment_angle_received_ = std::chrono::steady_clock::now();
           }
+          segment_angle_cv_.notify_one();
           const auto fk_transforms =
             this->HRM_position_controller_.surgical_tool_.
             computeBaseToJointsTransformationMatrices(
@@ -264,6 +351,14 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   const std::shared_ptr<MoveMotorDirect::Request> request,
   std::shared_ptr<MoveMotorDirect::Response> response) -> void
   {
+    std::lock_guard<std::recursive_mutex> control_lock(position_control_mutex_);
+    std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+    if (ik_sine_active_ || control_mode_ == ControlMode::kPosition || control_mode_ == ControlMode::kAdmittance ||
+        !valid_motor_feedback_ || request->index_motor < 0 || request->index_motor >= NUM_OF_MOTORS)
+    {
+      response->success = false;
+      return;
+    }
     try {
       int32_t idx = request->index_motor;
       int32_t target_position = request->target_position;
@@ -303,6 +398,12 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   const std::shared_ptr<MoveToolAngle::Request> request,
   std::shared_ptr<MoveToolAngle::Response> response) -> void
   {
+    std::lock_guard<std::recursive_mutex> control_lock(position_control_mutex_);
+    if (ik_sine_active_) {
+      response->success = false;
+      RCLCPP_WARN(get_logger(), "Stop /kinematics/sine_motion before manual IK commands.");
+      return;
+    }
     try {
       // run
       if (control_mode_ != ControlMode::kKinematics) {
@@ -385,60 +486,100 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
     create_service<MoveToolAngle>("dynamics/move_tool_angle", dynamics_move_tool_angle);
 
 
-  auto set_goal_position = 
-  [this](
-  const std::shared_ptr<SetGoalPosition::Request> request,
-  std::shared_ptr<SetGoalPosition::Response> response) -> void
+  auto set_goal_position =
+  [this](const std::shared_ptr<SetGoalPosition::Request> request,
+    std::shared_ptr<SetGoalPosition::Response> response) -> void
   {
-    try {
-      // run
-      if(this->op_mode_ == kEnable) {
-        if(request->reference_type == "absolute") {
-          // MOVE absolute
-          RCLCPP_INFO(
-            this->get_logger(),
-            "Received goal position: x: %.2f, y: %.2f, z: %.2f MODE: Absolute,", 
-            request->goal_position.position.x,
-            request->goal_position.position.y,
-            request->goal_position.position.z);
-          this->x_desired_ <<
-            request->goal_position.position.x,
-            request->goal_position.position.y,
-            request->goal_position.position.z,
-            0.0, 0.0, 0.0;  // 나머지 값은 기본값 0으로 설정
-        } else if (request->reference_type == "relative") {
-          // MOVE relative
-          RCLCPP_INFO(
-            this->get_logger(),
-            "Received goal position: x: x+%.2f, y: y+%.2f, z: z+%.2f MODE: Relative,", 
-            request->goal_position.position.x,
-            request->goal_position.position.y,
-            request->goal_position.position.z);
-          Eigen::VectorXd delta_x(6);
-          delta_x <<
-            request->goal_position.position.x,
-            request->goal_position.position.y,
-            request->goal_position.position.z,
-            0.0, 0.0, 0.0;  // 나머지 값은 기본값 0으로 설정
-          this->x_desired_ += delta_x;
-        }
-        response->success = true;
-        RCLCPP_INFO(this->get_logger(), "Service <position/set_goal_position> accept the request");
-      }
-    } catch (const std::exception & e) {
-      RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
+    std::lock_guard<std::recursive_mutex> control_lock(position_control_mutex_);
+    response->success = false;
+    if ((control_mode_ != ControlMode::kPosition && control_mode_ != ControlMode::kAdmittance) ||
+        !position_ready_ || position_fault_latched_)
+    {
+      RCLCPP_WARN(get_logger(), "Position goal rejected: wait for fresh-feedback mode entry.");
+      return;
     }
-    
+    const auto& p = request->goal_position.position;
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+        (request->reference_type != "absolute" && request->reference_type != "relative"))
+    {
+      return;
+    }
+    // hrm_base metres. X is passive; only Y/Z are controlled.
+    const bool absolute = request->reference_type == "absolute";
+    const double y = absolute ? p.y : x_desired_(1) + p.y;
+    const double z = absolute ? p.z : x_desired_(2) + p.z;
+    if (!std::isfinite(y) || !std::isfinite(z)) {return;}
+    x_desired_(1) = y;
+    x_desired_(2) = z;
+    response->success = true;
+    RCLCPP_INFO(get_logger(), "Position goal [hrm_base m]: Y=%+.6f Z=%+.6f",
+      x_desired_(1), x_desired_(2));
   };
-  set_goal_position_service_server_ = 
+  set_goal_position_service_server_ =
     create_service<SetGoalPosition>("position/set_goal_position", set_goal_position);
 
+
+  ik_sine_service_ = create_service<std_srvs::srv::SetBool>(
+    "kinematics/sine_motion",
+    [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+           std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+      std::lock_guard<std::recursive_mutex> lock(position_control_mutex_);
+      if (!request->data) {
+        stop_ik_sine("STOPPED: no new trajectory targets; no automatic return to zero");
+        response->success = true;
+        response->message = "Sine stopped; last target retained (not an emergency stop).";
+        return;
+      }
+      try {
+        if (control_mode_ != ControlMode::kKinematics || timer_) {
+          throw std::runtime_error("Require kinematics mode and no other active motion timer.");
+        }
+        if (motor_output_enabled_ && !ik_sine_feedback_safe()) {
+          throw std::runtime_error("Fresh motor/loadcell data below tension limit required.");
+        }
+        if (motor_output_enabled_) {
+          // A dry-run or direct command can leave IK's last angle different
+          // from the hardware. Never treat that angle as a measured start pose.
+          const auto lengths = HRM_controller_.surgical_tool_.get_IK_result(
+            current_pan_angle_, current_tilt_angle_, current_grip_angle_);
+          const double scale = DIRECTION_COUPLER * 0.5 *
+            gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+          std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+          for (int i = 0; i < NUM_OF_MOTORS; ++i) {
+            if (std::abs(lengths[i] * scale - motor_state_.actual_position[i]) > 1000.0) {
+              throw std::runtime_error(
+                "Motor positions differ from last IK pose by >1000 counts. "
+                "Establish the calibrated starting IK pose before sine Start.");
+            }
+          }
+        }
+        ik_sine_.start(sine_config(), current_tilt_angle_, current_pan_angle_);
+        ik_sine_tick_ = std::chrono::steady_clock::now();
+        timer_ = create_wall_timer(10ms, std::bind(&ControlNode::publish_ik_sine, this));
+        ik_sine_active_ = true;
+        std_msgs::msg::String status;
+        status.data = motor_output_enabled_ ? "RUNNING: IK sine" : "DRY_RUN: IK sine; motor output blocked";
+        ik_sine_status_pub_->publish(status);
+        response->success = true;
+        response->message = status.data;
+      } catch (const std::exception& error) {
+        response->success = false;
+        response->message = error.what();
+      }
+    });
 
   auto sine_wave_callback = 
   [this](
   const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
   {
+    std::lock_guard<std::recursive_mutex> lock(position_control_mutex_);
+    if (ik_sine_active_) {
+      if (!request->data) {stop_ik_sine("STOPPED by legacy motion stop request");}
+      response->success = !request->data;
+      response->message = request->data ? "Stop IK sine before another motion." : "IK sine stopped.";
+      return;
+    }
     try {
       if(request->data) {
         // True --> Start timer
@@ -478,6 +619,13 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
   {
+    std::lock_guard<std::recursive_mutex> lock(position_control_mutex_);
+    if (ik_sine_active_) {
+      if (!request->data) {stop_ik_sine("STOPPED by legacy motion stop request");}
+      response->success = !request->data;
+      response->message = request->data ? "Stop IK sine before another motion." : "IK sine stopped.";
+      return;
+    }
     try {
       if(request->data) {
         // True --> Start timer
@@ -518,6 +666,13 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
   {
+    std::lock_guard<std::recursive_mutex> lock(position_control_mutex_);
+    if (ik_sine_active_) {
+      if (!request->data) {stop_ik_sine("STOPPED by legacy motion stop request");}
+      response->success = !request->data;
+      response->message = request->data ? "Stop IK sine before another motion." : "IK sine stopped.";
+      return;
+    }
     try {
       if (control_mode_ != ControlMode::kKinematics) {
         RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
@@ -561,6 +716,13 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) -> void
   {
+    std::lock_guard<std::recursive_mutex> lock(position_control_mutex_);
+    if (ik_sine_active_) {
+      if (!request->data) {stop_ik_sine("STOPPED by legacy motion stop request");}
+      response->success = !request->data;
+      response->message = request->data ? "Stop IK sine before another motion." : "IK sine stopped.";
+      return;
+    }
     try {
       if (control_mode_ != ControlMode::kKinematics) {
         RCLCPP_INFO(this->get_logger(), "this motion must be operated on \'KINEMACTICS\' mode. Change parameter \'control_mode\'.");
@@ -622,10 +784,10 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         std::shared_ptr<SetControlMode::Response> response) -> void
   {
     try {
-      RCLCPP_INFO(this->get_logger(), "Control mode changed -> %d.", request->mode);
-      this->set_parameter(rclcpp::Parameter("control_mode", request->mode));
-      response->success = true;
-      response->message = "Control mode changed -> %d.", request->mode;
+      const auto result = this->set_parameter(rclcpp::Parameter("control_mode", request->mode));
+      response->success = result.successful;
+      response->message = result.successful ?
+        "Control mode changed -> " + std::to_string(request->mode) : result.reason;
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
     }
@@ -797,8 +959,8 @@ void ControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gA
     this->target_wire_length_.data[index] = f_val[index];
   }
   this->target_wire_length_publisher_->publish(this->target_wire_length_);
-  RCLCPP_INFO(
-    this->get_logger(),
+  RCLCPP_INFO_THROTTLE(
+    this->get_logger(), *this->get_clock(), 2000,
     "IK target [mm] East=%+.5f, West=%+.5f, South=%+.5f, North=%+.5f",
     f_val[0], f_val[1], f_val[2], f_val[3]);
 
@@ -850,6 +1012,11 @@ void ControlNode::cal_inverse_kinematics(double pAngle, double tAngle, double gA
 
 bool ControlNode::publish_motor_command_if_enabled(const char * command_source)
 {
+  std::lock_guard<std::recursive_mutex> control_lock(position_control_mutex_);
+  // Only the fresh-frame position worker may drive these feedback modes.
+  if (control_mode_ == ControlMode::kPosition || control_mode_ == ControlMode::kAdmittance) {
+    return false;
+  }
   if (!motor_output_enabled_) {
     RCLCPP_WARN_THROTTLE(
       this->get_logger(), *this->get_clock(), 2000,
@@ -883,8 +1050,88 @@ void ControlNode::publishall()
 
 }
 
+hrm::SineConfig ControlNode::sine_config(const std::vector<rclcpp::Parameter>& overrides)
+{
+  auto get = [&](const std::string& name) {
+    for (const auto& parameter : overrides) {
+      if (parameter.get_name() == name) {return parameter;}
+    }
+    return get_parameter(name);
+  };
+  hrm::SineConfig config;
+  auto read_axis = [&](const std::string& name, std::array<double, 3>& target) {
+    const auto values = get(name).as_double_array();
+    if (values.size() != 3) {
+      throw std::invalid_argument("Sine axis must be [center_deg, amplitude_deg, phase_deg].");
+    }
+    std::copy(values.begin(), values.end(), target.begin());
+  };
+  read_axis("motion.sine.tilt", config.tilt);
+  read_axis("motion.sine.pan", config.pan);
+  config.period = get("motion.sine.period_sec").as_double();
+  config.speed = get("motion.sine.max_speed_deg_s").as_double();
+  config.validate();
+  return config;
+}
+
+void ControlNode::stop_ik_sine(const std::string& reason)
+{
+  if (ik_sine_active_ && timer_) {timer_->cancel(); timer_.reset();}
+  ik_sine_active_ = false;
+  std_msgs::msg::String message;
+  message.data = reason;
+  ik_sine_status_pub_->publish(message);
+}
+
+bool ControlNode::ik_sine_feedback_safe()
+{
+  std::lock_guard<std::mutex> lock(feedback_mutex_);
+  const auto steady = std::chrono::steady_clock::now();
+  const auto ros_ns = now().nanoseconds();
+  auto fresh = [&](std::chrono::steady_clock::time_point received,
+                   const builtin_interfaces::msg::Time& stamp) {
+    const double age = (ros_ns - stamp_ns(stamp)) * 1e-9;
+    return std::chrono::duration<double>(steady - received).count() <= 0.25 &&
+           stamp_ns(stamp) > 0 && age >= -0.05 && age <= 0.25;
+  };
+  return op_mode_ == kEnable && valid_motor_feedback_ && valid_loadcell_feedback_ &&
+    fresh(motor_received_, motor_state_.header.stamp) &&
+    fresh(loadcell_received_, loadcell_data_.header.stamp) &&
+    loadcell_data_.stress.size() == NUM_OF_MOTORS &&
+    std::all_of(loadcell_data_.stress.begin(), loadcell_data_.stress.end(),
+      [](double value) {return std::isfinite(value) && value < TENSION_LIMIT;});
+}
+
+void ControlNode::publish_ik_sine()
+{
+  std::lock_guard<std::recursive_mutex> lock(position_control_mutex_);
+  if (!ik_sine_active_) {return;}
+  if (control_mode_ != ControlMode::kKinematics ||
+      (motor_output_enabled_ && !ik_sine_feedback_safe())) {
+    stop_ik_sine("STOPPED: mode or motor/loadcell safety check failed; explicit restart required");
+    return;
+  }
+  try {
+    const auto tick = std::chrono::steady_clock::now();
+    const double dt = std::chrono::duration<double>(tick - ik_sine_tick_).count();
+    ik_sine_tick_ = tick;
+    const auto angles = ik_sine_.advance(dt);
+    cal_inverse_kinematics(angles[1], angles[0], current_grip_angle_);
+    for (auto count : motor_control_target_val_.target_position) {
+      if (std::abs(static_cast<double>(count)) > MOTOR_SOFTWARE_LIMIT) {
+        throw std::runtime_error("Motor software position limit.");
+      }
+    }
+    publish_motor_command_if_enabled("kinematics/sine_motion");
+    surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
+  } catch (const std::exception& error) {
+    stop_ik_sine(std::string("STOPPED: ") + error.what());
+  }
+}
+
 void ControlNode::publish_sine_wave()
 {
+  std::lock_guard<std::recursive_mutex> control_lock(position_control_mutex_);
   if (control_mode_ == ControlMode::kKinematics) {
     double omega = 2.0 * M_PI / period_;
     trajectory_ = amp_deg_ * std::sin(omega * count_);
@@ -914,6 +1161,7 @@ void ControlNode::publish_sine_wave()
 
 void ControlNode::publish_sine_wave_1time()
 {
+  std::lock_guard<std::recursive_mutex> control_lock(position_control_mutex_);
   if (control_mode_ == ControlMode::kKinematics) {
     double omega = 2.0 * M_PI / period_;
     trajectory_ = amp_deg_ * std::sin(omega * count_);
@@ -990,8 +1238,56 @@ void ControlNode::publish_moebius_motion()
 }
 
 rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const std::vector<rclcpp::Parameter> &parameters) {
+  std::lock_guard<std::recursive_mutex> control_lock(position_control_mutex_);
+  rcl_interfaces::msg::SetParametersResult rejected;
+  rejected.successful = false;
+  for (const auto& parameter : parameters) {
+    if (parameter.get_name().rfind("motion.sine.", 0) == 0) {
+      if (ik_sine_active_) {
+        rejected.reason = "Stop IK sine before editing waveform settings.";
+        return rejected;
+      }
+      try {sine_config(parameters);} catch (const std::exception& error) {
+        rejected.reason = error.what();
+        return rejected;
+      }
+      break;
+    }
+  }
+  // Validate the whole batch before applying any position-control changes.
+  for (const auto& param : parameters) {
+    const auto& name = param.get_name();
+    if (name == "control_mode" && (param.as_int() < 1 || param.as_int() > 4)) {
+      rejected.reason = "control_mode must be 1..4.";
+      return rejected;
+    }
+    if (name.rfind("position_control/", 0) == 0) {
+      const double value = param.as_double();
+      if (!std::isfinite(value) || value < 0.0 ||
+          (name.find("/i_gain") != std::string::npos && value != 0.0) ||
+          (name == "position_control/max_angular_speed_deg_s" && value <= 0.0) ||
+          (name == "position_control/feedback_timeout_sec" &&
+            (value <= 0.0 || value > position_control_params::FEEDBACK_TIMEOUT_SEC)))
+      {
+        rejected.reason = "Position PD: finite nonnegative gains, I=0, speed>0, timeout in (0,0.25].";
+        return rejected;
+      }
+    }
+  }
   for (const auto &param : parameters) {
     if (param.get_name() == "control_mode") {
+      if (param.as_int() != static_cast<int>(control_mode_.load())) {
+        if (ik_sine_active_) {stop_ik_sine("STOPPED: control mode changed");}
+        if (position_ready_) {hold_position_from_motor_feedback();}
+        if (timer_) {timer_->cancel(); timer_.reset();}
+        count_ = 0;
+        ++position_entry_revision_;
+        position_entry_source_ns_ = now().nanoseconds();
+        std::lock_guard<std::mutex> frame_lock(segment_angle_mutex_);
+        position_entry_min_sequence_ = segment_angle_sequence_;
+        position_ready_ = false;
+        position_fault_latched_ = false;
+      }
       if (param.as_int() == ControlMode::kKinematics) {
         control_mode_ = ControlMode::kKinematics;
         RCLCPP_INFO(this->get_logger(), "Switched to KINEMATICS mode");
@@ -1008,6 +1304,19 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
         RCLCPP_WARN(this->get_logger(), "Unknown mode. Keeping previous mode.");
       }
     } else if (param.get_name() == "motor_output_enabled") {
+      if (param.as_bool() != motor_output_enabled_.load()) {
+        if (ik_sine_active_) {stop_ik_sine("STOPPED: motor output gate changed");}
+        // Send a current-position hold BEFORE disabling new ROS commands.
+        if (position_ready_) {hold_position_from_motor_feedback();}
+        if (timer_) {timer_->cancel(); timer_.reset();}
+        count_ = 0;
+        ++position_entry_revision_;
+        position_entry_source_ns_ = now().nanoseconds();
+        std::lock_guard<std::mutex> frame_lock(segment_angle_mutex_);
+        position_entry_min_sequence_ = segment_angle_sequence_;
+        position_ready_ = false;
+        position_fault_latched_ = false;
+      }
       motor_output_enabled_ = param.as_bool();
       RCLCPP_WARN(
         this->get_logger(), "Motor output %s.",
@@ -1045,7 +1354,14 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       HRM_admittance_controller_.admittance_filter_.K_(1,1) = K;
       RCLCPP_INFO(this->get_logger(), "Updated K_d(1,1): %f", K);
     }
-    // poisiton control
+    else if (param.get_name() == "position_control/max_angular_speed_deg_s") {
+      position_max_speed_deg_s_ = param.as_double();
+    } else if (param.get_name() == "position_control/derivative_filter_sec") {
+      position_derivative_filter_sec_ = param.as_double();
+    } else if (param.get_name() == "position_control/feedback_timeout_sec") {
+      position_feedback_timeout_sec_ = param.as_double();
+    }
+    // position control
     else if (param.get_name() == "position_control/pid_controller_pan/p_gain") {
       double p_gain = param.as_double();
       HRM_position_controller_.pid_controller_pan_.kp_ = p_gain;
@@ -1058,10 +1374,17 @@ rcl_interfaces::msg::SetParametersResult ControlNode::parameter_callback(const s
       double d_gain = param.as_double();
       HRM_position_controller_.pid_controller_pan_.kd_ = d_gain;
       RCLCPP_INFO(this->get_logger(), "Updated d_gain: %f", d_gain);
+    } else if (param.get_name() == "position_control/pid_controller_tilt/p_gain") {
+      HRM_position_controller_.pid_controller_tilt_.kp_ = param.as_double();
+    } else if (param.get_name() == "position_control/pid_controller_tilt/i_gain") {
+      HRM_position_controller_.pid_controller_tilt_.ki_ = param.as_double();
+    } else if (param.get_name() == "position_control/pid_controller_tilt/d_gain") {
+      HRM_position_controller_.pid_controller_tilt_.kd_ = param.as_double();
     }
 
 
   }
+  HRM_position_controller_.set_limits(position_max_speed_deg_s_, position_derivative_filter_sec_);
   rcl_interfaces::msg::SetParametersResult result;
   result.successful = true;
   return result;
@@ -1266,352 +1589,292 @@ void ControlNode::run_dynamic_control_thread() {
 
 
 
-void ControlNode::run_position_with_admittance_control_thread() {
-  RCLCPP_INFO(this->get_logger(), "Position control_thread is started");
+void ControlNode::set_position_status(const std::string& status)
+{
+  if (status == last_position_status_) {return;}
+  last_position_status_ = status;
+  std_msgs::msg::String message;
+  message.data = status;
+  position_status_publisher_->publish(message);
+  RCLCPP_INFO(get_logger(), "Position control: %s", status.c_str());
+}
+
+void ControlNode::publish_position_diagnostics(
+  const SegmentAngle& sample, double dt, ControlMode mode)
+{
+  auto fill_pose = [](geometry_msgs::msg::Pose& pose, const Eigen::VectorXd& value) {
+    pose.position.x = value(0);
+    pose.position.y = value(1);
+    pose.position.z = value(2);
+    pose.orientation.w = 1.0;
+  };
+  auto fill_force = [](geometry_msgs::msg::Wrench& force, const Eigen::VectorXd& value) {
+    force.force.x = value(0);
+    force.force.y = value(1);
+    force.force.z = value(2);
+    force.torque.x = value(3);
+    force.torque.y = value(4);
+    force.torque.z = value(5);
+  };
+  position_control_msgs_.header = sample.header;
+  position_control_msgs_.sampling_time = dt > 0.0 ? 1.0 / dt : 0.0;
+  position_control_msgs_.p_gain = HRM_position_controller_.pid_controller_pan_.kp_;
+  position_control_msgs_.i_gain = HRM_position_controller_.pid_controller_pan_.ki_;
+  position_control_msgs_.d_gain = HRM_position_controller_.pid_controller_pan_.kd_;
+  fill_pose(position_control_msgs_.x_desired, HRM_position_controller_.x_desired_);
+  fill_pose(position_control_msgs_.x_actual, HRM_position_controller_.x_actual_);
+  fill_pose(position_control_msgs_.x_error, HRM_position_controller_.x_err_);
+  position_control_msgs_.dt = dt;
+  position_control_msgs_.del_theta_pan = HRM_position_controller_.del_theta_pan_;
+  position_control_msgs_.del_theta_tilt = HRM_position_controller_.del_theta_tilt_;
+  // Legacy message fields are pan-only; full pan/tilt is in SegmentAngle.
+  position_control_msgs_.theta_actual_relative = sample.pan_relative;
+  position_control_msgs_.theta_actual_absolute = sample.pan_absolute;
+  position_control_msgs_publisher_->publish(position_control_msgs_);
+
+  admittance_control_msgs_.header = sample.header;
+  admittance_control_msgs_.sampling_time = position_control_msgs_.sampling_time;
+  admittance_control_msgs_.dt = dt;
+  auto& filter = HRM_admittance_controller_.admittance_filter_;
+  fill_force(admittance_control_msgs_.desired_force, HRM_admittance_controller_.f_desired_);
+  fill_force(admittance_control_msgs_.env_force, HRM_admittance_controller_.f_env_);
+  fill_force(admittance_control_msgs_.delta_force, HRM_admittance_controller_.del_f_);
+  admittance_control_msgs_.m_matrix.assign(filter.M_.data(), filter.M_.data() + filter.M_.size());
+  admittance_control_msgs_.b_matrix.assign(filter.B_.data(), filter.B_.data() + filter.B_.size());
+  admittance_control_msgs_.k_matrix.assign(filter.K_.data(), filter.K_.data() + filter.K_.size());
+  fill_pose(admittance_control_msgs_.x, filter.xt_);
+  fill_pose(admittance_control_msgs_.x_dot, filter.xtdot_);
+  fill_pose(admittance_control_msgs_.x_ddot, filter.xtddot_);
+  admittance_control_msgs_publisher_->publish(admittance_control_msgs_);
+
+  control_mode_msgs_.data = ControlModeToString(mode);
+  control_mode_msgs_publisher_->publish(control_mode_msgs_);
+  geometry_msgs::msg::Twist command_angles;
+  command_angles.angular.z = HRM_position_controller_.surgical_tool_.tAngle_;
+  command_angles.angular.y = HRM_position_controller_.surgical_tool_.pAngle_;
+  surgical_tool_pose_publisher_->publish(command_angles);
+}
+
+void ControlNode::hold_position_from_motor_feedback()
+{
+  MotorCommand hold;
+  {
+    std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+    const double age = (now().nanoseconds() - stamp_ns(motor_state_.header.stamp)) * 1e-9;
+    const double receipt_age = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - motor_received_).count();
+    if (!valid_motor_feedback_ || age < -0.05 || age > position_feedback_timeout_sec_ ||
+        receipt_age > position_feedback_timeout_sec_ ||
+        std::any_of(motor_state_.actual_position.begin(), motor_state_.actual_position.end(),
+          [](int32_t value) {return std::abs(static_cast<double>(value)) > MOTOR_SOFTWARE_LIMIT;}))
+    {
+      RCLCPP_ERROR(get_logger(), "Cannot issue software hold: motor feedback invalid/stale/out of range. Driver stop required.");
+      return;
+    }
+    hold.target_position = motor_state_.actual_position;
+  }
+  hold.header.stamp = now();
+  hold.header.frame_id = "motor_target_position";
+  hold.target_velocity_profile.assign(NUM_OF_MOTORS, 10);
+  position_motor_preview_publisher_->publish(hold);
+  if (motor_output_enabled_) {motor_control_publisher_->publish(hold);}
+}
+
+void ControlNode::run_position_with_admittance_control_thread()
+{
+  RCLCPP_INFO(get_logger(), "Position controller waits for new source-image frames.");
+  std::uint64_t seen_sequence = 0;
+  std::uint64_t prepared_revision = 0;
+  int64_t previous_source_ns = 0;
   while (rclcpp::ok()) {
-    if (control_mode_ == ControlMode::kPosition || control_mode_ == ControlMode::kAdmittance) {
-      try {
-        SegmentAngle segment_angle_snapshot;
-        bool segment_angle_updated = false;
-        {
-          std::lock_guard<std::mutex> lock(this->segment_angle_mutex_);
-          segment_angle_snapshot = this->segment_angle_;
-          segment_angle_updated = this->segment_angle_op_flag_;
-          if (segment_angle_updated) {
-            this->segment_angle_op_flag_ = false;
-          }
-        }
-
-        /***
-         * @note loop_late_
-         * loop_late_ is the sampling rate of the controller 
-         * loop_late = global variable admittance_params::SAMPLING_HZ @include '../include/control_parameters.hpp' 
-         */
-        // ================================================================
-        // Calculation of admittance control
-        // ================================================================
-
-        // std::vector<double> external_force = {this->external_force_.x*0.001, this->external_force_.y*0.001};
-
-        if (control_mode_ == ControlMode::kAdmittance) {
-          /**
-           * @brief Check the sampling rate of between admittance and position control.
-           * @author DY
-           * @date 2025.04.14
-           * @todo
-           * Update sampling time for calculation of admittance
-           * At now, joint_angle data is received at 30 Hz from camera vision (from LSTM_force_estimation_pkg)
-           * Later, it is necessary to increase the samplig rate from 30 to 60 Hz (intel(R) realsense)
-           */
-          // calculate admittance
-          /**
-           * @brief mapping F/T sensor to F_ext of admittance.
-           */
-          this->f_env_(0) = this->external_force_.y * 0.001;
-          this->f_env_(1) = (-1) * this->external_force_.x * 0.001;
-
-          // DEBUG
-          // this->f_env_(0) = 0.0; // N
-          // this->f_env_(1) = 0.1; // N
-          this->f_desired_(0) = 0.02;
-          this->f_desired_(1) = 0.02;
-          this->del_xf_ = this->HRM_admittance_controller_.compute(this->f_desired_, this->f_env_, admittance_params::DT);
-          // calculate admittance - END
-
-          // Print
-          auto xt = this->HRM_admittance_controller_.admittance_filter_.getXt();
-          auto xt_dot = this->HRM_admittance_controller_.admittance_filter_.getXtDot();
-          auto xt_ddot = this->HRM_admittance_controller_.admittance_filter_.getXtDDot();
-          
-          // std::cout << "--------------- Admittance --------------------" << std::endl;
-          // std::cout << "xt" << xt << std::endl;
-          // std::cout << "xt_dot" << xt_dot << std::endl;
-          // std::cout << "xt_ddot" << xt_ddot << std::endl;
-          // std::cout << "xt_ddot" << xt_ddot << std::endl;
-          // std::cout << "del_xf_" << del_xf_ << std::endl;
-          // compensated desired x
-          // x_t = x_d + del_x_f
-          this->x_t_ = this->x_desired_ + this->del_xf_;
-        } else if (control_mode_ == ControlMode::kPosition) {
-          // only position mode
-          this->HRM_admittance_controller_.admittance_filter_.xt_.setZero();
-          this->HRM_admittance_controller_.admittance_filter_.xtdot_.setZero();
-          this->HRM_admittance_controller_.admittance_filter_.xtddot_.setZero();
-
-          this->x_t_ = this->x_desired_;
-        }
-
-        // position controller
-        double dt = position_control_params::DT;
-        /**
-         * @brief Get end-effector (x,y) from joint angle
-         * if using std::vector<double> a = msg.data
-         * The type must be conversion from float(msg.data) to double
-         */
-        // double alpha = 0.5;
-        // double angle_filtered = 0;
-        // if (!segment_angle_relative_.data.empty() && !segment_angle_relative_prev_.data.empty()) {
-        //   angle_filtered = alpha*segment_angle_relative_.data.back() + (1-alpha)*segment_angle_relative_prev_.data.back();
-        // } else {
-        //   segment_angle_relative_prev_.data = segment_angle_relative_.data;
-        // }
-        // segment_angle_relative_prev_.data = segment_angle_relative_.data;
-
-        /**
-         * @brief Get the 3D end-effector position from 18-joint D-H FK.
-         */
-        this->theta_pan_actual_ = segment_angle_snapshot.pan_relative;
-        this->theta_tilt_actual_ = segment_angle_snapshot.tilt_relative;
-        auto tf_matrices = this->HRM_position_controller_.surgical_tool_.computeBaseToJointsTransformationMatrices(
-          this->theta_pan_actual_, this->theta_tilt_actual_);
-        Eigen::Vector3d eef_xyz = this->HRM_position_controller_.surgical_tool_.computeEndEffectorPosition(tf_matrices);
-        this->x_actual_(0) = eef_xyz.x();
-        this->x_actual_(1) = eef_xyz.y();
-        this->x_actual_(2) = eef_xyz.z();
-
-        // ************************ Print Values ************************
-        // std::cout << "--------------------------" << std::endl;
-        // std::cout << "this->f_env_(x): " << this->f_env_(0) << std::endl;
-        // std::cout << "this->f_env_(y): " << this->f_env_(1) << std::endl;
-
-        // std::cout << "theta_actual_: ";
-        // for (const auto& val : theta_actual_) {
-        //   std::cout << val << " ";
-        // }
-        // std::cout << std::endl;
-        // std::cout << "tf_matrices(y): " << tf_matrices[8](1,3) << std::endl;
-        // std::cout << "joints_xy: ";
-        // for (const auto& joint : joints_xy) {
-        //   std::cout << "(" << joint(0) << ", " << joint(1) << ") ";
-        // }
-        // std::cout << std::endl;
-        // std::cout << "x_t(y): " << x_t_(1) << std::endl;
-        // std::cout << "x_actual(y): " << x_actual_(1) << std::endl;
-        // std::cout << "--------------------------" << std::endl;
-
-        // get wire length to move (PID and Inverse-Kinematics method)
-        // @ref Y.J. Kim
-        
-        auto wire_length_to_move = this->HRM_position_controller_.update(this->x_t_, this->x_actual_, dt);
-        // position controller - END_
-        // ================================================================
-        // Calculation of admittance control - END
-        // ================================================================
-
-        // transition to actuator
-        double f_val[5];
-        f_val[0] = wire_length_to_move[0];  // East
-        f_val[1] = wire_length_to_move[1];  // West
-        f_val[2] = wire_length_to_move[2];  // South
-        f_val[3] = wire_length_to_move[3];  // North
-        f_val[4] = wire_length_to_move[4];  // grip
-
-        this->motor_control_target_val_.header.stamp = this->now();
-        this->motor_control_target_val_.header.frame_id = "motor_target_position";
-
-        if (
-        this->loadcell_data_.stress[0] < TENSION_LIMIT
-        && this->loadcell_data_.stress[1] < TENSION_LIMIT
-        && this->loadcell_data_.stress[2] < TENSION_LIMIT
-        && this->loadcell_data_.stress[3] < TENSION_LIMIT)
-        {
-          this->motor_control_target_val_.target_position[0] = DIRECTION_COUPLER * f_val[0] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
-          this->motor_control_target_val_.target_position[1] = DIRECTION_COUPLER * f_val[1] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
-          this->motor_control_target_val_.target_position[2] = DIRECTION_COUPLER * f_val[2] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
-          this->motor_control_target_val_.target_position[3] = DIRECTION_COUPLER * f_val[3] * 0.5 * gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
-        }
-        else {// for prevent wire cut off 
-          for (int i=0; i<NUM_OF_MOTORS; i++) {
-            this->motor_control_target_val_.target_position[i] = this->motor_state_.actual_position[i];
-          }
-        }
-        
-
-        #if MOTOR_CONTROL_SAME_DURATION
-          /**
-           * @brief find max value and make it max_velocity_profile 100 (%),
-           *        other value have values proportional to 100 (%) each
-           */
-          static double prev_f_val[NUM_OF_MOTORS];  // for delta length
-
-          std::vector<double> abs_f_val(NUM_OF_MOTORS-1, 0);  // 5th DOF is a forceps
-          for (int i=0; i<NUM_OF_MOTORS-1; i++) { abs_f_val[i] = std::abs(this->motor_control_target_val_.target_position[i] - this->motor_state_.actual_position[i]); }
-
-          double max_val = *std::max_element(abs_f_val.begin(), abs_f_val.end()) + 0.00001; // 0.00001 is protection for 0/0 (0 divided by 0)
-          int max_val_index = std::max_element(abs_f_val.begin(), abs_f_val.end()) - abs_f_val.begin();
-          for (int i=0; i<(NUM_OF_MOTORS-1); i++) { 
-            this->motor_control_target_val_.target_velocity_profile[i] = (abs_f_val[i] / max_val) * PERCENT_100 * 0.5;
-          }
-          // last index means forceps. It doesn't need velocity profile
-          this->motor_control_target_val_.target_velocity_profile[NUM_OF_MOTORS-1] = PERCENT_100 * 0.5;
-          
-        #else
-          // x_err_(1) : y-axis error
-          int target_vel_profile = int(std::round(std::abs(HRM_position_controller_.x_err_(1) * 1000.0 * 10)));
-          target_vel_profile = std::min(70, target_vel_profile);
-          target_vel_profile = std::max(10, target_vel_profile);
-          // std::cout << "target_vel_profile: " << target_vel_profile << std::endl;
-          for (int i=0; i<NUM_OF_MOTORS; i++) { 
-            // this->motor_control_target_val_.target_velocity_profile[i] = PERCENT_100 * 0.5;
-            this->motor_control_target_val_.target_velocity_profile[i] = target_vel_profile;
-          }
-        #endif
-        
-        // send motor command
-        this->publish_motor_command_if_enabled("position/admittance control");
-
-
-        // publish variables
-        // std::cout << "publishing position controller data...";
-        if (segment_angle_updated) {
-          // time
-          builtin_interfaces::msg::Time time;
-          time = this->get_clock()->now();
-
-          // ----------------------------------------------------
-          // Admittance controller
-          admittance_control_msgs_.header.stamp = time;
-          admittance_control_msgs_.header.frame_id = "admittance_controller";
-          admittance_control_msgs_.sampling_time = admittance_params::SAMPLING_HZ;
-
-          // Force message
-          admittance_control_msgs_.desired_force.force.x = HRM_admittance_controller_.f_desired_(0);
-          admittance_control_msgs_.desired_force.force.y = HRM_admittance_controller_.f_desired_(1);
-          admittance_control_msgs_.desired_force.force.z = HRM_admittance_controller_.f_desired_(2);
-          admittance_control_msgs_.desired_force.torque.x = HRM_admittance_controller_.f_desired_(3);
-          admittance_control_msgs_.desired_force.torque.y = HRM_admittance_controller_.f_desired_(4);
-          admittance_control_msgs_.desired_force.torque.z = HRM_admittance_controller_.f_desired_(5);
-          
-          admittance_control_msgs_.env_force.force.x = HRM_admittance_controller_.f_env_(0);
-          admittance_control_msgs_.env_force.force.y = HRM_admittance_controller_.f_env_(1);
-          admittance_control_msgs_.env_force.force.z = HRM_admittance_controller_.f_env_(2);
-          admittance_control_msgs_.env_force.torque.x = HRM_admittance_controller_.f_env_(3);
-          admittance_control_msgs_.env_force.torque.y = HRM_admittance_controller_.f_env_(4);
-          admittance_control_msgs_.env_force.torque.z = HRM_admittance_controller_.f_env_(5);
-
-          admittance_control_msgs_.delta_force.force.x = HRM_admittance_controller_.del_f_(0);
-          admittance_control_msgs_.delta_force.force.y = HRM_admittance_controller_.del_f_(1);
-          admittance_control_msgs_.delta_force.force.z = HRM_admittance_controller_.del_f_(2);
-          admittance_control_msgs_.delta_force.torque.x = HRM_admittance_controller_.del_f_(3);
-          admittance_control_msgs_.delta_force.torque.y = HRM_admittance_controller_.del_f_(4);
-          admittance_control_msgs_.delta_force.torque.z = HRM_admittance_controller_.del_f_(5);
-
-          // Admittance variables
-          std::vector<double> m_matrix_vec(
-            HRM_admittance_controller_.admittance_filter_.M_.data(),
-            HRM_admittance_controller_.admittance_filter_.M_.data() + HRM_admittance_controller_.admittance_filter_.M_.size());
-          std::vector<double> b_matrix_vec(
-            HRM_admittance_controller_.admittance_filter_.B_.data(),
-            HRM_admittance_controller_.admittance_filter_.B_.data() + HRM_admittance_controller_.admittance_filter_.B_.size());
-          std::vector<double> k_matrix_vec(
-            HRM_admittance_controller_.admittance_filter_.K_.data(),
-            HRM_admittance_controller_.admittance_filter_.K_.data() + HRM_admittance_controller_.admittance_filter_.K_.size());
-          admittance_control_msgs_.m_matrix = m_matrix_vec;
-          admittance_control_msgs_.b_matrix = b_matrix_vec;
-          admittance_control_msgs_.k_matrix = k_matrix_vec;
-
-          admittance_control_msgs_.x_ddot.position.x = this->HRM_admittance_controller_.admittance_filter_.getXtDDot()(0);
-          admittance_control_msgs_.x_ddot.position.y = this->HRM_admittance_controller_.admittance_filter_.getXtDDot()(1);
-          admittance_control_msgs_.x_ddot.position.z = this->HRM_admittance_controller_.admittance_filter_.getXtDDot()(2);
-          
-          admittance_control_msgs_.x_dot.position.x = this->HRM_admittance_controller_.admittance_filter_.getXtDot()(0);
-          admittance_control_msgs_.x_dot.position.y = this->HRM_admittance_controller_.admittance_filter_.getXtDot()(1);
-          admittance_control_msgs_.x_dot.position.z = this->HRM_admittance_controller_.admittance_filter_.getXtDot()(2);
-
-          admittance_control_msgs_.x.position.x = this->HRM_admittance_controller_.admittance_filter_.getXt()(0);
-          admittance_control_msgs_.x.position.y = this->HRM_admittance_controller_.admittance_filter_.getXt()(1);
-          admittance_control_msgs_.x.position.z = this->HRM_admittance_controller_.admittance_filter_.getXt()(2);
-
-          admittance_control_msgs_.dt = this->HRM_admittance_controller_.dt_;
-
-          // ----------------------------------------------------
-          // Position controller
-          position_control_msgs_.header.stamp = time;
-          position_control_msgs_.header.frame_id = "position_controller";
-
-          // gain (pan, tilt same)
-          position_control_msgs_.p_gain = HRM_position_controller_.pid_controller_pan_.kp_;
-          position_control_msgs_.i_gain = HRM_position_controller_.pid_controller_pan_.ki_;
-          position_control_msgs_.d_gain = HRM_position_controller_.pid_controller_pan_.kd_;
-
-          // position message
-          /**
-           * @note skip orientation (TBD)
-           */
-          position_control_msgs_.x_desired.position.x = HRM_position_controller_.x_desired_(0);
-          position_control_msgs_.x_desired.position.y = HRM_position_controller_.x_desired_(1);
-          position_control_msgs_.x_desired.position.z = HRM_position_controller_.x_desired_(2);
-
-          position_control_msgs_.x_actual.position.x = HRM_position_controller_.x_actual_(0);
-          position_control_msgs_.x_actual.position.y = HRM_position_controller_.x_actual_(1);
-          position_control_msgs_.x_actual.position.z = HRM_position_controller_.x_actual_(2);
-
-          position_control_msgs_.x_error.position.x = HRM_position_controller_.x_err_(0);
-          position_control_msgs_.x_error.position.y = HRM_position_controller_.x_err_(1);
-          position_control_msgs_.x_error.position.z = HRM_position_controller_.x_err_(2);
-
-          position_control_msgs_.dt = HRM_position_controller_.dt_;
-          position_control_msgs_.del_theta_pan = HRM_position_controller_.del_theta_pan_;
-          position_control_msgs_.del_theta_tilt = HRM_position_controller_.del_theta_tilt_;
-
-          // joint(segment) angle information
-          // Legacy fields carry pan values until PositionControl.msg is extended.
-          position_control_msgs_.theta_actual_relative =
-            segment_angle_snapshot.pan_relative;
-          position_control_msgs_.theta_actual_absolute =
-            segment_angle_snapshot.pan_absolute;
-
-          // publish data of controllers
-          admittance_control_msgs_publisher_->publish(admittance_control_msgs_);
-          position_control_msgs_publisher_->publish(position_control_msgs_);
-          
-          // publish control mode
-          control_mode_msgs_.data = ControlModeToString(this->control_mode_);
-          control_mode_msgs_publisher_->publish(control_mode_msgs_);
-          /**
-           * @brief update tool states (pan and tilt anlge)
-           * @warning Check out the coordinate system on paper
-           * Pan: rotate about Z-axis
-           * Tilt: rotate about Y-axis
-           */
-          geometry_msgs::msg::Twist surgical_tool_pose;
-          surgical_tool_pose.angular.z = HRM_position_controller_.surgical_tool_.pAngle_;
-          surgical_tool_pose.angular.y = HRM_position_controller_.surgical_tool_.tAngle_;
-          this->surgical_tool_pose_publisher_->publish(surgical_tool_pose);
-
-        }
-      } catch (const std::runtime_error & e) {
-        RCLCPP_WARN(this->get_logger(), "Error: %s", e.what());
-      }
+    SegmentAngle sample;
+    std::chrono::steady_clock::time_point image_received;
+    std::uint64_t sequence;
+    bool new_frame;
+    {
+      std::unique_lock<std::mutex> frame_lock(segment_angle_mutex_);
+      segment_angle_cv_.wait_for(frame_lock, 20ms, [this, &seen_sequence]() {
+        return !rclcpp::ok() || segment_angle_sequence_ != seen_sequence;
+      });
+      if (!rclcpp::ok()) {break;}
+      sequence = segment_angle_sequence_;
+      new_frame = sequence != seen_sequence;
+      seen_sequence = sequence;
+      sample = segment_angle_;
+      image_received = segment_angle_received_;
+    }
+    std::lock_guard<std::recursive_mutex> control_lock(position_control_mutex_);
+    const ControlMode mode = control_mode_.load();
+    const bool active = mode == ControlMode::kPosition || mode == ControlMode::kAdmittance;
+    if (prepared_revision != position_entry_revision_) {
+      prepared_revision = position_entry_revision_;
+      previous_source_ns = 0;
     }
 
-    // Update end-effector pose estimation
+    MotorState motor;
+    custom_interfaces::msg::LoadcellState loadcell;
+    geometry_msgs::msg::Vector3 force;
+    bool motor_fresh, loadcell_fresh, force_fresh;
+    const auto steady_now = std::chrono::steady_clock::now();
+    const int64_t ros_now_ns = get_clock()->now().nanoseconds();
+    auto recent = [&](std::chrono::steady_clock::time_point received) {
+      return std::chrono::duration<double>(steady_now - received).count() <= position_feedback_timeout_sec_;
+    };
+    auto source_recent = [&](const builtin_interfaces::msg::Time& stamp) {
+      const int64_t ns = stamp_ns(stamp);
+      const double age = (ros_now_ns - ns) * 1e-9;
+      return ns > 0 && age >= -0.05 && age <= position_feedback_timeout_sec_;
+    };
+    {
+      std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+      motor = motor_state_;
+      loadcell = loadcell_data_;
+      force = external_force_;
+      motor_fresh = valid_motor_feedback_ && recent(motor_received_) && source_recent(motor.header.stamp);
+      loadcell_fresh = valid_loadcell_feedback_ && recent(loadcell_received_) && source_recent(loadcell.header.stamp);
+      force_fresh = valid_force_feedback_ && recent(force_received_);
+    }
+
+    auto fault_or_wait = [&](const std::string& reason) {
+      if (position_ready_) {
+        // Stop pursuing an old camera target if motor feedback is still valid.
+        // This is a software hold, not an EtherCAT/physical emergency stop.
+        hold_position_from_motor_feedback();
+        position_ready_ = false;
+        position_fault_latched_ = true;
+      }
+      set_position_status((position_fault_latched_ ? "FAULT (re-enter mode or toggle output): " : "WAITING: ") + reason);
+    };
+
     try {
-      SegmentAngle segment_angle_snapshot;
-      {
-        std::lock_guard<std::mutex> lock(this->segment_angle_mutex_);
-        segment_angle_snapshot = this->segment_angle_;
+      if (new_frame) {
+        const auto transforms = HRM_position_controller_.surgical_tool_.computeBaseToJointsTransformationMatrices(
+          sample.pan_relative, sample.tilt_relative);
+        const auto tip = HRM_position_controller_.surgical_tool_.computeEndEffectorPosition(transforms);
+        if (!tip.allFinite()) {throw std::runtime_error("Non-finite FK tip.");}
+        x_actual_.head<3>() = tip;
+        tool_endeffector_pose_.data = {tip.x(), tip.y(), tip.z()};
+        tool_endeffector_pose_publisher_->publish(tool_endeffector_pose_);
+        // Measured-angle FK in metres. Preserve the source image stamp/frame
+        // for offline comparison; neither control-loop time nor a held value.
+        geometry_msgs::msg::PointStamped fk_tip_position;
+        fk_tip_position.header = sample.header;
+        fk_tip_position.point.x = tip.x();
+        fk_tip_position.point.y = tip.y();
+        fk_tip_position.point.z = tip.z();
+        fk_tip_position_publisher_->publish(fk_tip_position);
       }
-      // calculate end-effector pose
-      this->theta_pan_actual_ = segment_angle_snapshot.pan_relative;
-      this->theta_tilt_actual_ = segment_angle_snapshot.tilt_relative;
-      auto tf_matrices = this->HRM_position_controller_.surgical_tool_.computeBaseToJointsTransformationMatrices(
-        this->theta_pan_actual_, this->theta_tilt_actual_);
-      Eigen::Vector3d eef_xyz = this->HRM_position_controller_.surgical_tool_.computeEndEffectorPosition(tf_matrices);
-      this->x_actual_(0) = eef_xyz.x();
-      this->x_actual_(1) = eef_xyz.y();
-      this->x_actual_(2) = eef_xyz.z();
-      tool_endeffector_pose_.data[0] = this->x_actual_(0);
-      tool_endeffector_pose_.data[1] = this->x_actual_(1);
-      tool_endeffector_pose_.data[2] = this->x_actual_(2);
-      
-      this->tool_endeffector_pose_publisher_->publish(tool_endeffector_pose_);
+      if (!active) {
+        position_ready_ = false;
+        set_position_status("INACTIVE");
+        continue;
+      }
+      if (position_fault_latched_) {continue;}
+      if (!motor_fresh || !loadcell_fresh) {
+        fault_or_wait("fresh four-channel motor and loadcell feedback required");
+        continue;
+      }
+      if (std::any_of(loadcell.stress.begin(), loadcell.stress.end(),
+          [](double tension) {return tension >= TENSION_LIMIT;}))
+      {
+        fault_or_wait("loadcell tension limit");
+        continue;
+      }
+      if (mode == ControlMode::kAdmittance && !force_fresh) {
+        fault_or_wait("fresh external force required (legacy admittance model still pending revision)");
+        continue;
+      }
+      const bool image_fresh = sequence > 0 && recent(image_received) && source_recent(sample.header.stamp);
+      if (!image_fresh) {
+        // Camera gaps skip feedback control, not a latched actuator fault.
+        // Keep the goal, IK/encoder references and last motor target unchanged.
+        // Motor/loadcell/force guards above remain active while waiting.
+        set_position_status("WAITING: fresh image required; auto-resume when available");
+        continue;
+      }
+      // A mode/enable transition may not consume an image captured before it.
+      if (!new_frame || sequence <= position_entry_min_sequence_) {continue;}
+      const int64_t current_source_ns = stamp_ns(sample.header.stamp);
+      if (current_source_ns < position_entry_source_ns_) {continue;}
+      double dt = 0.0;
+      std::vector<double> wire;
+      if (!position_ready_) {
+        double pan = 0.0, tilt = 0.0;
+        for (std::size_t i = 0; i < NUM_OF_BENDING_JOINTS; ++i) {
+          if (i % 2 == 0) {tilt += sample.tilt_relative[i];}
+          else {pan += sample.pan_relative[i];}
+        }
+        // Aggregate active-joint angles initialize the cable IK operating point.
+        // They are NOT the Euler orientation of the tip.
+        HRM_position_controller_.reset(x_actual_, pan, tilt);
+        x_desired_ = x_actual_;
+        x_t_ = x_actual_;
+        auto& filter = HRM_admittance_controller_.admittance_filter_;
+        filter.xt_.setZero();
+        filter.xtdot_.setZero();
+        filter.xtddot_.setZero();
+        HRM_admittance_controller_.f_desired_.setZero();
+        HRM_admittance_controller_.f_env_.setZero();
+        HRM_admittance_controller_.del_f_.setZero();
+        del_xf_.setZero();
+        wire = HRM_position_controller_.surgical_tool_.get_IK_result(
+          pan * HRM_position_controller_.surgical_tool_.todeg(),
+          tilt * HRM_position_controller_.surgical_tool_.todeg(), 0.0);
+        for (int i = 0; i < NUM_OF_MOTORS; ++i) {
+          position_motor_origin_[i] = motor.actual_position[i];
+          position_wire_origin_[i] = wire[i];
+        }
+        position_ready_ = true;
+        previous_source_ns = current_source_ns;
+      } else {
+        dt = (current_source_ns - previous_source_ns) * 1e-9;
+        if (!std::isfinite(dt) || dt <= 0.0) {
+          fault_or_wait("invalid source-frame interval");
+          continue;
+        }
+        previous_source_ns = current_source_ns;
+        if (mode == ControlMode::kAdmittance) {
+          // Frame timing/reset is shared, but the legacy force mapping and
+          // Y-only admittance are intentionally NOT redesigned in this task.
+          f_env_(0) = force.y * 0.001;
+          f_env_(1) = -force.x * 0.001;
+          f_desired_(0) = 0.02;
+          f_desired_(1) = 0.02;
+          // Freeze the force integrator across a camera gap; no catch-up step.
+          if (dt <= position_feedback_timeout_sec_) {
+            del_xf_ = HRM_admittance_controller_.compute(f_desired_, f_env_, dt);
+          }
+          x_t_ = x_desired_ + del_xf_;
+        } else {
+          x_t_ = x_desired_;
+        }
+        wire = HRM_position_controller_.update(x_t_, x_actual_, dt);
+      }
 
-    } catch (const std::runtime_error & e) {
-      RCLCPP_WARN(this->get_logger(), "[Update end-effector pose] Error: %s", e.what());
+      MotorCommand target;
+      target.header = sample.header;
+      target.header.frame_id = "motor_target_position";
+      target.target_position.resize(NUM_OF_MOTORS);
+      // Small bring-up profile; angular slew is separately bounded in PD.
+      target.target_velocity_profile.assign(NUM_OF_MOTORS, 10);
+      bool target_valid = wire.size() >= NUM_OF_MOTORS;
+      for (int i = 0; target_valid && i < NUM_OF_MOTORS; ++i) {
+        const double counts = position_motor_origin_[i] +
+          DIRECTION_COUPLER * (wire[i] - position_wire_origin_[i]) * 0.5 *
+          gear_encoder_ratio_conversion(GEAR_RATIO, ENCODER_CHANNEL, ENCODER_RESOLUTION);
+        target_valid = std::isfinite(counts) && std::abs(counts) <= MOTOR_SOFTWARE_LIMIT;
+        if (target_valid) {target.target_position[i] = static_cast<int32_t>(std::llround(counts));}
+      }
+      if (!target_valid) {
+        fault_or_wait("non-finite or out-of-range motor target");
+        continue;
+      }
+      position_motor_preview_publisher_->publish(target);
+      if (motor_output_enabled_) {motor_control_publisher_->publish(target);}
+      publish_position_diagnostics(sample, dt, mode);
+      set_position_status(motor_output_enabled_ ? "ACTIVE" : "READY (dry-run)");
+    } catch (const std::exception& error) {
+      fault_or_wait(error.what());
     }
-    // Exactly one sleep per loop. Position/admittance mode previously slept
-    // twice and therefore ran at roughly half the configured frequency.
-    loop_rate_position_with_admittance_.sleep();
   }
 }

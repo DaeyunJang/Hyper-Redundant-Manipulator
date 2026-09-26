@@ -967,6 +967,10 @@ class RBSC:
         self.fitted_curve_length_before_hardware_scaling_3d = (
             curve_length_normalized * self.hardware_length_m
         )
+        # Preserve the metric fitted endpoint before imposing the known robot
+        # length. This is still a base-anchored curve estimate, NOT raw depth
+        # ground truth or the last segment's center point.
+        self.tip_position_unscaled_xyz = self.curve_dense_xyz[-1].copy()
         self.hardware_length_scale = 1.0 / curve_length_normalized
         self.coef_x *= self.hardware_length_scale
         self.coef_y *= self.hardware_length_scale

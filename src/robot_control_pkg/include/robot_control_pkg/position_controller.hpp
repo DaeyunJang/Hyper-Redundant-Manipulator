@@ -8,14 +8,10 @@
 #include <Eigen/Dense>
 
 /**
- * @brief Position controller consist of 6 DOF x-vector.
- *  But, surgical tool is moved by pan and tilt.
- *  So when PID controller compute, desired_val & actual_val must be 1 dof variable(not vector).
- *  
- * @note
- *  This position controller for surgical tool,
- *  update() function is independent-motion control
- *  i.e. PID control is applied each elements of vector of x_desired and x_actual.
+ * @brief Image-paced PD: hrm_base Y -> tilt, Z -> pan; X is passive.
+ * reset() fixes the operating-point angles on mode entry. update() applies an
+ * absolute PD correction about that point, not a repeated full-output sum.
+ * I=0 can leave steady-state error; cross-axis compensation is deferred.
  */
 class PositionController {
 public:
@@ -23,6 +19,9 @@ public:
   ~PositionController();
 
   void initialize();
+  // Establish an operating point once on mode entry, not on every frame.
+  void reset(const Eigen::VectorXd& x_actual, double pan_rad, double tilt_rad);
+  void set_limits(double max_speed_deg_s, double derivative_filter_sec);
 
   PIDController pid_controller_pan_;
   PIDController pid_controller_tilt_;
@@ -32,7 +31,7 @@ public:
   Eigen::VectorXd x_desired_;
   Eigen::VectorXd x_actual_;
   Eigen::VectorXd x_err_;
-  double dt_;
+  double dt_ = 0.0;
   double del_theta_pan_;
   double del_theta_tilt_;
 
@@ -49,6 +48,10 @@ public:
     const double& dt);
 
 private:
-  double previous_error_ = 0;
+  bool initialized_ = false;
+  double reference_pan_ = 0.0;
+  double reference_tilt_ = 0.0;
+  double max_speed_rad_s_ = position_control_params::MAX_ANGULAR_SPEED_DEG_S * std::acos(-1.0) / 180.0;
+  double derivative_filter_sec_ = position_control_params::DERIVATIVE_FILTER_SEC;
 };
 #endif  // POSITION_CONTROLLER_HPP

@@ -1,0 +1,95 @@
+{
+  "topic_groups": {
+    "camera": [
+      "/camera/camera/color/camera_info",
+      "/camera/camera/aligned_depth_to_color/camera_info",
+      "/estimated_segment_crop_depth/camera_info",
+      "/estimated_segment_crop_depth/metadata"
+    ],
+    "sensors": [
+      "/fts_data", "/fts_data_kalman_filter", "/fts_data_offset",
+      "/loadcell_state", "/loadcell_state_offset", "/data_filter_setting"
+    ],
+    "motor_and_control": [
+      "/motor_state", "/motor_command", "/wire_length", "/wire_length_velocity",
+      "/kinematics/target_wire_length", "/surgical_tool_pose", "/tool_endeffector_pose",
+      "/kinematics/fk_tip_position",
+      "/control_mode", "/position_controller", "/admittance_controller",
+      "/position/target_motor_command", "/position/control_status",
+      "/kinematics/sine_status",
+      "/dynamic_MIMO_values", "/estimated_external_force"
+    ],
+    "geometry": [
+      "/estimated_segment_angle", "/estimated_tip_position",
+      "/estimated_tip_position_unscaled", "/tf", "/tf_static"
+    ],
+    "apriltag": [
+      "/tag_camera/tag_camera/color/camera_info",
+      "/detections", "/apriltag/tag0/pose", "/apriltag/tag1/pose",
+      "/apriltag/tag1_in_tag0/pose"
+    ],
+    "visualization": [
+      "/estimated_segment_crop_image", "/estimated_segment_body_binary_image",
+      "/estimated_segment_skeleton_image", "/estimated_segment_centerline_points",
+      "/estimated_segment_reconstruction_markers"
+    ],
+    "configuration": ["/parameter_events"]
+  },
+  "enabled_groups": ["camera", "sensors", "motor_and_control", "geometry", "apriltag", "configuration"],
+  "extra_topics": [],
+  "required_topics": [
+    "/camera/camera/color/camera_info",
+    "/motor_state", "/loadcell_state", "/fts_data", "/fts_data_kalman_filter",
+    "/wire_length", "/estimated_segment_angle", "/tool_endeffector_pose"
+  ],
+  "required_max_gap_sec": 2.0,
+  "startup_timeout_sec": 10.0,
+  "auto_export_csv": true,
+  "image_archive": {
+    "enabled": true,
+    "topic": "/estimated_segment_crop_image",
+    "queue_size": 16,
+    "required": true
+  },
+  "summary_csv": {
+    "enabled": true,
+    "max_time_difference_ms": 25.0,
+    "startup_required_groups": ["motor", "loadcell", "fts", "wire", "angles"]
+  },
+  "depth_archive": {
+    "enabled": true,
+    "topic": "/estimated_segment_crop_depth/image_raw",
+    "metadata_topic": "/estimated_segment_crop_depth/metadata",
+    "queue_size": 16,
+    "required": false
+  },
+  "force_alignment": {
+    "enabled": false,
+    "axes": ["+x", "+y", "+z"]
+  },
+  "max_cache_size_mb": 64,
+  "max_bag_size_mb": 2048,
+  "min_free_disk_mb": 2048,
+  "metadata_nodes": [
+    "/robot_control", "/gui_node", "/serial_read", "/tcpclient",
+    "/segment_angle_estimator", "/camera/camera", "/tag_camera/tag_camera",
+    "/apriltag_node", "/apriltag_pose", "/record"
+  ],
+  "metadata_timeout_sec": 3.0,
+  "notes": {
+    "base_frame": "hrm_base",
+    "apriltag": "Second camera /tag_camera/tag_camera: preserve original CameraInfo, ID0/ID1 poses in tag_camera_color_optical_frame and ID1 expressed in ID0 at the exact same source stamp; tag images are not recorded by default. tag36h11, 0.020 m tags (outer black-border side, excluding the white margin); confirm measured tag side before physical experiments. Extrinsics to the D405/hrm_base are unknown: relative tag poses remain usable, but camera-frame poses must not be relabeled as hrm_base.",
+    "required_data": "Continuous raw/Kalman sensors, motor/cable state, geometry and HRM color CameraInfo remain required. Tag-camera CameraInfo, detections and ID0/ID1/relative poses are optional: still selected and saved when published, but absent or interrupted tags do not block recording or fail required-data integrity. Missing tag associations remain blank/unmatched in summary CSV; no stale-value or zero filling. Command/mode-specific diagnostics/external AI force are optional. The required HRM crop image is archived separately as lossless PNG, not in the numeric bag. Numeric bag integrity and image archive counts/errors are checked independently.",
+    "image_archive": "HRM cropped RGB is saved losslessly in images/hrm_crop; aligned depth of the same ROI is saved in images/hrm_crop_depth (raw 16-bit PNG or float32 NPY, not colorized). Each index preserves independent source/receipt stamps. Depth records retain matching ROI/calibration/units. Missing depth does not block legacy recording startup but is reported as incomplete depth coverage. Full images, tag-camera images, binary/skeleton and 3D visualization remain excluded. Existing datasets are untouched.",
+    "recording_sessions": "Use Stop then a new Record when relocating the F/T sensor. No pause/resume or interval-ID feature is added. Each file/session is a separate sequence: make temporal windows within each session before pooling training samples, not across concatenated raw CSV boundaries.",
+    "summary_startup": "Write summary only from the first angle-anchored row with matched, finite motor positions4, loadcell tensions4, raw forceXYZ, wire lengths4 and active relative angles18. Enabled frozen force alignment additionally requires valid aligned forces. Tags/tips/Kalman/velocities do not gate the default start. Only the leading prefix is omitted; later gaps remain explicit. Preserve timestamps and original elapsed_s origin; summary.schema.json.startup records the skipped prefix and first output stamp. Raw bag/topic CSVs are unchanged.",
+    "hardware": {"segments": 19, "bending_joints": 18, "joint_pairs": 9, "length_mm": 82.27, "motor_order": ["East", "West", "South", "North"], "loadcell_channels": 4},
+    "source_units": {"motor_position": "encoder counts", "wire_length": "mm", "loadcell_stress": "g", "segment_angle": "rad", "segment_angular_velocity": "rad/s", "estimated_tip_position": "m", "estimated_tip_position_unscaled": "m", "fk_tip_position": "m", "fts_force": "legacy firmware declares mN; verify calibration", "fts_torque": "legacy firmware declares mN*m; verify calibration"},
+    "tip_positions": "PointStamped XYZ in hrm_base: /estimated_tip_position is the final fitted boundary after configured hardware-length scaling; /estimated_tip_position_unscaled is the fitted endpoint before that scaling, not a raw depth pixel or an unfiltered estimate; /kinematics/fk_tip_position is the angle-derived FK tip with its source stamp. Optional additions: existing /tool_endeffector_pose and required_topics are unchanged. Separate CSV files preserve original source stamps; no interpolation or stale-value filling.",
+    "force": "fts_data is sensor-frame, zero-offset corrected, optionally LPF/MAF; fts_data_kalman_filter is separate. Raw bag and CSV fields remain unchanged. Optional CSV aligned force columns use only the frozen snapshot.force_alignment, with no unit conversion. Legacy unit labels mN and mN*m need physical calibration verification before training/control.",
+    "force_rotation_note": "force_alignment in this config supplies startup defaults, not evidence of physical mounting or session settings. snapshot.force_alignment is authoritative for CSV derivation. Its axes map OUTPUT hrm_base components to signed INPUT sensor axes. Proper rotation only; no action/reaction sign reversal, torque rotation or torque-origin transformation. Verify the fixed mounting before enabling.",
+    "time": "Bag stamps are recorder receive times, NOT exposure times. Preserve both cameras' headers and align offline by source stamp only after validating their clock relationship and sensor delays; recording two cameras does not synchronize them. Headerless topics have receive time only.",
+    "replay": "Cropped RGB and cropped aligned depth retain independent source stamps for offline pairing within the same session, plus depth calibration and scale. This enables ROI 3D reprocessing but is not proof of synchronized exposure or identical online RGB/depth pairing. Full image/tag redetection is unavailable. Initial filter state and unrecorded frames are unavailable: offline filters need per-session initialization/warm-up. Pair sensor labels to source-image time, not angle publication time.",
+    "filter_state": "Initial runtime_parameters are queried from metadata_nodes near recording start; missing/unexposed settings remain unknown. parameter_events and data_filter_setting retain changes during capture, not an atomic initial filter state. Reference files and these notes are not proof of running-node settings."
+  }
+}

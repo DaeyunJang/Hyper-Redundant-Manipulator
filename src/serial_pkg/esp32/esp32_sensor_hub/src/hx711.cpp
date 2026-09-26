@@ -11,9 +11,9 @@ constexpr int DOUT_PINS[HX711_COUNT] = {4, 6, 15, 17};
 constexpr int SCK_PINS[HX711_COUNT] = {5, 7, 16, 18};
 
 // Values for channels 0 and 1 are from the previous Arduino firmware.
-constexpr float CAL_FACTORS[HX711_COUNT] = {218.99f, 268.75f, 269.05f, 272.38f};
+constexpr float CAL_FACTORS[HX711_COUNT] = {218.99f, 270.50f, 268.29f, 273.70f};
 // constexpr float OUTPUT_OFFSETS[HX711_COUNT] = {30670.0f, 32770.0f, 0.0f, 0.0f};
-constexpr float OUTPUT_OFFSETS[HX711_COUNT] = {0.0f, 0.0f, 0.0f, 0.0f};
+constexpr float OUTPUT_OFFSETS[HX711_COUNT] = {38430.5f, 31252.0f, 31210.7f, 30331.0f};
 
 // Set USE_MOVING_AVERAGE to false for fastest response, or lower the sample
 // count (1, 2, 4, 8, or 16) to reduce smoothing.

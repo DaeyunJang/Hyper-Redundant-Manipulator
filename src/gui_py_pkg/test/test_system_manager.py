@@ -79,6 +79,23 @@ def test_duplicate_component_ids_are_rejected(tmp_path):
         raise AssertionError('Duplicate component id was accepted')
 
 
+@pytest.mark.parametrize('port', [
+    '/dev/ttyUSB1', '/dev/ttyACM0', '/dev/serial/by-id/usb-ESP32_AbCd-if00',
+])
+def test_launch_arguments_preserve_device_case_and_boolean_values(port):
+    spec = ComponentSpec('serial', 'Serial', 'serial_pkg', '_launch.py', arguments={
+        'serial_port': '{serial_port}',
+        'enabled': '{enabled}',
+        'literal_bool': True,
+        'frame': 'CaseSensitiveFrame',
+    })
+    assert spec.command({'serial_port': port, 'enabled': False}) == [
+        'ros2', 'launch', 'serial_pkg', '_launch.py',
+        f'serial_port:={port}', 'enabled:=false', 'literal_bool:=true',
+        'frame:=CaseSensitiveFrame',
+    ]
+
+
 @pytest.fixture
 def lifecycle(monkeypatch):
     spec = ComponentSpec('control', 'Robot control', 'robot_control_pkg', '_launch.py',

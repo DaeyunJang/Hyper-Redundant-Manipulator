@@ -1,1096 +1,609 @@
-import sys, os
+"""GUI-compatible numeric rosbag capture with optional asynchronous crop PNGs."""
+
+import json
+import math
+import os
+from collections import deque
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+from ament_index_python.packages import get_package_share_directory
+from custom_interfaces.msg import DataFilterSetting
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile
-from rclpy.qos import QoSDurabilityPolicy
-from rclpy.qos import QoSHistoryPolicy
-from rclpy.qos import QoSReliabilityPolicy
-import rosbag2_py._storage
-from std_srvs.srv import SetBool
-from ros2bag.api import rosbag2_py
-import rosbag2_py
-from rclpy.serialization import serialize_message
-
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rcl_interfaces.msg import SetParametersResult
+from rosidl_runtime_py.convert import message_to_ordereddict
+from rosidl_runtime_py.utilities import get_message
 from std_msgs.msg import String
-from std_msgs.msg import Float64MultiArray
-from geometry_msgs.msg import WrenchStamped
-from geometry_msgs.msg import Vector3
-from geometry_msgs.msg import Twist
 from std_srvs.srv import SetBool
 from sensor_msgs.msg import Image
-from sensor_msgs.msg import CameraInfo
-from sensor_msgs.msg import Imu
-from custom_interfaces.msg import LoadcellState
-from custom_interfaces.msg import MotorCommand
-from custom_interfaces.msg import MotorState
-from custom_interfaces.msg import DynamicMIMOValues
-from custom_interfaces.msg import PositionControl
-from custom_interfaces.msg import AdmittanceControl
-from custom_interfaces.srv import MoveMotorDirect
-from custom_interfaces.srv import MoveToolAngle
 
-# Apriltag
-from tf2_ros import Buffer, TransformListener
-from geometry_msgs.msg import TransformStamped
-from scipy.spatial.transform import Rotation as R
-import numpy as np
-
-from apriltag_msgs.msg import AprilTagDetectionArray
-from geometry_msgs.msg import Pose
-
-from rclpy.executors import MultiThreadedExecutor
-
-print("Python executable:", sys.executable)
-print("Python version:", sys.version)
-
-# import mediapipe as mp
-# import sympy
-# import json
-# print("Hi, JSON")
-# import xacro
-# import sklearn
-
-import cv2
-import numpy as np
-import matplotlib.pyplot as plt
-from cv_bridge import CvBridge
-from datetime import datetime
-import PIL
-
-import csv
-import json
-import subprocess  # CLI
+from record_pkg.capture import CaptureSession, image_archive_settings, depth_archive_settings
+from record_pkg.force_alignment import create_alignment
+from record_pkg.experiment_labels import validate_contact_segment_id
+from record_pkg.metadata import ParameterSnapshot, reference_file
+from record_pkg.topic_health import TopicHealth
 
 
 class RecordNode(Node):
     def __init__(self):
-        super().__init__("record_node")
-        self.create_service(SetBool, "/data/record", self.record_callback)
-        self.is_recording = False
-        self.data_count = 0
-        self.data_count_dMv = 0
-        self.data_count_admittance = 0
+        super().__init__('record')
+        share = Path(get_package_share_directory('record_pkg'))
+        self.declare_parameter('config_file', str(share / 'config' / 'recording.json'))
+        self.declare_parameter('output_root', str(Path.cwd() / 'record'))
+        self.declare_parameter('allow_incomplete', False)
+        config_path = Path(self.get_parameter('config_file').value)
+        config = json.loads(config_path.read_text())
+        self.session = CaptureSession(config, self.get_parameter('output_root').value)
+        alignment_defaults = config.get('force_alignment', {})
+        if not isinstance(alignment_defaults, dict):
+            raise ValueError('force_alignment config must be an object with enabled and axes.')
+        alignment_defaults = create_alignment(
+            alignment_defaults.get('enabled', False), alignment_defaults.get('axes'))
+        self.declare_parameter('force_alignment_enabled', alignment_defaults['enabled'])
+        self.declare_parameter('force_alignment_axes', alignment_defaults['axes'])
+        self.current_force_alignment()  # Also validate command-line parameter overrides.
+        self.declare_parameter('contact_segment_id', 0)
+        validate_contact_segment_id(self.get_parameter('contact_segment_id').value)
+        self.metadata_nodes = config.get('metadata_nodes', [])
+        if not isinstance(self.metadata_nodes, list) or any(
+                not isinstance(name, str) or not name.startswith('/') or name.endswith('/')
+                for name in self.metadata_nodes):
+            raise ValueError('metadata_nodes must contain absolute node names without a trailing slash.')
+        self.metadata_timeout = float(config.get('metadata_timeout_sec', 3.0))
+        if not math.isfinite(self.metadata_timeout) or self.metadata_timeout <= 0.0:
+            raise ValueError('metadata_timeout_sec must be positive and finite.')
+        self.parameter_snapshot = None
+        self.health = TopicHealth(float(config.get('required_max_gap_sec', 2.0)))
+        self.health_subscriptions = {}
+        self.heavy_topics = set()
+        self.image_archive_settings = image_archive_settings(config)
+        self.image_archive = None
+        self.depth_archive_settings = depth_archive_settings(config)
+        self.depth_archive = None
+        self.depth_metadata_cache = deque(maxlen=64)
+        self.depth_subscription = None
+        if self.depth_archive_settings['enabled']:
+            depth_topic = self.depth_archive_settings['topic']
+            if depth_topic in self.session.topics:
+                raise ValueError('Depth archive image topic must not also be selected for bag.')
+            self.depth_subscription = self.create_subscription(
+                Image, depth_topic, self.receive_archive_depth,
+                QoSProfile(depth=2, reliability=ReliabilityPolicy.BEST_EFFORT))
+            self.create_subscription(
+                String, self.depth_archive_settings['metadata_topic'], self.receive_depth_metadata,
+                QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self._archive_finalize_pending = False
+        self._bag_closed_state = None
+        self.image_subscription = None
+        if self.image_archive_settings['enabled']:
+            image_topic = self.image_archive_settings['topic']
+            if image_topic in self.session.topics:
+                raise ValueError('PNG archive image topic must not also be selected for bag.')
+            self.image_subscription = self.create_subscription(
+                Image, image_topic, self.receive_archive_image,
+                QoSProfile(depth=2, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self.last_health_warning = None
+        self.record_start_monotonic = None
+        self.finalizer = None
+        self.finalizer_log = None
+        self.add_on_set_parameters_callback(self.validate_force_alignment_parameters)
+        self.create_timer(0.1, self.poll_metadata)
+        self.last_filter_setting = None
+        self.create_subscription(DataFilterSetting, '/data_filter_setting', self.filter_callback, 10)
+        self.status_pub = self.create_publisher(
+            String, '/data/record_status',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.create_service(SetBool, '/data/record', self.record_callback)
+        self.create_timer(0.5, self.poll)
+        self.last_status = None
+        self.publish_status()
+        self.get_logger().info('Recorder ready (not recording); use GUI Record or /data/record.')
 
-        """
-        ROS2 bag profile set
-        """
-        # self.rosbag_writer = rosbag2_py.SequentialWriter()
-        # storage_options = rosbag2_py._storage.StorageOptions(
-        #     uri='SIFM_bag',
-        #     storage_id='sqlite3')
-        # converter_options = rosbag2_py._storage.ConverterOptions('', '')
-        # self.rosbag_writer.open(storage_options, converter_options)
+    def current_force_alignment(self):
+        return create_alignment(
+            self.get_parameter('force_alignment_enabled').value,
+            self.get_parameter('force_alignment_axes').value)
 
-        # topic_info_fts_data = rosbag2_py._storage.TopicMetadata(
-        #     # id=0,
-        #     name='fts_data',
-        #     type='geometry_msgs/msg/WrenchStamped',
-        #     serialization_format='cdr')
-        # topic_info_loadcell = rosbag2_py._storage.TopicMetadata(
-        #     # id=0,
-        #     name='loadcell_state',
-        #     type='custom_interfaces/msg/LoadcellState',
-        #     serialization_format='cdr')
-        # topic_info_motor = rosbag2_py._storage.TopicMetadata(
-        #     # id=0,
-        #     name='motor_state',
-        #     type='custom_interfaces/msg/MotorState',
-        #     serialization_format='cdr')
-        # topic_info_image = rosbag2_py._storage.TopicMetadata(
-        #     # id=0,
-        #     name='camera/color/image_rect_raw',
-        #     type='sensor_msgs/msg/Image',
-        #     serialization_format='cdr')
+    def force_alignment_locked(self):
+        return (self.session.active or self.finalizer is not None
+                or self.image_archive_busy() or self._archive_finalize_pending
+                or self.session.state in ('starting', 'recording', 'stopping', 'exporting'))
 
-        # self.rosbag_writer.create_topic(topic_info_fts_data)
-        # self.rosbag_writer.create_topic(topic_info_loadcell)
-        # self.rosbag_writer.create_topic(topic_info_motor)
-        # self.rosbag_writer.create_topic(topic_info_image)
+    def image_archive_busy(self):
+        return any(archive is not None and not archive.done
+                   for archive in (self.image_archive, self.depth_archive))
 
-        # ROS2 topic subscriber
-        self.declare_parameter("qos_depth", 10)
-        qos_depth = self.get_parameter("qos_depth").value
+    def required_live_topics(self):
+        topics = set(self.session.config['required_topics'])
+        settings = self.image_archive_settings
+        if settings['enabled'] and settings['required']:
+            topics.add(settings['topic'])
+        settings = self.depth_archive_settings
+        if settings['enabled'] and settings['required']:
+            topics.update((settings['topic'], settings['metadata_topic']))
+        return topics
 
-        QOS_RKL10V = QoSProfile(
-            reliability=QoSReliabilityPolicy.RELIABLE,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=qos_depth,
-            durability=QoSDurabilityPolicy.VOLATILE,
-        )
+    def receive_archive_image(self, message):
+        topic = self.image_archive_settings['topic']
+        self.health.observe(topic, message)
+        if (self.image_archive is not None and self.session.active
+                and self.session.stop_started is None
+                and self.session.state in ('starting', 'recording')):
+            self.image_archive.enqueue(message, self.get_clock().now().nanoseconds)
 
-        self.motor_command_publisher_ = self.create_publisher(
-            MotorCommand, "motor_command", QOS_RKL10V
-        )
+    def receive_archive_depth(self, message):
+        self.health.observe(self.depth_archive_settings['topic'], message)
+        if (self.depth_archive is not None and self.session.active
+                and self.session.stop_started is None
+                and self.session.state in ('starting', 'recording')):
+            self.depth_archive.enqueue(message, self.get_clock().now().nanoseconds)
 
-        self.fts_data_flag = False
-        self.fts_data = WrenchStamped()
-        self.fts_subscriber = self.create_subscription(
-            WrenchStamped, "fts_data", self.read_fts_data, QOS_RKL10V
-        )
-        self.fts_data_kalman_filter_flag = False
-        self.fts_data_kalman_filter = WrenchStamped()
-        self.fts_data_kalman_filter_subscriber = self.create_subscription(
-            WrenchStamped,
-            "fts_data_kalman_filter",
-            self.read_fts_data_kalman_filter,
-            QOS_RKL10V,
-        )
-        self.fts_data_offset = WrenchStamped()
-        self.fts_offset_subscriber = self.create_subscription(
-            WrenchStamped, "fts_data_offset", self.read_fts_data_offset, QOS_RKL10V
-        )
-        self.get_logger().info("fts_data subscriber is created.")
+    def receive_depth_metadata(self, message):
+        self.health.observe(self.depth_archive_settings['metadata_topic'], message)
+        self.depth_metadata_cache.append(message)
+        if self.depth_archive is not None and not self.depth_archive.done:
+            self.depth_archive.update_metadata(message)
 
-        self.loadcell_data_flag = False
-        self.loadcell_data = LoadcellState()
-        self.lc_subscriber = self.create_subscription(
-            LoadcellState, "loadcell_state", self.read_loadcell_data, QOS_RKL10V
-        )
-        self.loadcell_data_offset = LoadcellState()
-        self.lc_offset_subscriber = self.create_subscription(
-            LoadcellState,
-            "loadcell_state_offset",
-            self.read_loadcell_data_offset,
-            QOS_RKL10V,
-        )
-        self.get_logger().info("loadcell_data subscriber is created.")
+    def stop_image_archive(self):
+        for archive in (self.image_archive, self.depth_archive):
+            if archive is not None:
+                archive.request_stop()
 
-        self.motor_state_flag = False
-        self.motor_state = MotorState()
-        self.motor_state_subscriber = self.create_subscription(
-            MotorState, "motor_state", self.read_motor_state, QOS_RKL10V
-        )
-        self.get_logger().info("motor_state subscriber is created.")
+    def poll_archive_finalization(self):
+        """CSV must see the final PNG manifest, never an in-flight image queue."""
+        if self.image_archive is not None:
+            self.session.metadata['image_archive'] = self.image_archive.report()
+        if self.depth_archive is not None:
+            self.session.metadata['depth_archive'] = self.depth_archive.report()
+        if not self._archive_finalize_pending:
+            return
+        if self.image_archive_busy():
+            self.session.state = 'stopping'
+            self.session.detail = 'Numeric bag closed; draining accepted color/depth crop files.'
+            return
+        self._archive_finalize_pending = False
+        self.session.state = self._bag_closed_state
+        self.session.persist()
+        if self.session.state == 'stopped':
+            self.start_finalizer()
 
-        self.wire_length_flag = False
-        self.wire_length = MotorState()
-        self.wire_length_subscriber = self.create_subscription(
-            Float64MultiArray, "wire_length", self.read_wire_length, QOS_RKL10V
-        )
-        self.get_logger().info("wire_length subscriber is created.")
+    def validate_force_alignment_parameters(self, parameters):
+        """Validate the final atomic candidate; never mutate settings in a callback."""
+        keys = ('force_alignment_enabled', 'force_alignment_axes', 'contact_segment_id')
+        changes = {parameter.name: parameter.value for parameter in parameters
+                   if parameter.name in keys}
+        if not changes:
+            return SetParametersResult(successful=True)
+        if self.force_alignment_locked():
+            return SetParametersResult(
+                successful=False,
+                reason='Experiment settings are frozen until recording, bag flush and CSV export finish.')
+        candidate = {key: self.get_parameter(key).value for key in keys}
+        candidate.update(changes)
+        try:
+            create_alignment(candidate[keys[0]], candidate[keys[1]])
+            validate_contact_segment_id(candidate['contact_segment_id'])
+        except ValueError as exc:
+            return SetParametersResult(successful=False, reason=str(exc))
+        return SetParametersResult(successful=True)
 
-        self.surgical_tool_pose_flag = False
-        self.surgical_tool_pose = Twist()
-        self.surgical_tool_pose_subscriber = self.create_subscription(
-            Twist, "surgical_tool_pose", self.read_surgical_tool_pose, 1
-        )
+    def filter_callback(self, message):
+        self.last_filter_setting = dict(
+            received_ns=self.get_clock().now().nanoseconds,
+            message=message_to_ordereddict(message))
 
-        self.segment_angle_absolute_flag = False
-        self.segment_angle_absolute = Float64MultiArray()
-        self.segment_angle_absolute_subscriber = self.create_subscription(
-            Float64MultiArray,
-            "estimated_segment_angle/absolute",
-            self.read_segment_angle_absolute,
-            1,
-        )
-        self.get_logger().info("segment_angle_relative subscriber is created.")
-
-        self.segment_angle_relative_flag = False
-        self.segment_angle_relative = Float64MultiArray()
-        self.end_effector_angle = 0
-        self.segment_angle_relative_subscriber = self.create_subscription(
-            Float64MultiArray,
-            "estimated_segment_angle/relative",
-            self.read_segment_angle_relative,
-            1,
-        )
-        self.get_logger().info("segment_angle_relative subscriber is created.")
-
-        self.tool_endeffector_pose_flag = False
-        self.tool_endeffector_pose = Float64MultiArray()
-        self.tool_endeffector_pose_subscriber = self.create_subscription(
-            Float64MultiArray,
-            "tool_endeffector_pose",
-            self.read_tool_end_effector_pose,
-            1,
-        )
-        self.get_logger().info("tool_endeffector_pose subscriber is created.")
-
-        self.external_force_flag = False
-        self.external_force = Vector3()
-        self.external_force_subscriber = self.create_subscription(
-            Vector3, "estimated_external_force", self.read_external_force, 1
-        )
-        self.get_logger().info("estimated_external_force subscriber is created.")
-
-        # robot control mode
-        self.control_mode_flat = False
-        self.control_mode = String()
-        self.control_mode_subscriber = self.create_subscription(
-            String, "control_mode", self.read_control_mode, QOS_RKL10V
-        )
-
-        # dynamics
-        self.dynamic_MIMO_values_flag = False
-        self.dynamic_MIMO_values = DynamicMIMOValues()
-        self.dynamic_MIMO_values_subscriber = self.create_subscription(
-            DynamicMIMOValues,
-            "dynamic_MIMO_values",
-            self.read_dynamic_MIMO_values,
-            QOS_RKL10V,
-        )
-        self.get_logger().info("dynamic_MIMO_values subscriber is created.")
-
-        # position control
-        self.position_control_variables_flag = False
-        self.position_control_variables = PositionControl()
-        self.position_control_variables_subscriber = self.create_subscription(
-            PositionControl,
-            "position_controller",
-            self.read_position_control_variables,
-            QOS_RKL10V,
-        )
-        self.get_logger().info("position_controller subscriber is created.")
-
-        # admittance control
-        self.admittance_control_variables_flag = False
-        self.admittance_control_variables = AdmittanceControl()
-        self.admittance_control_variables_subscriber = self.create_subscription(
-            AdmittanceControl,
-            "admittance_controller",
-            self.read_admittance_control_variables,
-            QOS_RKL10V,
-        )
-        self.get_logger().info("admittance_controller subscriber is created.")
-
-        # self.realsense_subscriber = RealSenseSubscriber()
-        # color rectified image. RGB format
-        self.image_flag = False
-        self.br_rgb = CvBridge()
-        self.color_image_rect_raw_subscriber = self.create_subscription(
-            Image,
-            "/camera/camera/color/image_raw",
-            # "camera/color/image_rect_raw",
-            self.color_image_rect_raw_callback,
-            1,
-        )
-        self.get_logger().info("realsense-camera subscriber is created.")
-
-        # estimated image
-        self.segment_angle_image_flag = False
-        self.segment_angle_image = Image()
-        self.segment_angle_image_subscriber = self.create_subscription(
-            Image, "estimated_segment_angle_image", self.segment_angle_image_callback, 1
-        )
-        self.get_logger().info("estimated_segment_angle_image subscriber is created.")
-
-        # Apriltags
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.apriltag_tf_timer = self.create_timer(0.01, self.compute_relative_pose)
-        self.base_frame = "ID0"
-        self.target_frame = "ID1"
-        self.csv_writer_apriltag = None  # 외부에서 설정하도록 열어 둠
-        self.latest_transform_time = None
-        self.relative_translation = (0,0,0)
-        self.relative_euler = (0,0,0)
-        # self.apriltag_tag36h11 = AprilTagDetectionArray()
-        # self.segment_angle_image_subscriber = self.create_subscription(
-        #     AprilTagDetectionArray,
-        #     "detections",
-        #     self.apriltag_detection_callback,
-        #     1)
-        # self.get_logger().info('Apriltag detections subscriber is created.')
-
-        ### ================================================================
-        ### file managers
-        ### ================================================================
-        # hw_definition.hpp 파일의 경로 설정
-        self.get_logger().info(f"{os.getcwd()}")
-
-        hw_definition_hpp_path = (
-            "./src/robot_control_pkg/include/robot_control_pkg/hw_definition.hpp"
-        )
-        # 파싱하여 상수 값을 읽어옴
-        constants = self.parse_hw_definition_hpp(hw_definition_hpp_path)
-        # 상수 값 출력
-        for key, value in constants.items():
-            # self.get_logger().info(f'{key}: {value} ({type(key)}/{type(value)})')
-            if key == "NUM_OF_MOTORS":
-                self.numofmotors = int(value)
-            elif key == "NUM_OF_JOINT":
-                self.numofjoints = int(value)
-            elif key == "SEGMENT_ARC":
-                self.segment_arc = float(value)
-            elif key == "SEGMENT_DIAMETER":
-                self.segment_dia = float(value)
-            elif key == "WIRE_DISTANCE":
-                self.segment_wd = float(value)
-
-            if key == "OP_MODE":
-                if value == "0x08":
-                    self.get_logger().info(f"OP_MODE: CSP")
-                elif value == "0x09":
-                    self.get_logger().info(f"OP_MODE: CSV")
-                self.opmode = value
-
-        self.directory_path = None
-        self.directory_path_image = None
-        self.directory_path_csv = None
-
-        ### ================================================================
-        ### Functions
-        ### ================================================================
-        """ROS2 Functions
-        - callback functions of subscribers, service_server
-        """
+    def snapshot(self):
+        topics = dict(self.get_topic_names_and_types())
+        selected = set(self.session.topics)
+        if self.image_archive_settings['enabled']:
+            selected.add(self.image_archive_settings['topic'])
+        if self.depth_archive_settings['enabled']:
+            selected.update((self.depth_archive_settings['topic'],
+                             self.depth_archive_settings['metadata_topic']))
+        published = {name: types for name, types in topics.items()
+                     if name in selected and self.count_publishers(name)}
+        configs, references = {}, {}
+        for package, relative in (
+            ('estimation_pkg', 'config.json'),
+            ('estimation_pkg', 'config_ROI_ref.json'),
+            ('gui_py_pkg', 'config/system_components.json'),
+        ):
+            try:
+                path = Path(get_package_share_directory(package)) / relative
+                reference = reference_file(path)
+                references[f'{package}/{relative}'] = reference
+                configs[f'{package}/{relative}'] = json.loads(reference['content'])
+            except (LookupError, OSError, ValueError) as exc:
+                configs[f'{package}/{relative}'] = {'unavailable': str(exc)}
+        for package, relative in (
+            ('robot_control_pkg', 'config/hw_definition.hpp'),
+            ('robot_control_pkg', 'config/control_parameters.hpp'),
+            ('launcher', 'config/apriltag.yaml'),
+            ('launcher', 'config/realsense_apriltag.yaml'),
+        ):
+            key = f'{package}/{relative}'
+            try:
+                path = Path(get_package_share_directory(package)) / relative
+                references[key] = reference_file(path)
+            except (LookupError, OSError, ValueError) as exc:
+                references[key] = {'unavailable': str(exc)}
+        try:
+            revision = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'], capture_output=True, text=True,
+                timeout=2, check=True).stdout.strip()
+            dirty = subprocess.run(
+                ['git', 'status', '--porcelain'], capture_output=True, text=True,
+                timeout=2, check=True).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            revision, dirty = None, None
+        return dict(published_topics=published, package_configs=configs,
+                    reference_files=references,
+                    force_alignment=self.current_force_alignment(),
+                    contact_segment_id=self.get_parameter('contact_segment_id').value,
+                    image_archive_settings=self.image_archive_settings.copy(),
+                    depth_archive_settings=self.depth_archive_settings.copy(),
+                    runtime_parameters={'status': 'pending'},
+                    hardware_constants={'status': 'pending'},
+                    repository_revision=revision, repository_changes=dirty,
+                    last_observed_filter_setting=self.last_filter_setting,
+                    ros_start_request_ns=self.get_clock().now().nanoseconds)
 
     def record_callback(self, request, response):
-        self.is_recording = request.data
-
         try:
-            if self.is_recording:
-                # Start recording
-                self.get_logger().info("Start recording")
-                # os.chdir(self.directory_path)
-                self.create_directory()
-                self.create_csv()
-                self.create_csv_dynamics_MIMO_values()
-                self.create_csv_controller_variables()
-                self.create_metadata_json()
-
-                """
-                if record all topics excluding /camera/* data, use under line
-                """
-                cmd = 'ros2 bag record -a --exclude "/camera(.*)"'
-                # self.bag_process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.directory_path)
-
-                """
-                if record all(-a) topics, use under code
-                """
-                # self.bag_process = subprocess.Popen(['ros2',
-                #                                     'bag',
-                #                                     'record',
-                #                                     '-a'], cwd=self.directory_path)
-
-                response.success = True
-                response.message = "Start Recording."
-            elif self.is_recording == False:
-                # Subscribe to topics you want to record
-                self.get_logger().info("Stop recording")
-                self.csv_file.close()
-                self.csv_file_dMv.close()
-                self.csv_file_controller.close()
-                # self.bag_process.terminate()
-                response.success = True
-                response.message = "Stop Recording."
-                self.data_count = 0
-                self.data_count_dMv = 0
-                self.data_count_admittance = 0
-        except Exception as e:
-            self.get_logger().info(f"Exception Error as {e}")
+            if request.data:
+                if (self.finalizer is not None or self.image_archive_busy()
+                        or self._archive_finalize_pending):
+                    raise RuntimeError('Wait for image flush and CSV export/integrity check to finish.')
+                if not self.session.active and any(
+                        name.startswith('rosbag2_recorder') for name in self.get_node_names()):
+                    raise RuntimeError('Another rosbag recorder is present; leave it untouched and stop it before starting this recorder.')
+                self.update_health_subscriptions()
+                missing_samples = self.health.stale(
+                    self.required_live_topics() - self.heavy_topics)
+                if missing_samples and not self.get_parameter('allow_incomplete').value:
+                    raise RuntimeError('No recent progressing data on required topics: ' + ', '.join(missing_samples))
+                directory = self.session.start(
+                    self.snapshot(), self.get_parameter('allow_incomplete').value)
+                self.image_archive = None
+                self.depth_archive = None
+                if self.image_archive_settings['enabled']:
+                    try:
+                        from record_pkg.image_archive import ImageArchive
+                        self.image_archive = ImageArchive(
+                            directory, topic=self.image_archive_settings['topic'],
+                            queue_size=self.image_archive_settings['queue_size'],
+                            contact_segment_id=self.get_parameter('contact_segment_id').value)
+                        self.session.metadata['image_archive'] = self.image_archive.report()
+                    except Exception as exc:
+                        self.session.metadata['image_archive'] = {
+                            'status': 'failed', 'error': str(exc)}
+                        self.session.request_stop()
+                        raise RuntimeError(f'Could not create crop PNG archive: {exc}') from exc
+                if self.depth_archive_settings['enabled']:
+                    try:
+                        from record_pkg.depth_archive import DepthArchive
+                        settings = self.depth_archive_settings
+                        self.depth_archive = DepthArchive(
+                            directory, topic=settings['topic'], queue_size=settings['queue_size'],
+                            contact_segment_id=self.get_parameter('contact_segment_id').value)
+                        # DDS can deliver calibration just before Record and its
+                        # matching image just after it. Cache metadata, not images.
+                        for message in self.depth_metadata_cache:
+                            self.depth_archive.update_metadata(message)
+                        self.session.metadata['depth_archive'] = self.depth_archive.report()
+                    except Exception as exc:
+                        self.session.metadata['depth_archive'] = {'status': 'failed', 'error': str(exc)}
+                        self.stop_image_archive()
+                        self.session.request_stop()
+                        raise RuntimeError(f'Could not create crop depth archive: {exc}') from exc
+                self.record_start_monotonic = time.monotonic()
+                self.last_health_warning = None
+                self.session.metadata['live_health_events'] = []
+                try:
+                    self.parameter_snapshot = ParameterSnapshot(
+                        self, self.metadata_nodes, self.metadata_timeout)
+                    self.save_metadata_snapshot()
+                except Exception:
+                    self.stop_image_archive()
+                    self.session.request_stop()
+                    raise
+                response.message = f'Start accepted: {directory}; wait for /data/record_status recording.'
+            else:
+                self.finish_metadata()
+                self.stop_image_archive()
+                if self.session.active and self.session.stop_started is None:
+                    self.session.metadata['stop_requested_ros_ns'] = self.get_clock().now().nanoseconds
+                self.session.request_stop()
+                response.message = ('Stop accepted; wait for PNG flush and CSV completion.'
+                                    if self.session.active or self.image_archive_busy()
+                                    else 'Recorder is already inactive.')
+            response.success = True
+        except (OSError, ValueError, RuntimeError) as exc:
             response.success = False
-            response.message = "Error is up for recording."
-
+            response.message = str(exc)
+            self.get_logger().error(response.message)
+        self.publish_status()
         return response
 
-    # def stop_record_callback(self, request, response):
-    #     if self.recorder:
-    #         # Stop recording
-    #         self.get_logger().info('Stop recording')
-    #         self.recorder.stop()
-    #         self.recorder = None
-    #     else:
-    #         self.get_logger().info('Not recording')
-    #     return response
+    def update_health_subscriptions(self):
+        """Observe scalar progress; PNG subscription observes its own source stamps."""
+        graph = dict(self.get_topic_names_and_types())
+        for topic in self.required_live_topics():
+            if topic not in self.heavy_topics:
+                publishers = self.get_publishers_info_by_topic(topic)
+                if len(publishers) == 1:
+                    self.health.set_publisher(topic, publishers[0].endpoint_gid)
+            if (topic in self.health_subscriptions or topic not in graph
+                    or (self.image_subscription is not None
+                        and topic == self.image_archive_settings['topic'])
+                    or (self.depth_subscription is not None
+                        and topic in (self.depth_archive_settings['topic'],
+                                      self.depth_archive_settings['metadata_topic']))):
+                continue
+            types = graph[topic]
+            if len(types) != 1:
+                continue
+            if types[0] in ('sensor_msgs/msg/Image', 'sensor_msgs/msg/PointCloud2'):
+                self.heavy_topics.add(topic)
+                continue
+            try:
+                def observe(message, name=topic):
+                    self.health.observe(name, message)
+                self.health_subscriptions[topic] = self.create_subscription(
+                    get_message(types[0]), topic, observe,
+                    QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+            except (ImportError, AttributeError, ValueError) as exc:
+                self.get_logger().warning(f'Cannot monitor required topic {topic}: {exc}')
 
-    def color_image_rect_raw_callback(self, data):
-        """_summary_
+    def update_live_health(self):
+        required = self.required_live_topics()
+        stale = self.health.stale(set(required) - self.heavy_topics)
+        missing = [topic for topic in required if not self.count_publishers(topic)]
+        warning = sorted(set(stale + missing))
+        if self.session.state == 'recording' and warning:
+            self.session.metadata['live_source_gaps_detected'] = True
+        self.session.metadata['live_health'] = dict(
+            status='warning' if warning else 'observed', missing_or_stale=warning,
+            payload_checked_after_stop=sorted(self.heavy_topics),
+            observed_publisher_restarts=dict(self.health.publisher_restarts),
+            note='Source progress and publisher presence, NOT proof of bag/PNG persistence.')
+        if warning != self.last_health_warning:
+            events = self.session.metadata.setdefault('live_health_events', [])
+            if len(events) < 1000:
+                events.append(dict(ros_ns=self.get_clock().now().nanoseconds,
+                                   missing_or_stale=warning))
+            else:
+                self.session.metadata['live_health_events_truncated'] = True
+            self.last_health_warning = warning
+            self.session.persist()
+        return warning
 
-        Args:
-            data (_type_): _description_
-        """
-        # self.get_logger().info("Receiving RGB frame")
-        self.image_flag = True
-        self.capture_time = data.header.stamp
-        self.current_frame = self.br_rgb.imgmsg_to_cv2(data, "bgr8")
-
-        if self.is_recording:
-            self.data_count += 1
-            image_file = (
-                str(self.data_count)
-                + "_"
-                + str(self.capture_time.sec)
-                + "-"
-                + str(self.capture_time.nanosec)
-                + ".png"
-            )
-            ## raw image
-            cv2.imwrite(
-                self.directory_path_image + "/" + image_file, self.current_frame
-            )
-            ## roi image with segment's arrows
-            cv2.imwrite(
-                self.directory_path_image_with_estimated_angle + "/" + image_file,
-                self.segment_angle_image,
-            )
-
-            self.update_csv()
-            self.update_csv_dynamics_MIMO_values()
-            self.update_csv_controller_variables()
-
-        # cv2.imshow("[Record Node] rgb", self.current_frame)
-        # cv2.waitKey(1)
-        # if self.is_recording:
-        #     self.rosbag_writer.write(
-        #     'camera/color/image_rect_raw',
-        #     serialize_message(data),
-        #     self.get_clock().now().nanoseconds
-        # )
-
-        # return
-
-    def segment_angle_image_callback(self, data):
-        self.segment_angle_image_flag = True
-        self.segment_angle_image_capture_time = data.header.stamp
-        self.segment_angle_image = self.br_rgb.imgmsg_to_cv2(data, "bgr8")
-
-    def compute_relative_pose(self):
+    def start_finalizer(self):
+        self.session.state = 'exporting'
+        self.session.detail = 'Bag closed; checking required data and generating CSV. Wait before shutdown.'
+        self.session.metadata['postprocess'] = {'status': 'running'}
+        self.session.persist()
         try:
-            """reverse (base_frame) and (target_frame)
-            Since our coordinate system is defined oppositely to ROS's TF system,
-            we reverse the roles of the base frame and target frame accordingly.
-            """
-            tf: TransformStamped = self.tf_buffer.lookup_transform(
-                self.base_frame, self.target_frame, rclpy.time.Time()
-            )
-            t = tf.transform.translation
-            r = tf.transform.rotation
+            self.finalizer_log = (self.session.directory / 'export.log').open('w')
+            self.finalizer = subprocess.Popen(
+                [sys.executable, '-m', 'record_pkg.finalize_session', str(self.session.directory)],
+                stdin=subprocess.DEVNULL, stdout=self.finalizer_log, stderr=subprocess.STDOUT,
+                start_new_session=True)
+        except OSError as exc:
+            if self.finalizer_log:
+                self.finalizer_log.close()
+                self.finalizer_log = None
+            self.session.state = 'failed'
+            self.session.detail = f'Bag preserved; could not start CSV/integrity worker: {exc}'
+            self.session.metadata['postprocess'] = {'status': 'failed', 'error': str(exc)}
+            self.session.persist()
 
-            rot = R.from_quat([r.x, r.y, r.z, r.w])
-            euler = rot.as_euler("xyz", degrees=False)
-
-            # 내부 상태 저장
-            self.latest_transform_time = tf.header.stamp
-            self.relative_translation = (t.x, t.y, t.z)
-            self.relative_euler = tuple(euler)
-
-            # 🔽 출력 추가
-            # print(f"tf: {tf}")
-            # print(f"[TF] Relative Translation (m): {self.relative_translation}")
-            # print(f"[TF] Relative Euler Angles (rad): {self.relative_euler}")
-
-            # self.get_logger().info(f"[{self.target_frame} w.r.t {self.base_frame}] Position: ({t.x:.3f}, {t.y:.3f}, {t.z:.3f}), Euler: ({euler[0]:.2f}, {euler[1]:.2f}, {euler[2]:.2f})")
-
-        except Exception as e:
-            # self.get_logger().warn(
-            #     f"[TF] Failed to lookup transform from {self.base_frame} to {self.target_frame}: {e}"
-            # )
-            pass
-
-    def read_fts_data(self, msg):
-        self.fts_data_flag = True
-        self.fts_data = msg
-
-    def read_fts_data_kalman_filter(self, msg):
-        self.fts_data_kalman_filter_flag = True
-        self.fts_data_kalman_filter = msg
-
-    def read_fts_data_offset(self, msg):
-        self.fts_data_offset = msg
-
-    def read_loadcell_data(self, msg):
-        self.loadcell_data_flag = True
-        self.loadcell_data = msg
-
-    def read_loadcell_data_offset(self, msg):
-        self.loadcell_data_offset = msg
-
-    def read_motor_state(self, msg):
-        self.motor_state_flag = True
-        self.motor_state = msg
-
-    def read_wire_length(self, msg):
-        self.wire_length_flag = True
-        self.wire_length = msg
-
-    def read_surgical_tool_pose(self, msg):
-        self.surgical_tool_pose_flag = True
-        self.surgical_tool_pose = msg
-
-    def read_segment_angle_absolute(self, msg):
-        self.segment_angle_absolute_flag = True
-        self.segment_angle_absolute = msg
-        # self.end_effector_angle = msg.data
-
-    def read_segment_angle_relative(self, msg):
-        self.segment_angle_relative_flag = True
-        self.segment_angle_relative = msg
-        self.end_effector_angle = sum(msg.data)
-
-    def read_tool_end_effector_pose(self, msg):
-        self.tool_endeffector_pose_flag = True
-        self.tool_endeffector_pose = msg
-
-    def read_external_force(self, msg):
-        self.external_force_flag = True
-        self.external_force = msg
-
-    def read_control_mode(self, msg):
-        self.control_mode_flag = True
-        self.control_mode = msg
-
-    def read_dynamic_MIMO_values(self, msg):
-        self.dynamic_MIMO_values_flag = True
-        self.dynamic_MIMO_values = msg
-
-        # if self.is_recording:
-        #     self.data_count_dMv += 1
-        #     image_file = str(self.data_count_dMv) + '_' + str(self.dynamic_MIMO_values.header.stamp.sec) + '-' + str(self.dynamic_MIMO_values.header.stamp.nanosec) +'.png'
-        #     cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
-        #     self.update_csv_dynamics_MIMO_values()
-
-    def read_position_control_variables(self, msg):
-        self.position_control_variables_flag = True
-        self.position_control_variables = msg
-
-        # if self.is_recording:
-        #     self.data_count_pcv += 1
-        #     image_file = str(self.data_count_pcv) + '_' + str(self.position_control_variables_flag.header.stamp.sec) + '-' + str(self.position_control_variables_flag.header.stamp.nanosec) +'.png'
-        #     cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
-        #     self.update_csv_position_control_variables()
-
-    def read_admittance_control_variables(self, msg):
-        self.admittance_control_variables_flag = True
-        self.admittance_control_variables = msg
-
-        # if self.is_recording:
-        #     self.data_count_admittance += 1
-        #     image_file = str(self.data_count_admittance) + '_' + str(self.admittance_control_variables.header.stamp.sec) + '-' + str(self.admittance_control_variables.header.stamp.nanosec) +'.png'
-        #     cv2.imwrite(self.directory_path_image_with_estimated_angle + '/' + image_file, self.segment_angle_image)
-        #     self.update_csv_controller_variables()
-
-    def create_directory(self):
-        c_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        self.directory_path = os.path.join("./record", c_time)
-        if not os.path.exists(self.directory_path):
-            os.makedirs(self.directory_path)
-            self.get_logger().info(f"Directory is created => {self.directory_path}")
-        self.directory_path_image = os.path.join(self.directory_path, "images")
-        self.directory_path_image_with_estimated_angle = os.path.join(
-            self.directory_path, "images_with_estimated_angle"
-        )
-        if not os.path.exists(self.directory_path_image):
-            os.makedirs(self.directory_path_image)
-        if not os.path.exists(self.directory_path_image_with_estimated_angle):
-            os.makedirs(self.directory_path_image_with_estimated_angle)
-        self.directory_path_csv = self.directory_path
-
-    ##################################
-    def create_csv(self):
-        self.csv_file_name = os.path.join(self.directory_path_csv, "data_raw.csv")
-        self.get_logger().info(f"CSV is created => name : {self.csv_file_name}")
-
-        self.csv_headers = {}
-        self.csv_headers["sec"] = []
-        self.csv_headers["nanosec"] = []
-        self.csv_headers["image"] = []
-        for i in range(self.numofmotors):
-            self.csv_headers[f"motor position #{i}"] = []
-        for i in range(self.numofmotors):
-            self.csv_headers[f"motor velocity #{i}"] = []
-        for i in range(self.numofmotors):
-            self.csv_headers[f"wire length #{i}"] = []
-        for i in range(self.numofmotors):
-            self.csv_headers[f"loadcell #{i}"] = []
-        self.csv_headers["fx"] = []
-        self.csv_headers["fy"] = []
-        self.csv_headers["fz"] = []
-        self.csv_headers["tx"] = []
-        self.csv_headers["ty"] = []
-        self.csv_headers["tz"] = []
-        self.csv_headers["tz"] = []
-        self.csv_headers["fx_kalman"] = []
-        self.csv_headers["fy_kalman"] = []
-        self.csv_headers["fz_kalman"] = []
-        self.csv_headers["tx_kalman"] = []
-        self.csv_headers["ty_kalman"] = []
-        self.csv_headers["tz_kalman"] = []
-        self.csv_headers["tz_kalman"] = []
-        self.csv_headers["fx_estimated"] = []
-        self.csv_headers["fy_estimated"] = []
-        self.csv_headers["theta_desired"] = []
-        self.csv_headers["theta_actual"] = []
-        self.csv_headers["translation(m)(x)"] = []
-        self.csv_headers["translation(m)(y)"] = []
-        self.csv_headers["translation(m)(z)"] = []
-        self.csv_headers["Rotation(rad)(x)"] = []
-        self.csv_headers["Rotation(rad)(y)"] = []
-        self.csv_headers["Rotation(rad)(z)"] = []
-        self.csv_headers["Rotation(deg)(x)"] = []
-        self.csv_headers["Rotation(deg)(y)"] = []
-        self.csv_headers["Rotation(deg)(z)"] = []
-        self.csv_headers["actual(x)"] = []
-        self.csv_headers["actual(y)"] = []
-
-        for i in range(self.numofjoints):
-            self.csv_headers[f"theta_actual_rel_#{i}"] = []
-
-        self.csv_headers["theta_actual_abs_eef"] = []
-
-        self.csv_file = open(self.csv_file_name, mode="w")
-        self.csv_writer = csv.writer(self.csv_file)
-        self.csv_writer.writerow(self.csv_headers.keys())
-        self.csv_file.flush()
-
-    def update_csv(self):
-        # if not self.image_flag and not self.fts_data_flag and not self.motor_state_flag and not self.loadcell_data_flag:
-        #     self.get_logger().warning(f'All data are not subscribed')
-        #     return
+    def poll_finalizer(self):
+        if self.finalizer is None or self.finalizer.poll() is None:
+            return
+        code = self.finalizer.returncode
+        self.finalizer = None
+        self.finalizer_log.close()
+        self.finalizer_log = None
         try:
-            timestamp_sec = str(self.capture_time.sec)
-            timestamp_nanosec = str(self.capture_time.nanosec)
-            image_file = (
-                str(self.data_count)
-                + "_"
-                + str(self.capture_time.sec)
-                + "-"
-                + str(self.capture_time.nanosec)
-                + ".png"
-            )
-            actual_position = self.motor_state.actual_position
-            actual_velocity = self.motor_state.actual_velocity
-            wire_length = self.wire_length.data
-            loadcell_stress = self.loadcell_data.stress
-            forcexyz = self.fts_data.wrench.force
-            torquexyz = self.fts_data.wrench.torque
-            forcexyz_kalman = self.fts_data_kalman_filter.wrench.force
-            torquexyz_kalman = self.fts_data_kalman_filter.wrench.torque
+            report = json.loads((self.session.directory / 'postprocess.json').read_text())
+        except (OSError, ValueError) as exc:
+            report = dict(status='failed', error=str(exc))
+        integrity = report.get('integrity') or {}
+        self.session.metadata['postprocess'] = report
+        self.session.metadata['data_quality'] = (
+            'complete' if (integrity.get('status') == 'complete'
+                           and (report.get('image_integrity') or {}).get('status', 'disabled')
+                           in ('complete', 'disabled')
+                           and (report.get('depth_integrity') or {}).get('status', 'disabled')
+                           in ('complete', 'disabled')
+                           and (report.get('summary_csv') or {}).get('status') != 'no_common_start'
+                           and not self.session.metadata.get('live_source_gaps_detected')
+                           and not self.session.metadata.get('automatic_stop_reason')) else 'incomplete')
+        self.session.state = 'stopped' if code == 0 and report.get('status') == 'complete' else 'failed'
+        self.session.detail = ('Bag closed; CSV export/integrity check complete.'
+                               if self.session.state == 'stopped' else
+                               'Bag preserved; CSV/integrity processing failed. See export.log/postprocess.json.')
+        if (report.get('summary_csv') or {}).get('status') == 'no_common_start':
+            self.session.detail = ('Bag/topic CSVs preserved; summary has no common start for '
+                                   'the required training signals. See summary.schema.json.')
+        if self.session.metadata['data_quality'] != 'complete':
+            self.session.detail += ' INCOMPLETE required data: inspect postprocess.json.'
+        self.session.persist()
 
-            self.csv_writer.writerow(
-                [timestamp_sec, timestamp_nanosec, image_file]
-                + [str(value) for value in actual_position]
-                + [str(value) for value in actual_velocity]
-                + [str(value) for value in wire_length]
-                + [str(value) for value in loadcell_stress]
-                + [str(forcexyz.x)]
-                + [str(forcexyz.y)]
-                + [str(forcexyz.z)]
-                + [str(torquexyz.x)]
-                + [str(torquexyz.y)]
-                + [str(torquexyz.z)]
-                + [str(forcexyz_kalman.x)]
-                + [str(forcexyz_kalman.y)]
-                + [str(forcexyz_kalman.z)]
-                + [str(torquexyz_kalman.x)]
-                + [str(torquexyz_kalman.y)]
-                + [str(torquexyz_kalman.z)]
-                + [str(self.external_force.x)]
-                + [str(self.external_force.y)]
-                + [str(-self.surgical_tool_pose.angular.z)]
-                + [str(self.end_effector_angle)]
-                + [str(self.relative_translation[0])]
-                + [str(self.relative_translation[1])]
-                + [str(self.relative_translation[2])]
-                + [str(self.relative_euler[0])]
-                + [str(self.relative_euler[1])]
-                + [str(self.relative_euler[2])]
-                + [str(self.relative_euler[0] * 180 / np.pi)]
-                + [str(self.relative_euler[1] * 180 / np.pi)]
-                + [str(self.relative_euler[2] * 180 / np.pi)]
-                + [str(self.tool_endeffector_pose.data[1])]
-                + [str(self.tool_endeffector_pose.data[0])]
-                + [str(value) for value in self.segment_angle_relative.data]
-                + [str(self.segment_angle_absolute.data[-1])]
-            )
-            self.csv_file.flush()
-        except Exception as e:
-            self.get_logger().warn("update csv error: {e}")
-        pass
+    def save_metadata_snapshot(self):
+        snapshot = self.session.metadata['snapshot']
+        snapshot['runtime_parameters'] = self.parameter_snapshot.report
+        snapshot['hardware_constants'] = self.parameter_snapshot.hardware_constants()
+        self.session.persist()
 
-    ##################################
-    def create_csv_dynamics_MIMO_values(self):
-        self.csv_file_name_dMv = os.path.join(
-            self.directory_path_csv, "data_DynamicMIMOValues.csv"
-        )
-        self.get_logger().info(f"CSV is created => name : {self.csv_file_name_dMv}")
+    def poll_metadata(self):
+        if self.parameter_snapshot is not None and not self.parameter_snapshot.done:
+            self.parameter_snapshot.poll()
+            if self.parameter_snapshot.done:
+                self.save_metadata_snapshot()
+                self.get_logger().info(
+                    'Initial parameter snapshot: ' + self.parameter_snapshot.report['status']
+                    + ' (see session.json for unavailable nodes).')
 
-        self.csv_headers_dMv = {}
-        self.csv_headers_dMv["sec"] = []
-        self.csv_headers_dMv["nanosec"] = []
-        self.csv_headers_dMv["image"] = []
-        self.csv_headers_dMv["control_mode"] = []
-        self.csv_headers_dMv["sampling_time"] = []
-        self.csv_headers_dMv["p_gain"] = []
-        self.csv_headers_dMv["i_gain"] = []
-        self.csv_headers_dMv["d_gain"] = []
-        self.csv_headers_dMv["theta_desired"] = []
-        self.csv_headers_dMv["theta_actual"] = []
-        self.csv_headers_dMv["omega_actual"] = []
-        # self.csv_headers_dMv['segment_theta_relative'] = []
-        # self.csv_headers_dMv['segment_omega_relative'] = []
-        for i in range(self.numofmotors):
-            self.csv_headers_dMv[f"tension #{i}"] = []
-        self.csv_headers_dMv[f"cable_velocity_left"] = []
-        self.csv_headers_dMv[f"cable_velocity_right"] = []
-        self.csv_headers_dMv[f"torque_input"] = []
-        self.csv_headers_dMv[f"estimated_force_x"] = []
-        self.csv_headers_dMv[f"estimated_force_y"] = []
-        self.csv_headers_dMv[f"actual_force_x (raw)"] = []
-        self.csv_headers_dMv[f"actual_force_y (raw)"] = []
-        self.csv_headers_dMv[f"actual_force_x (kalman)"] = []
-        self.csv_headers_dMv[f"actual_force_y (kalman)"] = []
-        self.csv_headers_dMv["estimated_torque"] = []
-        self.csv_headers_dMv["actual_torque (raw)"] = []
-        self.csv_headers_dMv["actual_torque (kalman)"] = []
-        self.csv_headers_dMv["friction_mode"] = []
-        self.csv_headers_dMv["friction_torque"] = []
-        self.csv_headers_dMv["damping_coefficient"] = []
-        self.csv_headers_dMv["res_friction"] = []
-        self.csv_headers_dMv["cmode"] = []
-        self.csv_headers_dMv["input_alpha"] = []
-        self.csv_headers_dMv["input_omega"] = []
-        self.csv_headers_dMv["input_theta"] = []
+    def finish_metadata(self):
+        if self.parameter_snapshot is not None and not self.parameter_snapshot.done:
+            self.parameter_snapshot.cancel()
+            self.save_metadata_snapshot()
 
-        self.csv_file_dMv = open(self.csv_file_name_dMv, mode="w")
-        self.csv_writer_dMv = csv.writer(self.csv_file_dMv)
-        self.csv_writer_dMv.writerow(self.csv_headers_dMv.keys())
-        self.csv_file_dMv.flush()
+    def poll(self):
+        try:
+            self.update_health_subscriptions()
+            self.poll_finalizer()
+            # Discovery readiness is NOT a guarantee of received sensor data.
+            required = self.session.config['required_topics']
+            ready = bool(required) and all(
+                any(info.node_name.startswith('rosbag2_recorder')
+                    for info in self.get_subscriptions_info_by_topic(topic))
+                for topic in required)
+            if (not required or self.get_parameter('allow_incomplete').value) and self.session.directory:
+                ready = (self.session.directory / 'bag').is_dir()
+            metadata_ready = self.parameter_snapshot is None or self.parameter_snapshot.done
+            was_active = self.session.active
+            was_starting = self.session.state == 'starting'
+            warning = self.update_live_health() if self.session.active else []
+            samples_ready = not warning or self.get_parameter('allow_incomplete').value
+            if was_starting and not (ready and metadata_ready and samples_ready):
+                if time.monotonic() - self.record_start_monotonic > self.session.config.get('startup_timeout_sec', 10.0):
+                    self.session.metadata['automatic_stop_reason'] = 'required_data_startup_timeout'
+                    self.session.metadata['stop_requested_ros_ns'] = self.get_clock().now().nanoseconds
+                    self.session.request_stop()
+            self.session.poll(ready=ready and metadata_ready and samples_ready)
+            if was_starting and self.session.state == 'recording':
+                self.session.metadata['recording_ready_ros_ns'] = self.get_clock().now().nanoseconds
+                self.session.persist()
+            if self.session.stop_started is not None:
+                self.stop_image_archive()
+            if was_active and not self.session.active:
+                self.stop_image_archive()
+                self._bag_closed_state = self.session.state
+                self._archive_finalize_pending = True
+            self.poll_archive_finalization()
+            if not self.session.active:
+                self.finish_metadata()
+        except (OSError, ValueError) as exc:
+            self.get_logger().error(f'Recording supervision error: {exc}')
+            self.stop_image_archive()
+            self.session.request_stop()
+        self.publish_status()
 
-    def update_csv_dynamics_MIMO_values(self):
-        # if not self.image_flag and not self.fts_data_flag and not self.motor_state_flag and not self.loadcell_data_flag:
-        #     self.get_logger().warning(f'All data are not subscribed')
-        #     return
-        timestamp_sec = str(self.dynamic_MIMO_values.header.stamp.sec)
-        timestamp_nanosec = str(self.dynamic_MIMO_values.header.stamp.nanosec)
-        image_file = (
-            str(self.data_count_dMv)
-            + "_"
-            + str(timestamp_sec)
-            + "-"
-            + str(timestamp_nanosec)
-            + ".png"
-        )
-        actual_force = self.fts_data.wrench.force  # mN
-        actual_force_kalman = self.fts_data_kalman_filter.wrench.force
-        # N-m
-        actual_torque = (
-            (-1)
-            * (10.125 * 0.001)
-            * (
-                actual_force.x * 0.001 * np.cos(self.dynamic_MIMO_values.theta_actual)
-                - actual_force.y * 0.001 * np.sin(self.dynamic_MIMO_values.theta_actual)
-            )
-        )
-        actual_torque_kalman = (
-            (-1)
-            * (10.125 * 0.001)
-            * (
-                actual_force_kalman.x
-                * 0.001
-                * np.cos(self.dynamic_MIMO_values.theta_actual)
-                - actual_force_kalman.y
-                * 0.001
-                * np.sin(self.dynamic_MIMO_values.theta_actual)
-            )
-        )
+    def publish_status(self):
+        detail = self.session.detail
+        warning = self.session.metadata.get('live_health', {}).get('missing_or_stale', [])
+        if self.session.state in ('starting', 'recording') and warning:
+            detail += ' DATA WARNING (recording continues): ' + ', '.join(warning)
+        archive = self.session.metadata.get('image_archive', {})
+        depth_archive = self.session.metadata.get('depth_archive', {})
+        if (archive.get('dropped', 0) or archive.get('errors', 0)
+                or archive.get('finalization_errors', 0)):
+            detail += ' IMAGE WARNING: crop frames dropped/failed; inspect image manifest.'
+        if (depth_archive.get('dropped', 0) or depth_archive.get('errors', 0)
+                or depth_archive.get('finalization_errors', 0)
+                or depth_archive.get('calibration_errors', 0)):
+            detail += ' DEPTH WARNING: crop depth frames dropped/failed; inspect depth manifest.'
+        if (self.depth_archive_settings['enabled']
+                and self.session.state in ('starting', 'recording')
+                and not depth_archive.get('saved', 0)):
+            detail += ' DEPTH: no crop frames saved yet; check/restart the updated estimator.'
+        elif (self.depth_archive_settings['enabled']
+                and self.session.state == 'recording'
+                and self.health.stale([self.depth_archive_settings['topic']])):
+            detail += ' DEPTH WARNING: crop depth source is stale; other data continue recording.'
+        alignment_locked = self.force_alignment_locked()
+        force_alignment = (
+            self.session.metadata.get('snapshot', {}).get('force_alignment')
+            if alignment_locked else None)
+        if force_alignment is None:
+            force_alignment = self.current_force_alignment()
+        payload = json.dumps(dict(
+            state=self.session.state, detail=detail,
+            data_quality=self.session.metadata.get('data_quality'),
+            live_health=self.session.metadata.get('live_health'),
+            image_archive=archive,
+            depth_archive=depth_archive,
+            force_alignment=force_alignment,
+            contact_segment_id=(
+                self.session.metadata.get('snapshot', {}).get('contact_segment_id')
+                if alignment_locked else self.get_parameter('contact_segment_id').value),
+            force_alignment_scope='session' if alignment_locked else 'next_session',
+            directory=str(self.session.directory or '')))
+        self.status_pub.publish(String(data=payload))
+        if payload != self.last_status:
+            self.get_logger().info(payload)
+            self.last_status = payload
 
-        self.csv_writer_dMv.writerow(
-            [timestamp_sec, timestamp_nanosec, image_file]
-            + [str(self.control_mode.data)]
-            + [str(self.dynamic_MIMO_values.sampling_time)]
-            + [str(self.dynamic_MIMO_values.p_gain)]
-            + [str(self.dynamic_MIMO_values.i_gain)]
-            + [str(self.dynamic_MIMO_values.d_gain)]
-            + [str(self.dynamic_MIMO_values.theta_desired)]
-            + [str(self.dynamic_MIMO_values.theta_actual)]
-            + [str(self.dynamic_MIMO_values.omega_actual)]
-            + [str(value) for value in self.dynamic_MIMO_values.tension]
-            + [str(self.dynamic_MIMO_values.cable_velocity_left)]
-            + [str(self.dynamic_MIMO_values.cable_velocity_right)]
-            + [str(self.dynamic_MIMO_values.torque_input)]
-            + [str(value) for value in self.dynamic_MIMO_values.external_force]
-            + [str(actual_force.x * 0.001)]
-            + [str(actual_force.y * 0.001)]
-            + [str(actual_force_kalman.x * 0.001)]
-            + [str(actual_force_kalman.y * 0.001)]
-            + [str(self.dynamic_MIMO_values.external_torque)]
-            + [str(actual_torque)]
-            + [str(actual_torque_kalman)]
-            + [str(self.dynamic_MIMO_values.friction_mode)]
-            + [str(self.dynamic_MIMO_values.friction_torque)]
-            + [str(self.dynamic_MIMO_values.damping_coefficient)]
-            + [str(self.dynamic_MIMO_values.res_friction)]
-            + [str(self.dynamic_MIMO_values.cmode)]
-            + [str(self.dynamic_MIMO_values.input_alpha)]
-            + [str(self.dynamic_MIMO_values.input_omega)]
-            + [str(self.dynamic_MIMO_values.input_theta)]
-        )
-        self.csv_file_dMv.flush()
-        pass
-
-    ##################################
-    def create_csv_controller_variables(self):
-        self.csv_file_name_controller = os.path.join(
-            self.directory_path_csv, "data_controller.csv"
-        )
-        self.get_logger().info(
-            f"CSV is created => name : {self.csv_file_name_controller}"
-        )
-
-        self.csv_headers_contoller = {}
-        self.csv_headers_contoller["sec"] = []
-        self.csv_headers_contoller["nanosec"] = []
-        self.csv_headers_contoller["image"] = []
-        self.csv_headers_contoller["sampling_time"] = []
-
-        self.csv_headers_contoller["control_mode"] = []
-
-        self.csv_headers_contoller["mass_x"] = []
-        self.csv_headers_contoller["mass_y"] = []
-        self.csv_headers_contoller["mass_z"] = []
-        self.csv_headers_contoller["damper_x"] = []
-        self.csv_headers_contoller["damper_y"] = []
-        self.csv_headers_contoller["damper_z"] = []
-        self.csv_headers_contoller["spring_x"] = []
-        self.csv_headers_contoller["spring_y"] = []
-        self.csv_headers_contoller["spring_z"] = []
-
-        self.csv_headers_contoller["desired_force_x"] = []
-        self.csv_headers_contoller["desired_force_y"] = []
-        self.csv_headers_contoller["desired_force_z"] = []
-        self.csv_headers_contoller["env_force_x"] = []
-        self.csv_headers_contoller["env_force_y"] = []
-        self.csv_headers_contoller["env_force_z"] = []
-        self.csv_headers_contoller["delta_force_x"] = []
-        self.csv_headers_contoller["delta_force_y"] = []
-        self.csv_headers_contoller["delta_force_z"] = []
-
-        self.csv_headers_contoller["x_ddot_x"] = []
-        self.csv_headers_contoller["x_ddot_y"] = []
-        self.csv_headers_contoller["x_ddot_z"] = []
-        self.csv_headers_contoller["x_dot_x"] = []
-        self.csv_headers_contoller["x_dot_y"] = []
-        self.csv_headers_contoller["x_dot_z"] = []
-        self.csv_headers_contoller["x(xf)_x"] = []
-        self.csv_headers_contoller["x(xf)_y"] = []
-        self.csv_headers_contoller["x(xf)_z"] = []
-        self.csv_headers_contoller["dt(admittance)"] = []
-
-        self.csv_headers_contoller["pos-p_gain"] = []
-        self.csv_headers_contoller["pos-i_gain"] = []
-        self.csv_headers_contoller["pos-d_gain"] = []
-
-        self.csv_headers_contoller["desired_x"] = []
-        self.csv_headers_contoller["desired_y"] = []
-        self.csv_headers_contoller["desired_z"] = []
-        self.csv_headers_contoller["actual_x"] = []
-        self.csv_headers_contoller["actual_y"] = []
-        self.csv_headers_contoller["actual_z"] = []
-        self.csv_headers_contoller["error_x"] = []
-        self.csv_headers_contoller["error_y"] = []
-        self.csv_headers_contoller["error_z"] = []
-
-        self.csv_headers_contoller["dt(position)"] = []
-        self.csv_headers_contoller["delta_pan"] = []
-        self.csv_headers_contoller["delta_tilt"] = []
-
-        for i in range(self.numofjoints):
-            self.csv_headers_contoller[f"theta_actual_rel_#{i}"] = []
-
-        """
-        TODO mapping to self.update_csv_controller_variables
-        """
-        self.csv_headers_contoller[f"estimated_force_x"] = []
-        self.csv_headers_contoller[f"estimated_force_y"] = []
-        self.csv_headers_contoller[f"actual_force_x (raw)"] = []
-        self.csv_headers_contoller[f"actual_force_y (raw)"] = []
-        self.csv_headers_contoller[f"actual_force_x (kalman)"] = []
-        self.csv_headers_contoller[f"actual_force_y (kalman)"] = []
-
-        self.csv_file_controller = open(self.csv_file_name_controller, mode="w")
-        self.csv_writer_controller = csv.writer(self.csv_file_controller)
-        self.csv_writer_controller.writerow(self.csv_headers_contoller.keys())
-        self.csv_file_controller.flush()
-
-    def update_csv_controller_variables(self):
-        # if not self.image_flag and not self.fts_data_flag and not self.motor_state_flag and not self.loadcell_data_flag:
-        #     self.get_logger().warning(f'All data are not subscribed')
-        #     return
-        timestamp_sec = str(self.position_control_variables.header.stamp.sec)
-        timestamp_nanosec = str(self.position_control_variables.header.stamp.nanosec)
-        image_file = (
-            str(self.data_count_admittance)
-            + "_"
-            + str(timestamp_sec)
-            + "-"
-            + str(timestamp_nanosec)
-            + ".png"
-        )
-        actual_force = self.fts_data.wrench.force  # mN
-        actual_force_kalman = self.fts_data_kalman_filter.wrench.force
-        # N-m
-        # actual_torque = (-1) * (10.125*0.001) * (actual_force.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
-        # actual_torque_kalman = (-1) * (10.125*0.001) * (actual_force_kalman.x*0.001*np.cos(self.dynamic_MIMO_values.theta_actual) - actual_force_kalman.y*0.001*np.sin(self.dynamic_MIMO_values.theta_actual));
-        if self.control_mode.data in ("position", "admittance"):
-            self.csv_writer_controller.writerow(
-                [timestamp_sec, timestamp_nanosec, image_file]
-                + [str(self.admittance_control_variables.sampling_time)]
-                + [str(self.control_mode.data)]
-                + [str(self.admittance_control_variables.m_matrix[0])]
-                + [str(self.admittance_control_variables.m_matrix[7])]
-                + [str(self.admittance_control_variables.m_matrix[14])]
-                + [str(self.admittance_control_variables.b_matrix[0])]
-                + [str(self.admittance_control_variables.b_matrix[7])]
-                + [str(self.admittance_control_variables.b_matrix[14])]
-                + [str(self.admittance_control_variables.k_matrix[0])]
-                + [str(self.admittance_control_variables.k_matrix[7])]
-                + [str(self.admittance_control_variables.k_matrix[14])]
-                + [str(self.admittance_control_variables.desired_force.force.x)]
-                + [str(self.admittance_control_variables.desired_force.force.y)]
-                + [str(self.admittance_control_variables.desired_force.force.z)]
-                + [str(self.admittance_control_variables.env_force.force.x)]
-                + [str(self.admittance_control_variables.env_force.force.y)]
-                + [str(self.admittance_control_variables.env_force.force.z)]
-                + [str(self.admittance_control_variables.delta_force.force.x)]
-                + [str(self.admittance_control_variables.delta_force.force.y)]
-                + [str(self.admittance_control_variables.delta_force.force.z)]
-                + [str(self.admittance_control_variables.x_ddot.position.x)]
-                + [str(self.admittance_control_variables.x_ddot.position.y)]
-                + [str(self.admittance_control_variables.x_ddot.position.z)]
-                + [str(self.admittance_control_variables.x_dot.position.x)]
-                + [str(self.admittance_control_variables.x_dot.position.y)]
-                + [str(self.admittance_control_variables.x_dot.position.z)]
-                + [str(self.admittance_control_variables.x.position.x)]
-                + [str(self.admittance_control_variables.x.position.y)]
-                + [str(self.admittance_control_variables.x.position.z)]
-                + [str(self.admittance_control_variables.dt)]
-                + [str(self.position_control_variables.p_gain)]
-                + [str(self.position_control_variables.i_gain)]
-                + [str(self.position_control_variables.d_gain)]
-                + [str(self.position_control_variables.x_desired.position.x)]
-                + [str(self.position_control_variables.x_desired.position.y)]
-                + [str(self.position_control_variables.x_desired.position.z)]
-                + [str(self.position_control_variables.x_actual.position.x)]
-                + [str(self.position_control_variables.x_actual.position.y)]
-                + [str(self.position_control_variables.x_actual.position.z)]
-                + [str(self.position_control_variables.x_error.position.x)]
-                + [str(self.position_control_variables.x_error.position.y)]
-                + [str(self.position_control_variables.x_error.position.z)]
-                + [str(self.position_control_variables.dt)]
-                + [str(self.position_control_variables.del_theta_pan)]
-                + [str(self.position_control_variables.del_theta_tilt)]
-                + [
-                    str(value)
-                    for value in self.position_control_variables.theta_actual_relative
-                ]
-                + [str(self.external_force.x * 0.001)]
-                + [str(self.external_force.y * 0.001)]
-                + [str(actual_force.x * 0.001)]
-                + [str(actual_force.y * 0.001)]
-                + [str(actual_force_kalman.x * 0.001)]
-                + [str(actual_force_kalman.y * 0.001)]
-            )
-
-        self.csv_file_controller.flush()
-        pass
-
-    #######################################
-
-    def create_metadata_json(self):
-        # declare dictionary of metadata
-        metadata = {
-            "info": {
-                "NUM_OF_MOTORS": self.numofmotors,
-                "NUM_OF_JOINT": self.numofjoints,
-                "SEGMENT_ARC": self.segment_arc,
-                "SEGMENT_DIAMETER": self.segment_dia,
-                "WIRE_DISTANCE": self.segment_wd,
-            },
-            "units": {
-                "timestamp sec": "s",
-                "timestamp nanosec": "ns",
-                "image file": "filename",
-                "motor position": "encoder inc",
-                "wire length": "mm",
-                "loadcell": "g",
-                "fx": "mN",
-                "fy": "mN",
-                "fz": "mN",
-                "tx": "mNm",
-                "ty": "mNm",
-                "tz": "mNm",
-                "M_matrix": "kg",
-                "B_matrix": "N-s/m",
-                "K_matrix": "N/m",
-                "x_vector": "m",
-                "Translation": "m",
-                "Rotation": "deg",
-            },
-            "offsets": {
-                "fx": self.fts_data_offset.wrench.force.x,
-                "fy": self.fts_data_offset.wrench.force.y,
-                "fz": self.fts_data_offset.wrench.force.z,
-                "tx": self.fts_data_offset.wrench.torque.x,
-                "ty": self.fts_data_offset.wrench.torque.y,
-                "tz": self.fts_data_offset.wrench.torque.z,
-            },
-        }
-
-        ## Add units of motors and loadcells.
-        # for i in range(self.numofmotors):
-        #     metadata["units"][f"motor #{i}"] = "encoder inc"
-        #     metadata["units"][f"loadcell #{i}"] = "mN"
-
-        # 메타데이터를 JSON 파일로 저장합니다.
-        self.metadata_file_name = os.path.join(self.directory_path_csv, "metadata.json")
-        with open(self.metadata_file_name, "w") as metadata_file:
-            json.dump(metadata, metadata_file, indent=4)
-
-        self.get_logger().info(
-            f"metadata.json is created => name : {self.metadata_file_name}"
-        )
-
-    def parse_hw_definition_hpp(self, file_path):
-        """
-        Parse the given HPP file and extract global variables and their values.
-        Ignore lines starting with "//" and lines containing only whitespace.
-
-        Args:
-            file_path (str): The path to the HPP file.
-
-        Returns:
-            dict: A dictionary containing global variables and their values.
-        """
-        constants = {}
-        with open(file_path, "r") as file:
-            lines = file.readlines()
-            for line in lines:
-                if line.startswith("#define"):
-                    parts = line.split()
-                    if len(parts) >= 3:
-                        key = parts[1]
-                        value = parts[2]
-                        constants[key] = value
-        return constants
+    def close(self):
+        self.finish_metadata()
+        self.stop_image_archive()
+        if self.session.active and self.session.stop_started is None:
+            self.session.metadata['stop_requested_ros_ns'] = self.get_clock().now().nanoseconds
+        self.session.close()
+        if self.image_archive is not None:
+            self.image_archive.close(timeout=8.0)
+            self.session.metadata['image_archive'] = self.image_archive.report()
+            self.session.persist()
+        if self.depth_archive is not None:
+            self.depth_archive.close(timeout=8.0)
+            self.session.metadata['depth_archive'] = self.depth_archive.report()
+            self.session.persist()
+        self.poll_finalizer()
+        if self.finalizer is not None:
+            if self.finalizer.poll() is None:
+                try:
+                    os.killpg(self.finalizer.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    self.finalizer.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    os.killpg(self.finalizer.pid, signal.SIGKILL)
+                    self.finalizer.wait(timeout=2)
+            self.finalizer = None
+            self.finalizer_log.close()
+            self.finalizer_log = None
+            self.session.metadata['postprocess'] = {'status': 'interrupted'}
+        if self.session.directory and self.session.metadata.get('postprocess', {}).get('status') not in ('complete', 'partial', 'failed'):
+            self.session.metadata['postprocess'] = {'status': 'pending_or_interrupted'}
+            self.session.metadata['data_quality'] = 'unverified'
+            self.session.detail = 'Bag closed; CSV/integrity processing pending. Use export_csv before training.'
+            if self.session.state != 'failed':
+                self.session.state = 'stopped' if (self.session.directory / 'bag/metadata.yaml').is_file() else 'failed'
+            self.session.persist()
 
 
 def main(args=None):
-    # rclpy.init(args=args)
-    # record_node = RecordNode()
-    # rclpy.spin(record_node)
-    # record_node.destroy_node()
-    # print('record node is destroyed')
-    # rclpy.shutdown()
-    # print('rclpy shutdonw')
-
-    rclpy.init(args=args)
-    try:
-        record_node = RecordNode()
-        executor = MultiThreadedExecutor()
-        #  executor = MultiThreadedExecutor(num_threads=4)
-        executor.add_node(record_node)
+    # Match the image-sized profile used by this workspace's camera/estimator.
+    # Explicit operator profiles and other RMW implementations take priority.
+    if (not any(os.environ.get(k) for k in (
+            'FASTRTPS_DEFAULT_PROFILES_FILE', 'FASTDDS_DEFAULT_PROFILES_FILE'))
+            and os.environ.get('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp') in (
+                'rmw_fastrtps_cpp', 'rmw_fastrtps_dynamic_cpp')):
         try:
-            executor.spin()
-        except KeyboardInterrupt:
-            record_node.get_logger().warning("Keyboard Interrupt (SIGINT)")
-        finally:
-            executor.shutdown()
-            record_node.destroy_node()
-            print("record node is destroyed")
+            profile = Path(get_package_share_directory('estimation_pkg')) / 'config/fastdds_images.xml'
+            if profile.is_file():
+                os.environ['FASTRTPS_DEFAULT_PROFILES_FILE'] = str(profile)
+        except LookupError:
+            pass
+    rclpy.init(args=args)
+    node = None
+    try:
+        node = RecordNode()
+        rclpy.spin(node)
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
     finally:
-        rclpy.shutdown()
-
-
-if __name__ == "__main__":
-    main()
+        if node:
+            node.close()
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()

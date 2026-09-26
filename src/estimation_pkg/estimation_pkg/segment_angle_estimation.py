@@ -7,10 +7,11 @@ from rclpy.qos import QoSHistoryPolicy
 from rclpy.qos import QoSReliabilityPolicy
 
 from rclpy.executors import SingleThreadedExecutor
-from geometry_msgs.msg import Point, TransformStamped
+from rcl_interfaces.msg import ParameterDescriptor
+from geometry_msgs.msg import Point, PointStamped, TransformStamped
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from sensor_msgs_py import point_cloud2
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
 from visualization_msgs.msg import Marker, MarkerArray
 from custom_interfaces.msg import SegmentAngle
 from cv_bridge import CvBridge
@@ -21,6 +22,7 @@ from tf2_ros import TransformBroadcaster
 
 from estimation_pkg.postprocess import RBSC
 from estimation_pkg.runtime import configure_image_transport
+from estimation_pkg.crop_depth import crop_depth_calibration
 # from postprocess import RBSC
 
 import threading
@@ -33,13 +35,33 @@ import signal
 
 print(f"[segment] Current Working Directory : {os.getcwd()}")
 
+
+def validate_roi(x, y, width, height):
+    """ROI is a top-left pixel origin plus positive pixel width/height."""
+    values = (x, y, width, height)
+    for name, value, minimum in zip(
+            ('roi_x', 'roi_y', 'roi_width', 'roi_height'), values, (0, 0, 1, 1)):
+        if type(value) is not int or value < minimum:
+            raise ValueError(f'{name} must be an integer >= {minimum}.')
+    return values
+
+
 class SegmentEstimationNode(Node):
     def __init__(self, roi_config_file='config_ROI_ref.json'):
+        super().__init__('segment_estimation_node')
         self.roi_config = self.load_config(roi_config_file)
-        self.roi_x = self.roi_config['x']
-        self.roi_y = self.roi_config['y']
-        self.roi_w = self.roi_config['w']
-        self.roi_h = self.roi_config['h']
+        defaults = validate_roi(*(self.roi_config[key] for key in ('x', 'y', 'w', 'h')))
+        names = ('roi_x', 'roi_y', 'roi_width', 'roi_height')
+        for name, value in zip(names, defaults):
+            self.declare_parameter(name, value, ParameterDescriptor(
+                read_only=True,
+                description='Fixed estimation crop in pixels; restart estimation to change ROI.'))
+        self.roi_x, self.roi_y, self.roi_w, self.roi_h = validate_roi(
+            *(self.get_parameter(name).value for name in names))
+        self.get_logger().info(
+            f'Fixed estimation ROI: x={self.roi_x}, y={self.roi_y}, '
+            f'width={self.roi_w}, height={self.roi_h}. '
+            'Full camera images and AprilTag input are unchanged.')
         self.current_frame = None
         self.current_frame_ROI = None
         self.current_frame_encoding = None
@@ -48,6 +70,7 @@ class SegmentEstimationNode(Node):
         self.depth_stamp = None
         self.depth_scale = None
         self.camera_intrinsics = None
+        self.depth_archive_camera_info = None
         self.camera_frame_id = None
         self.received_first_color = False
         self.received_first_depth = False
@@ -73,6 +96,7 @@ class SegmentEstimationNode(Node):
         self.result_lock = threading.Lock()
         self.latest_visualization = None
         self.latest_crop = None
+        self.latest_crop_depth = None
         self.previous_marker_keys = None
         self.rbsc = RBSC()
         performance_config = self.rbsc.config.get('performance', {})
@@ -113,7 +137,6 @@ class SegmentEstimationNode(Node):
         print(os.path.abspath(__file__))
         print("============================")
 
-        super().__init__('segment_estimation_node')
         self.declare_parameter('debug_timing_enabled', self.debug_timing_enabled)
         self.declare_parameter('debug_rate_enabled', self.debug_rate_enabled)
         self.debug_timing_enabled = self.get_parameter('debug_timing_enabled').value
@@ -182,6 +205,12 @@ class SegmentEstimationNode(Node):
       'estimated_segment_crop_image',
       QOS_VISUALIZATION_LATEST
     )
+        self.crop_depth_publisher = self.create_publisher(
+            Image, 'estimated_segment_crop_depth/image_raw', QOS_VISUALIZATION_LATEST)
+        self.crop_depth_info_publisher = self.create_publisher(
+            CameraInfo, 'estimated_segment_crop_depth/camera_info', QOS_VISUALIZATION_LATEST)
+        self.crop_depth_metadata_publisher = self.create_publisher(
+            String, 'estimated_segment_crop_depth/metadata', QOS_VISUALIZATION_LATEST)
         self.segment_body_binary_image_publisher = self.create_publisher(
       Image,
       'estimated_segment_body_binary_image',
@@ -207,6 +236,10 @@ class SegmentEstimationNode(Node):
       'estimated_segment_angle',
       QOS_CONTROL_LATEST
     )
+        self.tip_position_publisher = self.create_publisher(
+            PointStamped, 'estimated_tip_position', QOS_CONTROL_LATEST)
+        self.tip_position_unscaled_publisher = self.create_publisher(
+            PointStamped, 'estimated_tip_position_unscaled', QOS_CONTROL_LATEST)
 
         self.event = threading.Event()
         self.frame_event = threading.Event()
@@ -236,6 +269,20 @@ class SegmentEstimationNode(Node):
 
         return config
 
+    def crop_to_roi(self, frame, stream_name):
+        """Return a view only when the entire configured rectangle is present."""
+        height, width = frame.shape[:2]
+        if self.roi_x + self.roi_w > width or self.roi_y + self.roi_h > height:
+            self.get_logger().warning(
+                f'Rejecting {stream_name} frame {width}x{height}: ROI '
+                f'(x={self.roi_x}, y={self.roi_y}, width={self.roi_w}, '
+                f'height={self.roi_h}) exceeds image bounds. '
+                'Stop estimation, choose a valid ROI, then start it again.',
+                throttle_duration_sec=2.0)
+            return None
+        return frame[self.roi_y:self.roi_y + self.roi_h,
+                     self.roi_x:self.roi_x + self.roi_w]
+
     def color_image_rect_raw_callback(self, data):
         self.color_received_count += 1
         if data.encoding not in ('rgb8', 'bgr8'):
@@ -244,10 +291,16 @@ class SegmentEstimationNode(Node):
             )
             return
         frame = self.br_rgb.imgmsg_to_cv2(data, 'passthrough')
-        color_roi = frame[
-        self.roi_y:self.roi_y + self.roi_h,
-        self.roi_x:self.roi_x + self.roi_w,
-        ]
+        color_roi = self.crop_to_roi(frame, 'color')
+        if color_roi is None:
+            self.failed_frame_count += 1
+            with self.frame_lock:
+                self.current_frame_flag = False
+                self.current_frame_ROI = None
+                self.color_stamp = None
+            with self.result_lock:
+                self.latest_crop = None
+            return
         if self.segment_crop_image_publisher.get_subscription_count() > 0:
             # Keep DDS image callbacks short. Serialization/publication belongs
             # to the visualization worker, even if depth or the fit is missing.
@@ -273,6 +326,14 @@ class SegmentEstimationNode(Node):
     def aligned_depth_callback(self, data):
         self.depth_received_count += 1
         depth = self.br_rgb.imgmsg_to_cv2(data, 'passthrough')
+        depth_roi = self.crop_to_roi(depth, 'aligned-depth')
+        if depth_roi is None:
+            self.failed_frame_count += 1
+            with self.frame_lock:
+                self.current_depth = None
+                self.depth_stamp = None
+                self.depth_scale = None
+            return
         if not self.received_first_depth:
             self.get_logger().info(
           f'First aligned-depth frame received; encoding={data.encoding}, '
@@ -290,12 +351,19 @@ class SegmentEstimationNode(Node):
             depth_scale = 1.0
 
         with self.frame_lock:
-            self.current_depth = depth[
-                self.roi_y:self.roi_y + self.roi_h,
-                self.roi_x:self.roi_x + self.roi_w,
-            ]
+            self.current_depth = depth_roi
             self.depth_stamp = data.header.stamp
             self.depth_scale = depth_scale
+            archive_info = getattr(self, 'depth_archive_camera_info', None)
+        archive_publisher = getattr(self, 'crop_depth_publisher', None)
+        if archive_publisher is not None and archive_publisher.get_subscription_count() > 0:
+            # Queue only a view/reference in the DDS callback. Calibration,
+            # serialization and publication run in the visualization worker.
+            with self.result_lock:
+                self.latest_crop_depth = (
+                    depth_roi, data.header, data.encoding, depth_scale,
+                    depth.shape, archive_info)
+                self.event.set()
 
     def camera_info_callback(self, data):
         intrinsics = {
@@ -314,6 +382,7 @@ class SegmentEstimationNode(Node):
         with self.frame_lock:
             self.camera_intrinsics = intrinsics
             self.camera_frame_id = data.header.frame_id
+            self.depth_archive_camera_info = data
 
     def publish_base_transform(
             self,
@@ -411,6 +480,25 @@ class SegmentEstimationNode(Node):
             np.cos(current - previous),
         )
         return angle_difference / dt
+
+    def publish_tip_positions(self, stamp, base_frame_id, boundary_tip, unscaled_tip):
+        """Publish meter-valued fitted endpoints from one successful image.
+
+        Boundary tip matches the length-constrained RViz curve. Unscaled tip
+        is the fitted endpoint before that hardware-length constraint, not a
+        raw depth pixel. Neither is computed again from filtered joint angles.
+        """
+        positions = [np.asarray(point, dtype=float) for point in (boundary_tip, unscaled_tip)]
+        if not base_frame_id or any(
+                point.shape != (3,) or not np.all(np.isfinite(point)) for point in positions):
+            raise ValueError('Tip positions require a base frame and finite XYZ triples.')
+        for publisher, position in zip(
+                (self.tip_position_publisher, self.tip_position_unscaled_publisher), positions):
+            message = PointStamped()
+            message.header.stamp = stamp
+            message.header.frame_id = base_frame_id
+            message.point = Point(x=float(position[0]), y=float(position[1]), z=float(position[2]))
+            publisher.publish(message)
 
     def publish_segment_angles(
             self,
@@ -585,6 +673,14 @@ class SegmentEstimationNode(Node):
                     (rbsc.tilt_relative_velocity_rad_s
                      if rbsc.joint_kalman_filter_enabled else None),
                 )
+                # Telemetry must not depend on RViz subscriptions/visualization
+                # timing, and failed reconstructions must not repeat old tips.
+                self.publish_tip_positions(
+                    color_stamp,
+                    rbsc.base_frame_id,
+                    rbsc.segment_points_xyz[-1],
+                    rbsc.tip_position_unscaled_xyz,
+                )
 
                 self.processed_frame_count += 1
                 self.last_processing_ms = rbsc.last_stage_times_ms['total']
@@ -663,6 +759,24 @@ class SegmentEstimationNode(Node):
             self.latest_visualization = packet
             self.event.set()
 
+    def publish_crop_depth(self, packet):
+        """Preserve raw depth values and source time; no colorization or rescale."""
+        pixels, header, encoding, scale, shape, source_info = packet
+        try:
+            info, metadata = crop_depth_calibration(
+                source_info, header, encoding, scale, shape,
+                (self.roi_x, self.roi_y, self.roi_w, self.roi_h))
+            message = self.br_rgb.cv2_to_imgmsg(pixels, encoding)
+            message.header = header
+            # Topic ordering is not guaranteed; the recorder joins by exact
+            # depth source stamp/frame, with a bounded calibration wait.
+            self.crop_depth_metadata_publisher.publish(String(data=json.dumps(metadata)))
+            self.crop_depth_info_publisher.publish(info)
+            self.crop_depth_publisher.publish(message)
+        except (ValueError, TypeError) as error:
+            self.get_logger().warning(
+                f'Crop depth archive unavailable: {error}', throttle_duration_sec=2.0)
+
     def realtime_show(self):
         self.get_logger().info('Waiting the first curvefit process...')
         first_result = True
@@ -675,13 +789,17 @@ class SegmentEstimationNode(Node):
             with self.result_lock:
                 self.event.clear()
                 crop = self.latest_crop
+                crop_depth = getattr(self, 'latest_crop_depth', None)
                 packet = self.latest_visualization
                 self.latest_crop = None
+                self.latest_crop_depth = None
                 self.latest_visualization = None
             if self.shutdown_event.is_set() or not rclpy.ok():
                 break
 
             try:
+                if crop_depth is not None:
+                    self.publish_crop_depth(crop_depth)
                 if crop is not None:
                     crop_image_msg = self.br_rgb.cv2_to_imgmsg(crop[0], crop[2])
                     crop_image_msg.header = crop[1]

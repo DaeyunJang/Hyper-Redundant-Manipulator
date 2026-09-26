@@ -15,7 +15,7 @@ from rclpy.qos import QoSHistoryPolicy
 from rclpy.qos import QoSReliabilityPolicy
 
 from rclpy.parameter import Parameter
-from rcl_interfaces.msg import SetParametersResult
+from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 
 from std_msgs.msg import Header
 from std_msgs.msg import Bool
@@ -24,15 +24,19 @@ from std_srvs.srv import SetBool
 from custom_interfaces.msg import LoadcellState
 from custom_interfaces.msg import DataFilterSetting
 
-usb_device_path = "/dev/ttyUSB0"  # USB 장치의 경로에 맞게 변경하세요
-
-# USB 장치에 대한 권한 변경 명령어
-command = f"sudo chmod 666 {usb_device_path}"
 
 class SerialNode(Node):
 
     def __init__(self):
         super().__init__('serial_node')
+        self.serial_port = self.declare_parameter(
+            'serial_port', '/dev/ttyUSB0',
+            ParameterDescriptor(
+                read_only=True,
+                description='ESP32 serial device path; restart the node to change ports.'),
+        ).value
+        if not self.serial_port.strip():
+            raise ValueError('serial_port must be a non-empty device path.')
         self.declare_parameter('qos_depth', 1)
         qos_depth = self.get_parameter('qos_depth').value
         # self.declare_parameter('')
@@ -105,7 +109,6 @@ class SerialNode(Node):
 
         self.create_service(SetBool, '/serial_data/set_zero', self.set_zero_callback)
 
-        self.serial_port = usb_device_path  # 사용하는 시리얼 포트(COM 포트)를 지정하세요.
         self.baudrate = 921600  # 아두이노와 통신하는 속도
         self.ser = None
         while self.ser is None or not self.ser.is_open:
@@ -141,7 +144,11 @@ class SerialNode(Node):
 
         self.serial_lock = threading.Lock()
         while True:
-            suc = self.set_zero(100)
+            try:
+                suc = self.set_zero(100)
+            except (KeyboardInterrupt, serial.SerialException):
+                self.ser.close()
+                raise
             self.get_logger().info(f'SET ZERO: {suc}')
             if suc:
                 break
@@ -353,14 +360,13 @@ class SerialNode(Node):
                             else:
                                 # self.get_logger().info(f'parsing data = {parsing_data}')
                                 try:
-                                    if np.any(np.array(parsing_data)==0):
-                                        continue
-                                    else:
-                                        # self.get_logger().info(f'[{count}]parsing data = {parsing_data}')
-                                        force_3d.append(parsing_data[0:3])
-                                        torque_3d.append(parsing_data[3:6])
-                                        # lc.append(parsing_data[6:10])
-                                        count = count + 1
+                                    # Zero is a valid reading, including the
+                                    # ESP32's F/T fields while CAN is absent.
+                                    # parse_serial_data validates the frame;
+                                    # loadcells do not participate in F/T zeroing.
+                                    force_3d.append(parsing_data[0:3])
+                                    torque_3d.append(parsing_data[3:6])
+                                    count = count + 1
                                     # self.publishall()
                                 except ValueError as e:
                                     self.get_logger().warning(f'(set_zero) Error {e}')
@@ -400,16 +406,18 @@ class SerialNode(Node):
 
         except KeyboardInterrupt:
             self.get_logger().warning('Keyboard Interrupt')
-            return 0
-        finally:
-            return 1
+            raise
+        # Do not return from finally: it would overwrite failures/interrupts
+        # and start the reader even though zero setup never finished.
+        return 1
 
     def set_zero_callback(self, request, response):
         try:
             if request.data:
-                self.set_zero()
-                response.success = True
-                response.message = "Success set_zero()."
+                response.success = bool(self.set_zero())
+                response.message = (
+                    "Success set_zero()." if response.success
+                    else "Failed set_zero().")
         except Exception as e:
             self.get_logger().info(f'Exception Error as {e}')
             response.success = False
@@ -429,7 +437,13 @@ class SerialNode(Node):
         try:
             data_part = str[sidx+1:eidx]
             data_list = data_part.split(',')
+            # The ESP32 hub publishes six F/T and four loadcell values.
+            # Reject invalid frames, not legitimate zero-valued channels.
+            if len(data_list) != 10:
+                return None
             data_list_float = [float(item) for item in data_list]
+            if not np.all(np.isfinite(data_list_float)):
+                return None
             return data_list_float
         except Exception as e:
             self.get_logger().warning(f'Error while parsing input string: {e}')

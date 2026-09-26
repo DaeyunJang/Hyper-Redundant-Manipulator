@@ -13,14 +13,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+from pathlib import Path
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-
+    roi_path = Path(get_package_share_directory('estimation_pkg')) / 'config_ROI_ref.json'
+    with roi_path.open(encoding='utf-8') as handle:
+        roi = json.load(handle)
+    fields = (('roi_x', 'x', 0), ('roi_y', 'y', 0),
+              ('roi_width', 'w', 1), ('roi_height', 'h', 1))
+    arguments = []
+    for name, key, minimum in fields:
+        if type(roi[key]) is not int or roi[key] < minimum:
+            raise ValueError(f'{roi_path}: {key} must be an integer >= {minimum}.')
+        arguments.append(DeclareLaunchArgument(
+            name, default_value=str(roi[key]),
+            description='Startup-only estimation crop in pixels; restart estimation to change.'))
     return LaunchDescription(
-        [
+        arguments + [
             # ExecuteProcess(
             #     cmd=rqt_command,
             #     output='screen'
@@ -41,6 +59,10 @@ def generate_launch_description():
                 executable="segment_angle_estimator",
                 name="segment_angle_estimator",
                 output="screen",
+                parameters=[{
+                    name: ParameterValue(LaunchConfiguration(name), value_type=int)
+                    for name, _, _ in fields
+                }],
                 additional_env={
                     'OPENBLAS_NUM_THREADS': '1',
                     'OMP_NUM_THREADS': '1',

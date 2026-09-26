@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import signal
 import sys
@@ -6,6 +7,7 @@ import time
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import QCheckBox
+from PyQt5.QtWidgets import QDialog
 from PyQt5.QtWidgets import QGroupBox
 from PyQt5.QtWidgets import QHBoxLayout
 from PyQt5.QtWidgets import QLabel
@@ -27,10 +29,10 @@ from rclpy.qos import QoSDurabilityPolicy
 from rclpy.qos import QoSHistoryPolicy
 from rclpy.qos import QoSReliabilityPolicy
 from rclpy.node import Node
-from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.srv import SetParameters, SetParametersAtomically
 from rclpy.parameter import Parameter
 # from rclpy import RCLError
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, String
 from geometry_msgs.msg import WrenchStamped
 from std_srvs.srv import SetBool
 from custom_interfaces.msg import LoadcellState
@@ -50,6 +52,12 @@ from ament_index_python.packages import get_package_share_directory
 from gui_py_pkg.system_manager import SystemProcessManager
 from gui_py_pkg.system_manager import load_component_specs
 from gui_py_pkg.image_preview import ImagePreviewPanel
+from gui_py_pkg.serial_port_selector import SerialPortSelector
+from gui_py_pkg.camera_selector import CameraSelector
+from gui_py_pkg.camera_exposure import CameraExposurePanel
+from gui_py_pkg.sine_motion import SineMotionPanel
+from gui_py_pkg.force_alignment import ForceAlignmentPanel, request_record_start
+from gui_py_pkg.roi_editor import RoiEditorDialog, load_roi_config
 # 제어모드를 나타내는 Enum 정의
 class ControlMode(Enum):
     kKinematics = 1
@@ -83,6 +91,12 @@ class GUINode(Node):
 
         self.declare_parameter('qos_depth', 10)
         qos_depth = self.get_parameter('qos_depth').value
+
+        self.record_status = None
+        self.record_status_subscriber = self.create_subscription(
+            String, '/data/record_status', self.receive_record_status,
+            QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL),
+        )
 
         QOS_RKL10V = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
@@ -218,6 +232,8 @@ class GUINode(Node):
             SetBool,
             '/data/record'
         )
+        self.record_parameter_client = self.create_client(
+            SetParametersAtomically, '/record/set_parameters_atomically')
 
         self.set_zero_client = self.create_client(
             SetBool,
@@ -380,14 +396,16 @@ class GUINode(Node):
             '/control/set_control_mode',
         )
     
-    def send_request_record_start(self):
-        service_request = SetBool.Request()
-        service_request.data = True
-        return self.call_service_async(
-            self.recoder_service_client,
-            service_request,
-            '/data/record',
-        )
+    def receive_record_status(self, message):
+        try:
+            self.record_status = (json.loads(message.data), time.monotonic())
+        except (TypeError, ValueError):
+            self.get_logger().warning('Invalid recorder status message')
+
+    def send_request_record_start(self, alignment, contact_segment_id=0):
+        return request_record_start(
+            self.record_parameter_client, self.recoder_service_client, alignment,
+            contact_segment_id)
     
     def send_request_record_stop(self):
         service_request = SetBool.Request()
@@ -397,7 +415,7 @@ class GUINode(Node):
             service_request,
             '/data/record',
         )
-    
+
     def send_request_set_zero(self):
         service_request = SetBool.Request()
         service_request.data = True
@@ -422,10 +440,16 @@ class MyGUI(QWidget):
 
         self.node = node
         self.is_closing = False
+        # A conventional desktop control font leaves room for all three live
+        # previews without forcing the motor/record controls off-screen.
+        control_font = self.font()
+        control_font.setPointSizeF(min(control_font.pointSizeF(), 10.0))
+        self.setFont(control_font)
         self.setWindowTitle('Hyper-Redundant Manipulator Control')
         self.resize(1500, 900)
 
         root_layout = QHBoxLayout(self)
+        root_layout.setContentsMargins(6, 6, 6, 6)
         self.main_splitter = QSplitter(Qt.Horizontal)
         self.left_splitter = QSplitter(Qt.Vertical)
         root_layout.addWidget(self.main_splitter)
@@ -437,13 +461,12 @@ class MyGUI(QWidget):
         self.sensor_plot_widget = QWidget()
         self.system_layout = QVBoxLayout(self.system_tab)
         self.control_layout = QVBoxLayout(self.control_tab)
+        self.control_layout.setContentsMargins(6, 4, 6, 4)
+        self.control_layout.setSpacing(2)
         self.sensor_layout = QHBoxLayout(self.sensor_tab)
         self.sensor_raw_layout = QVBoxLayout(self.sensor_raw_widget)
         self.sensor_plot_layout = QVBoxLayout(self.sensor_plot_widget)
 
-        self.control_scroll = QScrollArea()
-        self.control_scroll.setWidgetResizable(True)
-        self.control_scroll.setWidget(self.control_tab)
         self.sensor_raw_scroll = QScrollArea()
         self.sensor_raw_scroll.setWidgetResizable(True)
         self.sensor_raw_scroll.setWidget(self.sensor_raw_widget)
@@ -463,7 +486,9 @@ class MyGUI(QWidget):
         self.left_splitter.setSizes([430, 470])
 
         self.main_splitter.addWidget(self.left_splitter)
-        self.main_splitter.addWidget(self.control_scroll)
+        # A normal layout can shrink the image canvases to their useful minimum;
+        # QScrollArea instead reserves their larger height-for-width size hint.
+        self.main_splitter.addWidget(self.control_tab)
         self.main_splitter.setStretchFactor(0, 2)
         self.main_splitter.setStretchFactor(1, 3)
         self.main_splitter.setSizes([760, 1160])
@@ -472,12 +497,11 @@ class MyGUI(QWidget):
         self.layout_global = self.control_layout
         self.add_section_heading('Motor control')
         self.init_motor_safety_ui()
-        self.init_recorder_ui()
         self.init_motor_ui()
         self.init_filter_checkbox()
+        self.init_recorder_ui()
         self.image_preview = ImagePreviewPanel(self.node.context)
-        self.control_layout.addWidget(self.image_preview)
-        self.control_layout.addStretch(1)
+        self.control_layout.addWidget(self.image_preview, 1)
 
         self.layout_global = self.sensor_raw_layout
         self.add_section_heading('Raw sensor data')
@@ -530,8 +554,38 @@ class MyGUI(QWidget):
         explanation.setWordWrap(True)
         self.system_layout.addWidget(explanation)
 
+        self.serial_port_selector = SerialPortSelector()
+        self.system_layout.addWidget(self.serial_port_selector)
+
+        self.roi_editor_active = False
+        self.roi_dialog = None
+        self.estimation_roi = None
+        self.roi_config_path = None
+        try:
+            self.roi_config_path = (
+                Path(get_package_share_directory('estimation_pkg')) / 'config_ROI_ref.json')
+            self.estimation_roi = load_roi_config(self.roi_config_path)
+        except (LookupError, OSError, ValueError) as error:
+            self.node.get_logger().warning(f'Cannot load estimation ROI: {error}')
+        roi_row = QHBoxLayout()
+        self.roi_label = QLabel()
+        self.roi_label.setWordWrap(True)
+        self.roi_button = QPushButton('Estimation ROI…')
+        self.roi_button.clicked.connect(self.edit_estimation_roi)
+        roi_row.addWidget(self.roi_label, 1)
+        roi_row.addWidget(self.roi_button)
+        self.system_layout.addLayout(roi_row)
+        self.update_roi_label()
+
         components_box = QGroupBox('Packages')
         components_layout = QVBoxLayout(components_box)
+        self.camera_selector = CameraSelector()
+        self.tag_camera_selector = CameraSelector(
+            default_model='D455', substitution_prefix='tag_camera')
+        self.camera_selectors = {
+            'camera': self.camera_selector,
+            'tag_camera': self.tag_camera_selector,
+        }
         for spec in specs:
             row = QHBoxLayout()
             status_label = QLabel('● STOPPED')
@@ -560,7 +614,12 @@ class MyGUI(QWidget):
             details = QVBoxLayout()
             details.setSpacing(0)
             details.addWidget(name_label)
-            details.addWidget(description_label)
+            if spec.component_id in self.camera_selectors:
+                # Reuse the existing description line, not another panel/row.
+                details.addWidget(self.camera_selectors[spec.component_id])
+                name_label.setToolTip(spec.description)
+            else:
+                details.addWidget(description_label)
             row.addLayout(details, 1)
             row.addWidget(auto_checkbox)
             row.addWidget(action_button)
@@ -570,6 +629,8 @@ class MyGUI(QWidget):
                 'button': action_button,
                 'auto': auto_checkbox,
             }
+        self.camera_exposure = CameraExposurePanel(self.node)
+        components_layout.addWidget(self.camera_exposure)
         self.system_layout.addWidget(components_box)
 
         actions = QHBoxLayout()
@@ -584,8 +645,11 @@ class MyGUI(QWidget):
         self.system_layout.addStretch(1)
 
     def init_motor_safety_ui(self):
-        self.motor_safety_box = QGroupBox('Actuator safety')
-        safety_layout = QVBoxLayout(self.motor_safety_box)
+        self.motor_safety_box = QGroupBox()
+        self.motor_safety_box.setToolTip(
+            'Actuator safety: commands stay preview-only until physical motor output is enabled.')
+        safety_layout = QHBoxLayout(self.motor_safety_box)
+        safety_layout.setContentsMargins(8, 6, 8, 6)
         self.motor_output_checkbox = QCheckBox('Enable physical motor output')
         self.motor_output_checkbox.setChecked(False)
         self.motor_output_checkbox.toggled.connect(self.motor_output_toggled)
@@ -594,13 +658,93 @@ class MyGUI(QWidget):
         )
         self.motor_output_note.setWordWrap(True)
         safety_layout.addWidget(self.motor_output_checkbox)
-        safety_layout.addWidget(self.motor_output_note)
+        safety_layout.addWidget(self.motor_output_note, 1)
         self.control_layout.addWidget(self.motor_safety_box)
 
     def process_substitutions(self):
-        return {
+        substitutions = {
             'motor_output_enabled': self.motor_output_checkbox.isChecked(),
+            'serial_port': self.serial_port_selector.selected_port(),
         }
+        substitutions.update(self.camera_selector.substitutions())
+        substitutions.update(self.tag_camera_selector.substitutions())
+        if self.estimation_roi is not None:
+            substitutions.update({
+                'roi_x': self.estimation_roi['x'], 'roi_y': self.estimation_roi['y'],
+                'roi_width': self.estimation_roi['w'], 'roi_height': self.estimation_roi['h'],
+            })
+        return substitutions
+
+    def update_roi_label(self):
+        if self.estimation_roi is None:
+            self.roi_label.setText('Estimation ROI: choose an area before Start.')
+        else:
+            roi = self.estimation_roi
+            self.roi_label.setText(
+                f"Next estimation ROI: x={roi['x']}, y={roi['y']}, "
+                f"w={roi['w']}, h={roi['h']}")
+        self.roi_label.setToolTip(
+            'Top-left pixel x/y and width/height. Applies on next Segment estimation Start. '
+            'AprilTag continues to use the full camera image from its separate tag camera.')
+
+    def roi_recording_block_reason(self):
+        if getattr(self, 'record_future', None) is not None or getattr(self, 'is_recording', False):
+            return 'Finish recording and CSV export before changing estimation ROI.'
+        snapshot = getattr(self.node, 'record_status', None)
+        if snapshot:
+            status, _ = snapshot
+            if status.get('state') in ('starting', 'recording', 'stopping', 'exporting'):
+                return 'Finish recording and CSV export before changing estimation ROI.'
+        return ''
+
+    def roi_edit_block_reason(self):
+        reason = self.roi_recording_block_reason()
+        if reason:
+            return reason
+        if self.motor_output_checkbox.isChecked():
+            return 'Stop robot motion and disable physical motor output before changing ROI.'
+        managed = self.system_manager.processes.get('estimation')
+        if managed is None:
+            return 'Segment estimation is not configured in System components.'
+        discovered = self.node.discovered_node_names()
+        if '/segment_estimation_node' in discovered:
+            return 'Stop the externally started segment_estimation_node before editing its ROI.'
+        if managed.status(discovered) not in ('stopped', 'failed'):
+            return 'Stop Segment estimation and wait for STOPPED before editing its ROI.'
+        return ''
+
+    def edit_estimation_roi(self):
+        reason = self.roi_edit_block_reason()
+        if reason:
+            QMessageBox.information(self, 'Estimation ROI', reason)
+            return
+        if self.roi_config_path is None:
+            QMessageBox.warning(self, 'Estimation ROI', 'estimation_pkg is not installed.')
+            return
+        self.roi_editor_active = True
+        try:
+            dialog = RoiEditorDialog(
+                self.node.context,
+                self.estimation_roi or {'x': 0, 'y': 0, 'w': 1, 'h': 1},
+                self.roi_config_path, parent=self, apply_guard=self.roi_edit_block_reason)
+            self.roi_dialog = dialog
+            if dialog.exec_() == QDialog.Accepted:
+                # Recheck after the nested Qt loop; external nodes may appear.
+                reason = self.roi_edit_block_reason()
+                if reason:
+                    QMessageBox.warning(self, 'Estimation ROI', reason)
+                    return
+                self.estimation_roi = dict(dialog.selected_roi)
+                self.update_roi_label()
+                self.node.get_logger().info(
+                    f'ROI selected for next Segment estimation Start: {self.estimation_roi}')
+        except (OSError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(self, 'Estimation ROI', str(error))
+        finally:
+            if self.roi_dialog is not None:
+                self.roi_dialog.deleteLater()
+                self.roi_dialog = None
+            self.roi_editor_active = False
 
     def schedule_auto_start(self):
         self.cancel_scheduled_starts()
@@ -632,14 +776,34 @@ class MyGUI(QWidget):
 
     def start_component(self, component_id):
         try:
+            if component_id == 'estimation':
+                if self.roi_editor_active:
+                    raise ValueError('ROI editor is open; start Segment estimation after applying ROI.')
+                if self.estimation_roi is None:
+                    raise ValueError('Choose an estimation ROI before starting Segment estimation.')
+                reason = self.roi_recording_block_reason()
+                if reason:
+                    raise ValueError(reason)
+                if '/segment_estimation_node' in self.node.discovered_node_names():
+                    raise ValueError('Stop the externally started segment_estimation_node first.')
+            substitutions = self.process_substitutions()
+            if component_id == 'serial':
+                substitutions['serial_port'] = self.serial_port_selector.port_for_start()
+            elif component_id in self.camera_selectors:
+                substitutions.update(self.camera_selectors[component_id].for_start())
             started = self.system_manager.start(
                 component_id,
                 self.node.discovered_node_names(),
-                self.process_substitutions(),
+                substitutions,
             )
             if started:
+                if component_id == 'serial':
+                    self.serial_port_selector.mark_started(substitutions['serial_port'])
+                elif component_id in self.camera_selectors:
+                    self.camera_selectors[component_id].mark_started(substitutions)
                 self.node.get_logger().info(
                     f'Starting component: {component_id}'
+                    + (f" on {substitutions['serial_port']}" if component_id == 'serial' else '')
                 )
         except Exception as error:
             self.node.get_logger().error(
@@ -703,6 +867,10 @@ class MyGUI(QWidget):
             status = self.system_manager.processes[component_id].status(
                 discovered
             )
+            if component_id == 'serial':
+                self.serial_port_selector.set_process_status(status)
+            elif component_id in self.camera_selectors:
+                self.camera_selectors[component_id].set_process_status(status)
             text, color = styles[status]
             widgets['status'].setText(text)
             widgets['status'].setStyleSheet(
@@ -731,6 +899,7 @@ class MyGUI(QWidget):
             else:
                 widgets['button'].setText('Start')
                 widgets['button'].setEnabled(True)
+        self.camera_exposure.update_nodes(discovered)
         self.update_data_status_labels()
 
     def update_data_status_labels(self):
@@ -836,17 +1005,31 @@ class MyGUI(QWidget):
 
     def init_recorder_ui(self):
         self.record_layout = QVBoxLayout()
+        self.record_layout.setSpacing(3)
+        self.force_alignment_panel = ForceAlignmentPanel()
+        self.force_alignment_panel.layout().setContentsMargins(8, 6, 8, 6)
+        self.force_alignment_panel.layout().setSpacing(2)
+        self.record_layout.addWidget(self.force_alignment_panel)
         self.record_label = QLabel('Recording')
         self.record_button = QPushButton('Record')
         self.record_button.setStyleSheet('QPushButton {color: green;}')  # 초록색으로 변경
         self.record_button.clicked.connect(self.toggle_record)
-        self.record_button.setFixedWidth(200)
-        self.record_button.setFixedHeight(50)
-        self.record_layout.addWidget(self.record_button)
+        self.record_button.setFixedWidth(110)
+        self.record_button.setFixedHeight(28)
+        record_actions = QHBoxLayout()
+        record_actions.addWidget(self.record_button)
+        self.record_label.setWordWrap(True)
+        record_actions.addWidget(self.record_label, 1)
+        self.record_layout.addLayout(record_actions)
         self.layout_global.addLayout(self.record_layout)
 
         self.is_recording = False
-        pass
+        self.record_future = None
+        self.record_request_time = 0.0
+        self.record_error = None
+        self.record_timer = QTimer(self)
+        self.record_timer.timeout.connect(self.update_record_status)
+        self.record_timer.start(200)
 
     def toggle_record(self):
         if self.is_recording:
@@ -855,20 +1038,92 @@ class MyGUI(QWidget):
             self.start_recording()
 
     def start_recording(self):
-        future = self.node.send_request_record_start()
-        if future is None:
+        if getattr(self, 'roi_editor_active', False):
+            self.record_label.setText('Close the ROI editor before starting recording.')
             return
-        self.record_button.setText('Stop')
-        self.record_button.setStyleSheet('QPushButton {color: red;}')  # 빨간색으로 변경
-        self.is_recording = True
+        try:
+            alignment = self.force_alignment_panel.settings()
+        except ValueError as error:
+            self.record_label.setText(f'Invalid force-axis mapping: {error}')
+            return
+        self.force_alignment_panel.contact_segment_id.interpretText()
+        future = self.node.send_request_record_start(
+            alignment, self.force_alignment_panel.contact_segment_id.value())
+        if future is None:
+            self.record_label.setText('Recorder/settings service unavailable; start Record component first.')
+            return
+        self.record_future = future
+        self.record_error = None
+        self.record_request_time = time.monotonic()
+        self.record_button.setEnabled(False)
+        self.force_alignment_panel.setEnabled(False)
+        self.record_label.setText('Applying experiment settings, then requesting recording…')
 
     def stop_recording(self):
         future = self.node.send_request_record_stop()
         if future is None:
+            self.record_label.setText('Recorder service unavailable; recording state unknown.')
             return
-        self.record_button.setText('Record')
-        self.record_button.setStyleSheet('QPushButton {color: green;}')  # 초록색으로 변경
-        self.is_recording = False
+        self.record_future = future
+        self.record_error = None
+        self.record_request_time = time.monotonic()
+        self.record_button.setEnabled(False)
+        self.record_label.setText('Requesting stop; waiting for bag flush…')
+
+    def update_record_status(self):
+        if self.record_future is not None:
+            if not self.record_future.done():
+                if time.monotonic() - self.record_request_time > 5.0:
+                    self.record_label.setText('Waiting for recorder acknowledgement; check Record component.')
+                return
+            try:
+                response = self.record_future.result()
+                self.record_label.setText(response.message)
+                if not response.success:
+                    self.record_error = response.message
+                else:
+                    # Ignore idle heartbeats from the configuration phase.
+                    # Only a lifecycle update after this ACK may unlock UI.
+                    self.record_request_time = time.monotonic()
+            except Exception as exc:
+                self.record_error = f'Record request failed: {exc}'
+                self.record_label.setText(self.record_error)
+            self.record_future = None
+            # An ACK is not a fresh lifecycle status: keep settings locked
+            # until that status arrives, except when the request failed.
+            self.record_button.setEnabled(bool(self.record_error))
+            self.force_alignment_panel.setEnabled(bool(self.record_error) and not self.is_recording)
+        snapshot = getattr(self.node, 'record_status', None)
+        if not snapshot:
+            return
+        status, received = snapshot
+        if received < self.record_request_time:
+            return
+        if time.monotonic() - received > 3.0:
+            self.record_label.setText('Recorder status stale; check Record component before continuing.')
+            self.record_button.setEnabled(False)
+            self.force_alignment_panel.setEnabled(False)
+            return
+        state = status.get('state', 'unknown')
+        self.is_recording = state in ('starting', 'recording', 'stopping')
+        self.record_button.setText('Exporting…' if state == 'exporting' else ('Stop' if self.is_recording else 'Record'))
+        self.record_button.setEnabled(state not in ('stopping', 'exporting'))
+        self.force_alignment_panel.setEnabled(not self.is_recording and state != 'exporting')
+        if status.get('force_alignment_scope') == 'session':
+            self.force_alignment_panel.show_session(status.get('force_alignment'))
+            contact_id = status.get('contact_segment_id')
+            if type(contact_id) is int and 0 <= contact_id <= 18:
+                self.force_alignment_panel.contact_segment_id.setValue(contact_id)
+        color = {'recording': 'red', 'starting': '#b9770e',
+                 'stopping': '#b9770e', 'exporting': '#b9770e', 'failed': '#b03a2e'}.get(state, 'green')
+        if (status.get('data_quality') in ('incomplete', 'unverified')
+                or (status.get('live_health') or {}).get('status') == 'warning'):
+            color = '#b9770e'
+        self.record_button.setStyleSheet(f'QPushButton {{color: {color};}}')
+        self.record_label.setText(f"{state}: {status.get('detail', '')}")
+        if self.record_error:
+            self.record_label.setText(f'{self.record_error} (recorder: {state})')
+        self.record_label.setToolTip(status.get('directory', ''))
 
     def init_motor_ui(self):
         '''
@@ -878,23 +1133,19 @@ class MyGUI(QWidget):
         self.motor_data_status_label = QLabel('● motor_state: no recent data')
         self.layout_global.addWidget(self.motor_data_status_label)
         self.layout_mode = QHBoxLayout()
+        self.layout_mode.setSpacing(12)
         self.label_mode = QLabel('Operation Mode')
         self.checkbox_mode_list = [QCheckBox('Manual'), QCheckBox('Kinematics'), QCheckBox('Dynamics'), QCheckBox('Position'), QCheckBox('Admittance')]
         self.checkbox_mode_list[0].setChecked(False)
-        self.checkbox_mode_list[0].setFixedWidth(120)
         self.checkbox_mode_list[0].clicked.connect(self.checkbox_mode_clicked)
         self.checkbox_mode_list[0].stateChanged.connect(self.disable_mode)
         self.checkbox_mode_list[1].setChecked(True)
-        self.checkbox_mode_list[1].setFixedWidth(120)
         self.checkbox_mode_list[1].clicked.connect(self.checkbox_mode_clicked)
         self.checkbox_mode_list[2].setChecked(False)
-        self.checkbox_mode_list[2].setFixedWidth(120)
         self.checkbox_mode_list[2].clicked.connect(self.checkbox_mode_clicked)
         self.checkbox_mode_list[3].setChecked(False)
-        self.checkbox_mode_list[3].setFixedWidth(120)
         self.checkbox_mode_list[3].clicked.connect(self.checkbox_mode_clicked)
         self.checkbox_mode_list[4].setChecked(False)
-        self.checkbox_mode_list[4].setFixedWidth(120)
         self.checkbox_mode_list[4].clicked.connect(self.checkbox_mode_clicked)
         # self.checkbox_mode_list[1].stateChanged.connect(self.disable_mode)
         self.layout_mode.addWidget(self.label_mode)
@@ -903,12 +1154,7 @@ class MyGUI(QWidget):
         self.layout_mode.addWidget(self.checkbox_mode_list[2])
         self.layout_mode.addWidget(self.checkbox_mode_list[3])
         self.layout_mode.addWidget(self.checkbox_mode_list[4])
-        self.layout_mode.setAlignment(self.label_mode, Qt.AlignRight)
-        self.layout_mode.setAlignment(self.checkbox_mode_list[0], Qt.AlignRight)
-        self.layout_mode.setAlignment(self.checkbox_mode_list[1], Qt.AlignRight)
-        self.layout_mode.setAlignment(self.checkbox_mode_list[2], Qt.AlignRight)
-        self.layout_mode.setAlignment(self.checkbox_mode_list[3], Qt.AlignRight)
-        self.layout_mode.setAlignment(self.checkbox_mode_list[4], Qt.AlignRight)
+        self.layout_mode.addStretch()
         self.layout_global.addLayout(self.layout_mode)
 
         self.motor_layout_list = []
@@ -927,11 +1173,11 @@ class MyGUI(QWidget):
 
             motor_name = motor_names[i] if i < len(motor_names) else f'#{i}'
             self.motor_state_label_list.append(
-                QLabel(f'Motor #{i} ({motor_name}) a_pos:')
+                QLabel(f'#{i} {motor_name} a_pos:')
             )
             self.motor_state_line_edit_list.append(QLineEdit('0'))
 
-            self.target_wire_length_label_list.append(QLabel('IK target ΔL [mm]'))
+            self.target_wire_length_label_list.append(QLabel('IK ΔL [mm]'))
             self.target_wire_length_line_edit_list.append(QLineEdit('0.00000'))
 
             self.motor_pub_label_list.append(QLabel('move(relative)'))
@@ -945,18 +1191,18 @@ class MyGUI(QWidget):
         # @autor DY
         # lambda F for apply the funtion to all the list arugments)
         list(map(lambda x: x.setAlignment(Qt.AlignVCenter | Qt.AlignRight), self.motor_state_label_list))        
-        list(map(lambda x: x.setFixedWidth(100), self.motor_state_line_edit_list))
-        list(map(lambda x: x.setFixedHeight(30), self.motor_state_line_edit_list))
+        list(map(lambda x: x.setFixedWidth(85), self.motor_state_line_edit_list))
+        list(map(lambda x: x.setFixedHeight(26), self.motor_state_line_edit_list))
         list(map(lambda x: x.setReadOnly(True), self.motor_state_line_edit_list))
         list(map(lambda x: x.setAlignment(Qt.AlignVCenter | Qt.AlignRight), self.target_wire_length_label_list))
-        list(map(lambda x: x.setFixedWidth(100), self.target_wire_length_line_edit_list))
-        list(map(lambda x: x.setFixedHeight(30), self.target_wire_length_line_edit_list))
+        list(map(lambda x: x.setFixedWidth(85), self.target_wire_length_line_edit_list))
+        list(map(lambda x: x.setFixedHeight(26), self.target_wire_length_line_edit_list))
         list(map(lambda x: x.setReadOnly(True), self.target_wire_length_line_edit_list))
         list(map(lambda x: x.setAlignment(Qt.AlignVCenter | Qt.AlignRight), self.motor_pub_label_list))
-        list(map(lambda x: x.setFixedWidth(100), self.motor_pub_line_edit_list))
-        list(map(lambda x: x.setFixedHeight(30), self.motor_pub_line_edit_list))
-        list(map(lambda x: x.setFixedWidth(100), self.motor_pub_button_list))
-        list(map(lambda x: x.setFixedHeight(30), self.motor_pub_button_list))        
+        list(map(lambda x: x.setFixedWidth(85), self.motor_pub_line_edit_list))
+        list(map(lambda x: x.setFixedHeight(26), self.motor_pub_line_edit_list))
+        list(map(lambda x: x.setFixedWidth(80), self.motor_pub_button_list))
+        list(map(lambda x: x.setFixedHeight(26), self.motor_pub_button_list))
 
         for i in range(self.node.numofmotors):
             try:
@@ -973,23 +1219,21 @@ class MyGUI(QWidget):
                 pass
 
         self.layout_amode = QHBoxLayout()
+        self.layout_amode.setSpacing(12)
         self.label_amode = QLabel('Actuation mode')
         self.checkbox_amode_list = [QCheckBox('Absolute'), QCheckBox('Relative')]
         self.checkbox_amode_list[0].setChecked(True)
-        self.checkbox_amode_list[0].setFixedWidth(120)
         self.checkbox_amode_list[0].clicked.connect(self.checkbox_amode_clicked)
         self.checkbox_amode_list[1].setChecked(False)
-        self.checkbox_amode_list[1].setFixedWidth(120)
         self.checkbox_amode_list[1].clicked.connect(self.checkbox_amode_clicked)
         self.layout_amode.addWidget(self.label_amode)
         self.layout_amode.addWidget(self.checkbox_amode_list[0])
         self.layout_amode.addWidget(self.checkbox_amode_list[1])
-        self.layout_amode.setAlignment(self.label_amode, Qt.AlignRight)
-        self.layout_amode.setAlignment(self.checkbox_amode_list[0], Qt.AlignRight)
-        self.layout_amode.setAlignment(self.checkbox_amode_list[1], Qt.AlignRight)
+        self.layout_amode.addStretch()
         self.layout_global.addLayout(self.layout_amode)
 
         self.motor_kinematics_layout = QVBoxLayout()
+        self.motor_kinematics_layout.setSpacing(3)
         self.motor_kinematics_label_list = []
         self.motor_kinematics_label_list.append(QLabel("Move Tip (degree) | Pan (E-W, q2)"))
         self.motor_kinematics_label_list.append(QLabel("Move Tip (degree) | Tilt (S-N, q1 about Base Z)"))
@@ -1006,17 +1250,21 @@ class MyGUI(QWidget):
             finally:
                 pass
         list(map(lambda x: x.setAlignment(Qt.AlignVCenter | Qt.AlignRight), self.motor_kinematics_label_list))        
-        list(map(lambda x: x.setFixedWidth(100), self.motor_kinematics_line_edit_list))
-        list(map(lambda x: x.setFixedHeight(30), self.motor_kinematics_line_edit_list))
+        list(map(lambda x: x.setFixedWidth(85), self.motor_kinematics_line_edit_list))
+        list(map(lambda x: x.setFixedHeight(26), self.motor_kinematics_line_edit_list))
         self.motor_kinematics_button = QPushButton('Publish')
         self.motor_kinematics_button.clicked.connect(self.publish_motion)
-        self.motor_kinematics_button.setFixedWidth(150)
-        self.motor_kinematics_button.setFixedHeight(70)
+        self.motor_kinematics_button.setFixedWidth(110)
+        self.motor_kinematics_button.setFixedHeight(55)
 
         self.motor_kinematics_layout_fin = QHBoxLayout()
         self.motor_kinematics_layout_fin.addLayout(self.motor_kinematics_layout)
         self.motor_kinematics_layout_fin.addWidget(self.motor_kinematics_button)
         self.layout_global.addLayout(self.motor_kinematics_layout_fin)
+
+        self.sine_motion_panel = SineMotionPanel(
+            self.node, kinematics_selected=lambda: self.checkbox_mode_list[1].isChecked())
+        self.layout_global.addWidget(self.sine_motion_panel)
 
         # self.motor_kinematics_label = QLabel("Move Tip(Degree) | Tilt")
         # self.motor_kinematics_line_edit = QLineEdit('0')
@@ -1040,34 +1288,38 @@ class MyGUI(QWidget):
         self.layout_LPF = QHBoxLayout()
         self.layout_MAF = QHBoxLayout()
 
-        self.LPF_parameter_label = QLabel('Weight (0 ~ 1):')
+        self.LPF_parameter_label = QLabel('Weight:')
+        self.LPF_parameter_label.setToolTip('Low-pass filter weight (0 to 1).')
         self.LPF_parameter_label.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
         self.LPF_parameter = QLineEdit('0.5')
-        self.LPF_parameter.setFixedWidth(100)
-        self.LPF_parameter.setFixedHeight(30)
+        self.LPF_parameter.setFixedWidth(60)
+        self.LPF_parameter.setFixedHeight(26)
 
         self.MAF_parameter_label = QLabel('Buffer size:')
         self.MAF_parameter_label.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
         self.MAF_parameter = QLineEdit('5')
-        self.MAF_parameter.setFixedWidth(100)
-        self.MAF_parameter.setFixedHeight(30)
+        self.MAF_parameter.setFixedWidth(60)
+        self.MAF_parameter.setFixedHeight(26)
 
         self.layout_LPF.addWidget(self.LPF_parameter_label)
         self.layout_LPF.addWidget(self.LPF_parameter)
         self.layout_MAF.addWidget(self.MAF_parameter_label)
         self.layout_MAF.addWidget(self.MAF_parameter)
 
-        self.checkbox_filter_list = [QCheckBox('Weight filter(LPF)'), QCheckBox('Moving avg filter(MAF)')]
+        self.checkbox_filter_list = [QCheckBox('LPF'), QCheckBox('Moving average')]
+        self.checkbox_filter_list[0].setToolTip('Enable the weighted low-pass filter.')
+        self.checkbox_filter_list[1].setToolTip('Enable the moving-average filter.')
         self.checkbox_filter_list[0].setChecked(False)
-        self.checkbox_filter_list[0].setFixedWidth(350)
         self.checkbox_filter_list[1].setChecked(False)
-        self.checkbox_filter_list[1].setFixedWidth(350)
         self.layout_LPF.addWidget(self.checkbox_filter_list[0])
         self.layout_MAF.addWidget(self.checkbox_filter_list[1])
         self.layout_LPF.setAlignment(self.checkbox_filter_list[0], Qt.AlignRight)
         self.layout_MAF.setAlignment(self.checkbox_filter_list[1], Qt.AlignRight)
-        self.layout_global.addLayout(self.layout_LPF)
-        self.layout_global.addLayout(self.layout_MAF)
+        filter_row = QHBoxLayout()
+        filter_row.addLayout(self.layout_LPF)
+        filter_row.addSpacing(16)
+        filter_row.addLayout(self.layout_MAF)
+        self.layout_global.addLayout(filter_row)
 
         # self.checkbox_amode_list[0].clicked.connect(self.checkbox_amode_clicked)
 
@@ -1174,15 +1426,23 @@ class MyGUI(QWidget):
     def init_fts_plot(self):
         try:
             # Matplotlib graph
-            self.figure, self.ax = plt.subplots()
+            self.figure, self.fts_axes = plt.subplots(2, 1, sharex=True)
+            self.figure.subplots_adjust(left=0.18, right=0.97, bottom=0.12,
+                                        top=0.97, hspace=0.15)
             self.canvas = FigureCanvas(self.figure)
             self.layout_global.addWidget(self.canvas)
             self.data_y = np.zeros((6, 50))  # 초기 데이터 설정 (6개의 데이터, 각각 100개의 요소)
             self.data_x = [i for i in range(len(self.data_y))]
 
             # 그래프 초기화
-            self.lines = [self.ax.plot([], [], label=f'Data {i}')[0] for i in range(6)]
-            self.ax.legend()
+            labels = ('fx', 'fy', 'fz', 'tx', 'ty', 'tz')
+            self.lines = [self.fts_axes[i // 3].plot([], [], label=label)[0]
+                          for i, label in enumerate(labels)]
+            # Avoid Matplotlib's default 'best' location following live traces.
+            for axis, label in zip(self.fts_axes, ('Force', 'Torque')):
+                axis.set_ylabel(label)
+                axis.legend(loc='upper right', ncol=3, fontsize=8)
+                axis.tick_params(labelsize=8)
             # 애니메이션 시작
             self.animation = FuncAnimation(self.figure, self.update_fts_plot, frames=100, interval=25)
             # self.node.data_received_signal.connect(self.generateTimerRosNode)
@@ -1387,9 +1647,9 @@ class MyGUI(QWidget):
             self.fts_sub_line_edit_list[0].setText(str(self.node.fts_data.wrench.force.x))
             self.fts_sub_line_edit_list[1].setText(str(self.node.fts_data.wrench.force.y))
             self.fts_sub_line_edit_list[2].setText(str(self.node.fts_data.wrench.force.z))
-            self.fts_sub_line_edit_list[3].setText(str(self.node.fts_data.wrench.torque.x))
-            self.fts_sub_line_edit_list[4].setText(str(self.node.fts_data.wrench.torque.y))
-            self.fts_sub_line_edit_list[5].setText(str(self.node.fts_data.wrench.torque.z))
+            self.fts_sub_line_edit_list[3].setText(f'{self.node.fts_data.wrench.torque.x:.1f}')
+            self.fts_sub_line_edit_list[4].setText(f'{self.node.fts_data.wrench.torque.y:.1f}')
+            self.fts_sub_line_edit_list[5].setText(f'{self.node.fts_data.wrench.torque.z:.1f}')
         except Exception as e:
             # self.node.get_logger().warning(f'F:update_fts() -> {e}')
             pass
@@ -1420,11 +1680,14 @@ class MyGUI(QWidget):
                     line.set_data(range(len(self.data_y[i])), self.data_y[i])
 
                 # 최댓값과 최솟값을 찾아 축의 범위 설정
-                min_val = np.min(self.data_y)
-                max_val = np.max(self.data_y)
-                margin = 1000  # 여분의 여백 설정
-                self.ax.set_xlim(0, len(self.data_y[0]) - 1)
-                self.ax.set_ylim(min_val - margin, max_val + margin)
+                for group, axis in enumerate(self.fts_axes):
+                    values = self.data_y[group * 3:(group + 1) * 3]
+                    finite = values[np.isfinite(values)]
+                    if finite.size:
+                        min_val, max_val = np.min(finite), np.max(finite)
+                        margin = max((max_val - min_val) * 0.1, 0.1)
+                        axis.set_ylim(min_val - margin, max_val + margin)
+                    axis.set_xlim(0, self.data_y.shape[1] - 1)
 
                 return self.lines
 
@@ -1453,6 +1716,8 @@ class MyGUI(QWidget):
         self.is_closing = True
         try:
             self.cancel_scheduled_starts()
+            if self.roi_dialog is not None:
+                self.roi_dialog.reject()
             # Qt may dispatch a pending status timer after closeEvent returns.
             # Stop every GUI timer before destroying the ROS node handle.
             for timer in self.findChildren(QTimer):
