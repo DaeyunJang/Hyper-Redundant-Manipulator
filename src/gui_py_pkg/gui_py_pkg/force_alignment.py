@@ -1,4 +1,4 @@
-"""CSV-only force-axis selection and acknowledged recorder startup."""
+"""Experiment settings, CSV-only force axes and acknowledged recorder startup."""
 
 from concurrent.futures import Future
 
@@ -22,6 +22,12 @@ class ForceAlignmentPanel(QGroupBox):
         options = QHBoxLayout()
         options.addWidget(self.enabled_checkbox)
         options.addStretch()
+        self.save_images_checkbox = QCheckBox('Save crop RGB/depth')
+        self.save_images_checkbox.setChecked(True)
+        self.save_images_checkbox.setToolTip(
+            'Save HRM crop color and depth files. OFF keeps numeric bag, CSV and '
+            'metadata; no crop image is required. Frozen until Record/Stop/export finishes.')
+        options.addWidget(self.save_images_checkbox)
         options.addWidget(QLabel('contact_segment_id'))
         self.contact_segment_id = QSpinBox()
         self.contact_segment_id.setRange(0, 18)
@@ -97,7 +103,8 @@ class ForceAlignmentPanel(QGroupBox):
         self.update_summary()
 
 
-def request_record_start(parameter_client, record_client, alignment, contact_segment_id=0):
+def request_record_start(parameter_client, record_client, alignment, contact_segment_id=0,
+                         save_images=True):
     """Apply settings atomically; request capture only after positive ACK.
 
     Returns a future containing the usual SetBool response, keeping the Qt loop
@@ -105,6 +112,8 @@ def request_record_start(parameter_client, record_client, alignment, contact_seg
     """
     alignment = create_alignment(alignment['enabled'], alignment['axes'])
     validate_contact_segment_id(contact_segment_id)
+    if type(save_images) is not bool:
+        raise ValueError('save_images must be boolean.')
     if not parameter_client.service_is_ready() or not record_client.service_is_ready():
         return None
     result = Future()
@@ -112,6 +121,7 @@ def request_record_start(parameter_client, record_client, alignment, contact_seg
         Parameter('force_alignment_enabled', value=alignment['enabled']).to_parameter_msg(),
         Parameter('force_alignment_axes', value=alignment['axes']).to_parameter_msg(),
         Parameter('contact_segment_id', value=contact_segment_id).to_parameter_msg(),
+        Parameter('save_images', value=save_images).to_parameter_msg(),
     ])
 
     def fail(message):

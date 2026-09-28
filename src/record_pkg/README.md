@@ -5,6 +5,28 @@
 GUI 서비스 `/data/record`는 유지한다. **Record component 시작과 녹화 시작은 별개**다.
 recorder는 모터 명령을 발행하지 않으며 물리 출력 Enable을 변경하지 않는다.
 
+## 이미지 저장 선택 (2026-09-27)
+
+GUI Recording 설정 줄의 **Save crop RGB/depth**로 세션별 저장 여부를 선택한다.
+기본 체크 ON은 기존 crop 컬러·depth 저장을 유지한다. OFF이면 두 이미지 아카이브를
+만들지 않으며, 수치 bag·CSV·summary.csv·메타데이터는 그대로 저장한다.
+CameraInfo/depth calibration 등의 작은 메타데이터는 유지될 수 있다.
+이미지 소스가 없어도 OFF 세션은 이미지 관련 필수 검사나 후처리 오류로 막히지 않는다.
+실시간 카메라/추정/GUI 표시에는 영향을 주지 않는다. OFF 세션은 영상 재처리를 할 수 없다.
+
+- `/record`의 bool parameter `save_images` 기본값은 true다. GUI는 힘 정렬·접촉 ID와
+  함께 원자적으로 설정하고 성공 응답 후에만 Record를 요청한다.
+- 녹화/종료/이미지 flush/CSV export 중 변경을 거부한다. 다음 Record 전에 선택한다.
+- `session.json`의 `snapshot.save_images` 및 `snapshot.*_archive_settings`,
+  세션의 `recording_config.json`에 실제 적용값을 저장한다. 후처리는 이 설정을 읽어
+  OFF 아카이브의 상태를 `disabled`로 처리한다. `/data/record_status.save_images`도 제공한다.
+- ON으로 되돌리면 노드 시작 시 설정 파일의 archive.enabled를 복원한다. 원래 설정에서
+  꺼둔 아카이브까지 강제로 활성화하지 않는다. 숫자 토픽 선택이나 CSV 스키마는 바꾸지 않는다.
+- 이 선택은 crop 파일 아카이브를 제어한다. 기본 bag에는 이미지가 없지만, 사용자 지정
+  프로필이 별도로 이미지를 bag 토픽에 추가했다면 해당 토픽 선택은 별도로 수정해야 한다.
+- 기존 기록 폴더는 변경하지 않는다. 업데이트 후 녹화/변환이 끝난 상태에서 GUI와
+  Data recorder를 다시 실행하면 사용할 수 있다. 기록 중 노드 재시작은 하지 않는다.
+
 ## 경량 이미지 저장 프로필
 
 기본 영상 저장은 `/estimated_segment_crop_image`와

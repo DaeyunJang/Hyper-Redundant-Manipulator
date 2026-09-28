@@ -1,6 +1,75 @@
 # Codex Handoff
 
-Last updated: 2026-09-26 (Asia/Seoul)
+Last updated: 2026-09-28 (Asia/Seoul)
+
+## Sensor numeric colours (2026-09-28)
+
+- GUI measured F/T six axes and loadcell four channels: abs(value)<=1000 black,
+  1000<abs(value)<1500 orange, abs(value)>=1500 red, in existing display units.
+  Negative loads included; original signed text/torque formatting unchanged.
+- Display only: no sensor, recording, prediction, plot or motor policy changes.
+  Missing/nonfinite values clear colour; style updates only on category changes.
+- Headless GUI/layout tests: 36 passed including exact thresholds, negative
+  values, reset and missing loadcell channels. No production nodes restarted.
+
+## Segment ID 1 summary consolidation (2026-09-27)
+
+- Created record/merged_seg-id-1/csv/summary.csv from 22 completed top-level
+  static_*seg-id-1_{left,right} summaries: 20,781 data rows, unchanged 268 columns.
+  Ordered sessions chronologically; every original cell, blank and timestamp kept.
+  All manual labels are 1. Original sessions untouched; no bag/image duplication.
+- merge_manifest.json and source_intervals.csv contain source hashes and 0-based
+  data-row [start, stop) ranges. source_metadata/ preserves each source's configs
+  and CSV schema/manifest. Use these boundaries for temporal windows/splits;
+  original elapsed_s resets between sessions. Do not train on both originals and
+  their merged copy. Full output cell equality and unchanged source hashes verified.
+- Excluded static_pan_-30to+30_tilt_-30to+30_interval-15deg_seg-id-1_right:
+  no summary, internal manifest contact_segment_id=2, interrupted export after
+  folder rename (old path missing in export.log). No recovery/relabeling performed.
+
+## Optional crop RGB/depth recording (2026-09-27)
+
+- GUI Recording row has Save crop RGB/depth (default checked, preserves behavior).
+  It sends save_images atomically with alignment/contact ID before Record ACK;
+  entire settings panel locks through recording/flush/export and reflects frozen
+  external-session status, without overwriting next-session edits while idle.
+- RecordNode save_images bool defaults true; OFF gates both configured image/depth
+  archives and their live requirements, persists effective enabled=false config
+  and snapshot.save_images, so exporter audits intentionally absent files disabled.
+  Numeric bag/topics/CSV/schema/metadata, GUI previews and motor behavior unchanged.
+  ON restores configured archive defaults. Existing sessions remain untouched.
+- Scope is crop file archives; default bag is numeric-only. Custom user profiles
+  that explicitly bag images retain their explicit topic selection.
+- Restart GUI and idle recorder after update, never during capture/export.
+- Validation: 822 GUI/recorder functional tests and both symlink builds passed.
+  Isolated domain184 synthetic ON/OFF/ON Record/Stop/export roundtrip passed:
+  OFF has no images directory, image/depth audits disabled, numeric bag and
+  unchanged268-column summary complete; ON restored both archives and previous
+  image indexes stayed unchanged. Artifacts /tmp/hrm_crop_depth_record__25uz_6p.
+  No production nodes, cameras or actuators started/restarted.
+
+## GUI predicted-force preview (2026-09-27)
+
+- Requested F/T layout: fx/tx, fy/ty, fz/tz paired half-width, followed by
+  fx_pred/fy_pred/fz_pred. Upper plot measured solid + prediction dashed XYZ;
+  same-axis colours, fixed legend. Lower torque plot retained.
+- Read-only `/estimated_external_force` Vector3 subscription, BEST_EFFORT depth1.
+  No model, publisher, motor action or recorder changes. Missing/stale/invalid
+  predictions are distinguished from zero and plotted as NaN gaps (timeout0.5s).
+- Display remains sensor axes/mN. Startup parameters predicted_force_topic,
+  predicted_force_unit (mN/N), predicted_force_sensor_axes (signed permutation
+  sensor-from-input), predicted_force_timeout_sec. Default assumes sensor-axis/mN
+  input; future hrm_base output MUST explicitly use the inverse training mapping.
+  Independent of CSV alignment UI. Headerless Vector3 cannot validate source age
+  or frame; graph is live preview, not synchronized error measurement.
+- Preserve the user's pre-existing Start/Stop button-connect ordering edit.
+- Verification: 383 GUI functional tests and gui_py_pkg symlink build passed.
+  Domain186/remapped-topic synthetic Vector3 tested RELIABLE/BEST_EFFORT and stale
+  recovery path; zero motor messages. Headless layout checked at1366/1500/1920 widths.
+  No production GUI/hardware nodes started or restarted; next GUI start loads code.
+- No-load analysis handoff from 2026-09-26 is saved under
+  docs/analysis/aidin_ft_no_load_validation_1/{README.md,analysis.json,force_noise.png}.
+  ID1 intentionally accepted as user-provided unloaded record; no original edits.
 
 ## Separate learning-project handoff (2026-09-26, latest target decision)
 

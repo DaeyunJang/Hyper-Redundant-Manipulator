@@ -1,5 +1,83 @@
 # HRM operator GUI
 
+## Sensor numeric colours (2026-09-28)
+
+Measured F/T (fx/fy/fz/tx/ty/tz) and all loadcell numeric fields use magnitude:
+absolute value <=1000 is black, >1000 and <1500 orange, >=1500 red.
+Thresholds use the existing displayed units (force mN, torque mN m, loadcell g),
+not a shared physical safety limit. Signed numbers and existing formatting remain
+unchanged. Missing/nonfinite values clear threshold colouring to black; this is
+not a sensor-validity indication. Prediction fields, graphs, recorded values and
+motor safety logic are unchanged. GUI restart loads the change.
+
+## Optional image recording (2026-09-27)
+
+Before Record, set **Save crop RGB/depth** in the Recording settings row.
+Default is checked, preserving the existing crop color + crop depth recording.
+Unchecked saves only the existing numeric bag, CSV (including summary.csv), and
+metadata under the default profile: no `images/hrm_crop` or `images/hrm_crop_depth`
+files are created, and missing crop streams do not block Record or fail export.
+CameraInfo and depth calibration metadata may still be recorded as small numeric
+messages. Camera operation, inference, GUI/RViz display and motor control are
+unchanged. Without saved images, offline image/depth reprocessing is unavailable.
+
+The GUI sends `save_images` atomically with force-axis settings and contact ID,
+then starts capture only after acknowledgement. The checkbox locks through
+recording, stopping, image flushing and CSV export; change it before the next
+Record. An externally started active session displays its frozen choice. Idle
+heartbeats do not overwrite your next-session selection. GUI restart restores
+the checked default. Restart both the GUI and idle Data recorder after updating;
+never restart while recording/exporting. Existing sessions are not modified.
+
+## Live predicted-force preview (2026-09-27)
+
+The sensor values now pair `fx | tx`, `fy | ty`, `fz | tz` in two equal-width
+columns; `fx_pred`, `fy_pred`, `fz_pred` occupy the three rows below. The upper
+force plot overlays measured solid lines and predicted dashed lines in matching
+axis colours, with a fixed legend. The lower torque plot is unchanged.
+
+The GUI subscribes to `/estimated_external_force` (`geometry_msgs/msg/Vector3`),
+the existing legacy force topic. No model/publisher is started. Prediction QoS is
+BEST_EFFORT / KEEP_LAST(1) / VOLATILE so either reliable or best-effort live
+publishers can feed the preview. Before receipt the fields show `—`; nonfinite
+values show `invalid`, and after 0.5 s without receipt they show `stale`. Missing
+prediction samples are NaN plot gaps, not fabricated zeros or indefinitely held
+values. Zero and negative finite predictions are displayed normally.
+
+Startup ROS parameters (restart GUI after changing them):
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `predicted_force_topic` | `/estimated_external_force` | Vector3 input topic |
+| `predicted_force_unit` | `mN` | Incoming `mN` or `N`; display always mN |
+| `predicted_force_sensor_axes` | `[x, y, z]` | Each displayed sensor-axis component expressed in incoming XYZ |
+| `predicted_force_timeout_sec` | `0.5` | Receipt-age display timeout, not a controller safety setting |
+
+Existing raw readings remain in **sensor axes**, not hrm_base. The default assumes
+predictions use these same axes and mN. If a future model emits hrm_base/N, set unit
+`N` and configure the **inverse** of the training sensor-to-base axis mapping.
+For the dataset mapping `base=[-sensor_y,-sensor_x,-sensor_z]`, the inverse happens
+to be `[-y,-x,-z]` as well. Do not assume all mappings are self-inverse. Only signed
+axis permutations are supported here, not arbitrary rotations. These settings are
+independent of the CSV-only Recording force-axis controls, and must be matched
+explicitly when the trained model is integrated. Vector3 cannot verify frame,
+unit, or source timestamp; arrival freshness is not acquisition freshness.
+
+This is a live visual comparison at GUI refresh times, not timestamp-aligned
+evaluation. Nothing is republished, sent to motors, or added to recording by this
+change. Tests must use an isolated ROS domain or a remapped test topic: a fake
+publication on the production `/estimated_external_force` could also reach the
+existing robot controller. Real-time force inference/admittance integration is a
+separate task; this preview does not make those control paths ready.
+
+Validation: 383 GUI functional tests passed (including three screen sizes,
+zero/negative/stale/nonfinite values, unit/axis conversion and fixed legends),
+gui_py_pkg symlink build passed. Isolated ROS domain186, remapped force/motor
+topics: both RELIABLE and BEST_EFFORT synthetic publishers were received and
+timed out correctly; zero motor messages. No production nodes were restarted.
+
+## Existing controls
+
 Recording label (2026-09-25): set `contact_segment_id` beside the force-axis
 checkbox before Record (integer 0..18; 0 = free-motion experiment). The label is
 sent atomically with recording settings and stays fixed through capture/export,

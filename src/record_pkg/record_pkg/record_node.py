@@ -64,6 +64,9 @@ class RecordNode(Node):
         self.image_archive_settings = image_archive_settings(config)
         self.image_archive = None
         self.depth_archive_settings = depth_archive_settings(config)
+        self._image_archive_defaults = self.image_archive_settings.copy()
+        self._depth_archive_defaults = self.depth_archive_settings.copy()
+        self.declare_parameter('save_images', True)
         self.depth_archive = None
         self.depth_metadata_cache = deque(maxlen=64)
         self.depth_subscription = None
@@ -91,6 +94,7 @@ class RecordNode(Node):
         self.record_start_monotonic = None
         self.finalizer = None
         self.finalizer_log = None
+        self.apply_image_recording_settings()
         self.add_on_set_parameters_callback(self.validate_force_alignment_parameters)
         self.create_timer(0.1, self.poll_metadata)
         self.last_filter_setting = None
@@ -108,6 +112,25 @@ class RecordNode(Node):
         return create_alignment(
             self.get_parameter('force_alignment_enabled').value,
             self.get_parameter('force_alignment_axes').value)
+
+    def apply_image_recording_settings(self):
+        """Freeze effective archive config before capture; keep numeric topics intact."""
+        if self.force_alignment_locked():
+            raise RuntimeError('Image recording settings are frozen until export finishes.')
+        enabled = self.get_parameter('save_images').value
+        if type(enabled) is not bool:
+            raise ValueError('save_images must be boolean.')
+        self.image_archive_settings = dict(
+            self._image_archive_defaults,
+            enabled=enabled and self._image_archive_defaults['enabled'])
+        self.depth_archive_settings = dict(
+            self._depth_archive_defaults,
+            enabled=enabled and self._depth_archive_defaults['enabled'])
+        # CaptureSession persists this effective config; the finalizer must not
+        # mistake intentionally absent images for failed/missing image files.
+        self.session.config['save_images'] = enabled
+        self.session.config['image_archive'] = self.image_archive_settings.copy()
+        self.session.config['depth_archive'] = self.depth_archive_settings.copy()
 
     def force_alignment_locked(self):
         return (self.session.active or self.finalizer is not None
@@ -174,7 +197,8 @@ class RecordNode(Node):
 
     def validate_force_alignment_parameters(self, parameters):
         """Validate the final atomic candidate; never mutate settings in a callback."""
-        keys = ('force_alignment_enabled', 'force_alignment_axes', 'contact_segment_id')
+        keys = ('force_alignment_enabled', 'force_alignment_axes', 'contact_segment_id',
+                'save_images')
         changes = {parameter.name: parameter.value for parameter in parameters
                    if parameter.name in keys}
         if not changes:
@@ -188,6 +212,8 @@ class RecordNode(Node):
         try:
             create_alignment(candidate[keys[0]], candidate[keys[1]])
             validate_contact_segment_id(candidate['contact_segment_id'])
+            if type(candidate['save_images']) is not bool:
+                raise ValueError('save_images must be boolean.')
         except ValueError as exc:
             return SetParametersResult(successful=False, reason=str(exc))
         return SetParametersResult(successful=True)
@@ -245,6 +271,7 @@ class RecordNode(Node):
                     reference_files=references,
                     force_alignment=self.current_force_alignment(),
                     contact_segment_id=self.get_parameter('contact_segment_id').value,
+                    save_images=self.get_parameter('save_images').value,
                     image_archive_settings=self.image_archive_settings.copy(),
                     depth_archive_settings=self.depth_archive_settings.copy(),
                     runtime_parameters={'status': 'pending'},
@@ -262,6 +289,7 @@ class RecordNode(Node):
                 if not self.session.active and any(
                         name.startswith('rosbag2_recorder') for name in self.get_node_names()):
                     raise RuntimeError('Another rosbag recorder is present; leave it untouched and stop it before starting this recorder.')
+                self.apply_image_recording_settings()
                 self.update_health_subscriptions()
                 missing_samples = self.health.stale(
                     self.required_live_topics() - self.heavy_topics)
@@ -532,6 +560,8 @@ class RecordNode(Node):
             image_archive=archive,
             depth_archive=depth_archive,
             force_alignment=force_alignment,
+            save_images=(self.session.metadata.get('snapshot', {}).get('save_images')
+                         if alignment_locked else self.get_parameter('save_images').value),
             contact_segment_id=(
                 self.session.metadata.get('snapshot', {}).get('contact_segment_id')
                 if alignment_locked else self.get_parameter('contact_segment_id').value),

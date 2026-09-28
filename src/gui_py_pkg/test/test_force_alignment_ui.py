@@ -130,8 +130,10 @@ def test_exact_atomic_parameters_and_record_only_after_successful_ack(enabled):
     request = settings.requests[0]
     assert isinstance(request, SetParametersAtomically.Request)
     assert [parameter.name for parameter in request.parameters] == [
-        'force_alignment_enabled', 'force_alignment_axes', 'contact_segment_id']
-    enabled_parameter, axes_parameter, contact_parameter = request.parameters
+        'force_alignment_enabled', 'force_alignment_axes', 'contact_segment_id', 'save_images']
+    enabled_parameter, axes_parameter, contact_parameter, images_parameter = request.parameters
+    assert images_parameter.value.type == ParameterType.PARAMETER_BOOL
+    assert images_parameter.value.bool_value is True
     assert contact_parameter.value.type == ParameterType.PARAMETER_INTEGER
     assert contact_parameter.value.integer_value == 0
     assert enabled_parameter.value.type == ParameterType.PARAMETER_BOOL
@@ -182,6 +184,42 @@ def test_rejected_atomic_settings_never_start_recording():
     assert not result.result().success
     assert 'Session is locked' in result.result().message
     assert not recorder.requests
+
+
+def test_image_option_is_sent_atomically_before_record_ack():
+    settings, recorder = FakeClient(), FakeClient()
+    result = request_record_start(settings, recorder, create_alignment(), 9, False)
+    params = {p.name: p.value for p in settings.requests[0].parameters}
+    assert params['save_images'].type == ParameterType.PARAMETER_BOOL
+    assert params['save_images'].bool_value is False
+    assert params['contact_segment_id'].integer_value == 9
+    assert not recorder.requests
+    settings_ack(settings, success=False, reason='save_images unavailable')
+    assert not result.result().success and not recorder.requests
+
+
+def test_gui_image_choice_locked_and_external_session_reflected(ui):
+    checkbox = ui.force_alignment_panel.save_images_checkbox
+    assert checkbox.isChecked()
+    checkbox.setChecked(False)
+    ui.node.send_request_record_start.return_value = Future()
+    MyGUI.start_recording(ui)
+    assert ui.node.send_request_record_start.call_args.args[2] is False
+    assert not checkbox.isEnabled()
+    ui.record_future = None
+    publish_status(ui, 'recording', force_alignment_scope='session', save_images=True)
+    MyGUI.update_record_status(ui)
+    assert checkbox.isChecked() and not checkbox.isEnabled()
+    publish_status(ui, 'exporting', force_alignment_scope='session', save_images=True)
+    MyGUI.update_record_status(ui)
+    assert not checkbox.isEnabled()
+    publish_status(ui, 'stopped', force_alignment_scope='next_session')
+    MyGUI.update_record_status(ui)
+    assert checkbox.isEnabled()
+    checkbox.setChecked(False)
+    publish_status(ui, 'idle', force_alignment_scope='next_session', save_images=True)
+    MyGUI.update_record_status(ui)
+    assert not checkbox.isChecked(), 'Idle heartbeat must not overwrite next-session edits.'
 
 
 @pytest.mark.parametrize('stage', ['call', 'future'])

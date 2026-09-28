@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 import signal
 import sys
@@ -9,12 +10,14 @@ from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import QCheckBox
 from PyQt5.QtWidgets import QDialog
 from PyQt5.QtWidgets import QGroupBox
+from PyQt5.QtWidgets import QGridLayout
 from PyQt5.QtWidgets import QHBoxLayout
 from PyQt5.QtWidgets import QLabel
 from PyQt5.QtWidgets import QLineEdit
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtWidgets import QPushButton
 from PyQt5.QtWidgets import QScrollArea
+from PyQt5.QtWidgets import QSizePolicy
 from PyQt5.QtWidgets import QSplitter
 from PyQt5.QtWidgets import QVBoxLayout
 from PyQt5.QtWidgets import QWidget
@@ -33,7 +36,7 @@ from rcl_interfaces.srv import SetParameters, SetParametersAtomically
 from rclpy.parameter import Parameter
 # from rclpy import RCLError
 from std_msgs.msg import Float64MultiArray, String
-from geometry_msgs.msg import WrenchStamped
+from geometry_msgs.msg import Vector3, WrenchStamped
 from std_srvs.srv import SetBool
 from custom_interfaces.msg import LoadcellState
 from custom_interfaces.msg import MotorCommand
@@ -57,7 +60,25 @@ from gui_py_pkg.camera_selector import CameraSelector
 from gui_py_pkg.camera_exposure import CameraExposurePanel
 from gui_py_pkg.sine_motion import SineMotionPanel
 from gui_py_pkg.force_alignment import ForceAlignmentPanel, request_record_start
+from gui_py_pkg.force_prediction import ForcePredictionPreview
 from gui_py_pkg.roi_editor import RoiEditorDialog, load_roi_config
+
+
+def update_sensor_value_color(field, value):
+    """Display-only magnitude thresholds in each sensor's existing units."""
+    magnitude = abs(float(value)) if value is not None else float('nan')
+    color = 'black'
+    if math.isfinite(magnitude):
+        if magnitude >= 1500.0:
+            color = 'red'
+        elif magnitude > 1000.0:
+            color = '#e67e00'
+    style = f'QLineEdit {{ color: {color}; }}'
+    # Avoid repolishing every widget at the 30 Hz display rate.
+    if field.styleSheet() != style:
+        field.setStyleSheet(style)
+
+
 # 제어모드를 나타내는 Enum 정의
 class ControlMode(Enum):
     kKinematics = 1
@@ -121,6 +142,21 @@ class GUINode(Node):
             QOS_RKL10V
         )
         self.get_logger().info('fts_data subscriber is created.')
+
+        # Display only: never forward predictions to an actuator or controller.
+        self.declare_parameter('predicted_force_topic', '/estimated_external_force')
+        self.declare_parameter('predicted_force_unit', 'mN')
+        self.declare_parameter('predicted_force_sensor_axes', ['x', 'y', 'z'])
+        self.declare_parameter('predicted_force_timeout_sec', 0.5)
+        self.force_prediction = ForcePredictionPreview(
+            unit=self.get_parameter('predicted_force_unit').value,
+            sensor_axes=self.get_parameter('predicted_force_sensor_axes').value,
+            timeout_sec=self.get_parameter('predicted_force_timeout_sec').value)
+        self.predicted_force_subscriber = self.create_subscription(
+            Vector3, self.get_parameter('predicted_force_topic').value,
+            self.force_prediction.receive,
+            QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT,
+                       durability=QoSDurabilityPolicy.VOLATILE))
 
         self.loadcell_data = LoadcellState()
         self.last_loadcell_data_time = None
@@ -402,10 +438,10 @@ class GUINode(Node):
         except (TypeError, ValueError):
             self.get_logger().warning('Invalid recorder status message')
 
-    def send_request_record_start(self, alignment, contact_segment_id=0):
+    def send_request_record_start(self, alignment, contact_segment_id=0, save_images=True):
         return request_record_start(
             self.record_parameter_client, self.recoder_service_client, alignment,
-            contact_segment_id)
+            contact_segment_id, save_images)
     
     def send_request_record_stop(self):
         service_request = SetBool.Request()
@@ -635,8 +671,8 @@ class MyGUI(QWidget):
 
         actions = QHBoxLayout()
         start_all_button = QPushButton('Start auto components')
-        stop_all_button = QPushButton('Stop GUI-managed components')
         start_all_button.clicked.connect(self.schedule_auto_start)
+        stop_all_button = QPushButton('Stop GUI-managed components')
         stop_all_button.clicked.connect(self.stop_all_components)
         actions.addWidget(start_all_button)
         actions.addWidget(stop_all_button)
@@ -1048,7 +1084,8 @@ class MyGUI(QWidget):
             return
         self.force_alignment_panel.contact_segment_id.interpretText()
         future = self.node.send_request_record_start(
-            alignment, self.force_alignment_panel.contact_segment_id.value())
+            alignment, self.force_alignment_panel.contact_segment_id.value(),
+            self.force_alignment_panel.save_images_checkbox.isChecked())
         if future is None:
             self.record_label.setText('Recorder/settings service unavailable; start Record component first.')
             return
@@ -1114,6 +1151,9 @@ class MyGUI(QWidget):
             contact_id = status.get('contact_segment_id')
             if type(contact_id) is int and 0 <= contact_id <= 18:
                 self.force_alignment_panel.contact_segment_id.setValue(contact_id)
+            save_images = status.get('save_images')
+            if type(save_images) is bool:
+                self.force_alignment_panel.save_images_checkbox.setChecked(save_images)
         color = {'recording': 'red', 'starting': '#b9770e',
                  'stopping': '#b9770e', 'exporting': '#b9770e', 'failed': '#b03a2e'}.get(state, 'green')
         if (status.get('data_quality') in ('incomplete', 'unverified')
@@ -1351,22 +1391,38 @@ class MyGUI(QWidget):
         self.fts_sub_label_list = []
         self.fts_sub_line_edit_list = []
         self.fts_sub_layout_list = []
-        for axis in ('Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz'):
-            label = QLabel(f'FTS {axis}')
-            label.setToolTip(f'Force/torque sensor: {axis}')
+        self.fts_grid = QGridLayout()
+        self.fts_grid.setHorizontalSpacing(4)
+        self.fts_grid.setVerticalSpacing(3)
+        self.fts_grid.setColumnStretch(1, 1)
+        self.fts_grid.setColumnStretch(3, 1)
+        for i, axis in enumerate(('fx', 'fy', 'fz', 'tx', 'ty', 'tz')):
+            label = QLabel(axis)
+            label.setToolTip(f'FTS sensor axes: {axis} [{"mN" if i < 3 else "mN m"}]')
             self.fts_sub_label_list.append(label)
+            value = QLineEdit('0')
+            value.setReadOnly(True)
+            update_sensor_value_color(value, 0.0)
+            value.setMinimumWidth(0)
+            value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            self.fts_sub_line_edit_list.append(value)
+            column = 0 if i < 3 else 2
+            self.fts_grid.addWidget(label, i % 3, column)
+            self.fts_grid.addWidget(value, i % 3, column + 1)
+        self.layout_global.addLayout(self.fts_grid)
 
-        for i in range (len(self.fts_sub_label_list)):  # 6 (force 3d, torque 3d)
-            try:
-                self.fts_sub_layout_list.append(QHBoxLayout())
-                self.fts_sub_line_edit_list.append(QLineEdit('0'))
-                self.fts_sub_layout_list[i].addWidget(self.fts_sub_label_list[i])
-                self.fts_sub_layout_list[i].addWidget(self.fts_sub_line_edit_list[i])
-                self.layout_global.addLayout(self.fts_sub_layout_list[i])
-            finally:
-                pass
-
-        list(map(lambda x: x.setReadOnly(True), self.fts_sub_line_edit_list))
+        self.predicted_force_line_edits = []
+        for axis in ('fx_pred', 'fy_pred', 'fz_pred'):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(axis))
+            value = QLineEdit('—')
+            value.setReadOnly(True)
+            value.setMinimumWidth(0)
+            value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            value.setToolTip('Waiting for prediction; display uses sensor axes and mN.')
+            row.addWidget(value, 1)
+            self.predicted_force_line_edits.append(value)
+            self.layout_global.addLayout(row)
 
     def init_loadcell_ui(self):
         """Show every configured loadcell channel in message-array order."""
@@ -1377,6 +1433,7 @@ class MyGUI(QWidget):
             label = QLabel(f'Loadcell #{i + 1} (g)')
             value = QLineEdit('—')
             value.setReadOnly(True)
+            update_sensor_value_color(value, None)
             row = QHBoxLayout()
             row.addWidget(label)
             row.addWidget(value)
@@ -1431,16 +1488,21 @@ class MyGUI(QWidget):
                                         top=0.97, hspace=0.15)
             self.canvas = FigureCanvas(self.figure)
             self.layout_global.addWidget(self.canvas)
-            self.data_y = np.zeros((6, 50))  # 초기 데이터 설정 (6개의 데이터, 각각 100개의 요소)
+            self.data_y = np.full((9, 50), np.nan)
             self.data_x = [i for i in range(len(self.data_y))]
 
             # 그래프 초기화
             labels = ('fx', 'fy', 'fz', 'tx', 'ty', 'tz')
             self.lines = [self.fts_axes[i // 3].plot([], [], label=label)[0]
                           for i, label in enumerate(labels)]
+            self.prediction_lines = [
+                self.fts_axes[0].plot([], [], label=f'f{axis}_pred', linestyle='--',
+                                      color=self.lines[i].get_color())[0]
+                for i, axis in enumerate('xyz')]
+            self.lines.extend(self.prediction_lines)
             # Avoid Matplotlib's default 'best' location following live traces.
-            for axis, label in zip(self.fts_axes, ('Force', 'Torque')):
-                axis.set_ylabel(label)
+            for axis, label in zip(self.fts_axes, ('Force [mN]', 'Torque [mN m]')):
+                axis.set_ylabel(label, fontsize=8)
                 axis.legend(loc='upper right', ncol=3, fontsize=8)
                 axis.tick_params(labelsize=8)
             # 애니메이션 시작
@@ -1644,27 +1706,39 @@ class MyGUI(QWidget):
 
     def update_fts(self):
         try:
-            self.fts_sub_line_edit_list[0].setText(str(self.node.fts_data.wrench.force.x))
-            self.fts_sub_line_edit_list[1].setText(str(self.node.fts_data.wrench.force.y))
-            self.fts_sub_line_edit_list[2].setText(str(self.node.fts_data.wrench.force.z))
-            self.fts_sub_line_edit_list[3].setText(f'{self.node.fts_data.wrench.torque.x:.1f}')
-            self.fts_sub_line_edit_list[4].setText(f'{self.node.fts_data.wrench.torque.y:.1f}')
-            self.fts_sub_line_edit_list[5].setText(f'{self.node.fts_data.wrench.torque.z:.1f}')
+            wrench = self.node.fts_data.wrench
+            values = (wrench.force.x, wrench.force.y, wrench.force.z,
+                      wrench.torque.x, wrench.torque.y, wrench.torque.z)
+            for i, (field, value) in enumerate(zip(self.fts_sub_line_edit_list, values)):
+                field.setText(str(value) if i < 3 else f'{value:.1f}')
+                update_sensor_value_color(field, value)
         except Exception as e:
             # self.node.get_logger().warning(f'F:update_fts() -> {e}')
             pass
+        prediction, status = self._prediction_snapshot()
+        for i, field in enumerate(self.predicted_force_line_edits):
+            field.setText(f'{prediction[i]:.1f}' if prediction is not None else
+                          ('—' if status == 'Waiting' else status.lower()))
+            field.setToolTip(f'{status} | sensor axes, mN; GUI axis/unit conversion only.')
         return 1
+
+    def _prediction_snapshot(self):
+        preview = getattr(self.node, 'force_prediction', None)
+        if not isinstance(preview, ForcePredictionPreview):
+            return None, 'Waiting'
+        return preview.snapshot()
 
     def update_loadcell(self):
         values = self.node.loadcell_data.stress
         for i, field in enumerate(self.lc_sub_line_edit_list):
             # Clear missing channels instead of silently retaining old values.
             field.setText(str(values[i]) if i < len(values) else '—')
+            update_sensor_value_color(field, values[i] if i < len(values) else None)
         return 1
 
     def update_fts_plot(self, frame):
         try:
-            new_data = np.zeros(6)
+            new_data = np.full(9, np.nan)
             if rclpy.ok():
                 new_data[0] = (self.node.fts_data.wrench.force.x)
                 new_data[1] = (self.node.fts_data.wrench.force.y)
@@ -1672,6 +1746,9 @@ class MyGUI(QWidget):
                 new_data[3] = (self.node.fts_data.wrench.torque.x)
                 new_data[4] = (self.node.fts_data.wrench.torque.y)
                 new_data[5] = (self.node.fts_data.wrench.torque.z)
+                prediction, _ = self._prediction_snapshot()
+                if prediction is not None:
+                    new_data[6:9] = prediction
 
                 self.data_y = np.roll(self.data_y, shift=-1, axis=1)
                 self.data_y[:, -1] = new_data
@@ -1681,7 +1758,8 @@ class MyGUI(QWidget):
 
                 # 최댓값과 최솟값을 찾아 축의 범위 설정
                 for group, axis in enumerate(self.fts_axes):
-                    values = self.data_y[group * 3:(group + 1) * 3]
+                    indices = [0, 1, 2, 6, 7, 8] if group == 0 else [3, 4, 5]
+                    values = self.data_y[indices]
                     finite = values[np.isfinite(values)]
                     if finite.size:
                         min_val, max_val = np.min(finite), np.max(finite)

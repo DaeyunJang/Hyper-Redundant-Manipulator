@@ -78,6 +78,58 @@ def depth(sequence=1):
     return message
 
 
+@pytest.mark.parametrize('node', [True], indirect=True)
+def test_images_off_needs_no_crop_and_preserves_numeric_session(node):
+    from record_pkg.image_archive_audit import audit_image_archive
+    from record_pkg.depth_archive_audit import audit_depth_archive
+    topics = list(node.session.topics)
+    assert node.set_parameters_atomically([Parameter('save_images', value=False)]).successful
+    assert call_record(node, True).success
+    assert node.session.topics == topics
+    assert node.image_archive is None and node.depth_archive is None
+    assert DEPTH not in node.required_live_topics()
+    assert '/estimated_segment_crop_image' not in node.required_live_topics()
+    node.receive_archive_depth(depth())
+    directory = node.session.directory
+    assert not (directory / 'images').exists()
+    config = json.loads((directory / 'recording_config.json').read_text())
+    assert config['save_images'] is False
+    assert not config['image_archive']['enabled'] and not config['depth_archive']['enabled']
+    assert node.session.metadata['snapshot']['save_images'] is False
+    assert audit_image_archive(directory, config, node.session.metadata)['status'] == 'disabled'
+    assert audit_depth_archive(directory, config, node.session.metadata)['status'] == 'disabled'
+    assert not node.set_parameters_atomically([Parameter('save_images', value=True)]).successful
+
+
+def test_image_selection_restores_original_profile_without_changing_numeric_topics(node):
+    topics = list(node.session.topics)
+    for enabled in (False, True, False, True):
+        assert node.set_parameters_atomically([Parameter('save_images', value=enabled)]).successful
+        node.apply_image_recording_settings()
+        assert node.image_archive_settings['enabled'] is enabled
+        assert node.depth_archive_settings['enabled'] is enabled
+        assert node.session.topics == topics
+        assert node.snapshot()['save_images'] is enabled
+
+
+@pytest.mark.parametrize('state', ['starting', 'recording', 'stopping', 'exporting'])
+def test_image_selection_locked_through_export(node, state):
+    node.session.state = state
+    try:
+        assert not node.set_parameters_atomically([Parameter('save_images', value=False)]).successful
+        assert node.get_parameter('save_images').value is True
+    finally:
+        node.session.state = 'idle'
+
+
+def test_image_selection_type_validation_is_atomic(node):
+    result = node.set_parameters_atomically([
+        Parameter('contact_segment_id', value=9), Parameter('save_images', value=0)])
+    assert not result.successful
+    assert node.get_parameter('save_images').value is True
+    assert node.get_parameter('contact_segment_id').value == 0
+
+
 def test_depth_subscribers_do_not_create_archive_or_pause_service_at_startup(node):
     names = {subscription.topic_name for subscription in node.subscriptions}
     assert {DEPTH, CALIBRATION}.issubset(names)

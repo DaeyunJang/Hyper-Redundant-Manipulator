@@ -30,6 +30,8 @@ def main():
         raise RuntimeError('Use isolated ROS_DOMAIN_ID=184 ROS_LOCALHOST_ONLY=1.')
 
     import cv2
+    from rcl_interfaces.srv import SetParametersAtomically
+    from rclpy.parameter import Parameter
     from custom_interfaces.msg import SegmentAngle
     from geometry_msgs.msg import PointStamped, WrenchStamped
     import numpy as np
@@ -80,7 +82,7 @@ def main():
     executor.add_node(node)
     recorder = log = None
     statuses, source_phases, directories = [], {}, []
-    phase, publish_depth = 0, False
+    phase, publish_depth, publish_images = 0, False, True
     depth_pixels = np.arange(96, dtype=np.uint16).reshape(8, 12) + 300
     depth_pixels[0, 0], depth_pixels[-1, -1] = 0, 65535
     camera_info = CameraInfo(width=32, height=24, distortion_model='plumb_bob')
@@ -136,8 +138,9 @@ def main():
             image = Image(width=12, height=8, encoding='rgb8', step=36,
                           data=bytes([13 + phase, 57, 201]) * 96)
             image.header.stamp, image.header.frame_id = stamp, 'camera_color_optical_frame'
-            crop_pub.publish(image)
-            if publish_depth:
+            if publish_images:
+                crop_pub.publish(image)
+            if publish_depth and publish_images:
                 depth = Image(header=image.header, width=12, height=8, encoding='16UC1',
                               is_bigendian=0, step=24, data=depth_pixels.tobytes())
                 _, calibration = crop_depth_calibration(
@@ -148,6 +151,7 @@ def main():
 
         node.create_timer(1.0 / 30, publish)
         client = node.create_client(SetBool, '/data/record')
+        settings_client = node.create_client(SetParametersAtomically, '/record/set_parameters_atomically')
         log = (artifacts / 'record_node.log').open('w')
         recorder = subprocess.Popen([
             sys.executable, '-c', 'from record_pkg.record_node import main; main()',
@@ -163,13 +167,23 @@ def main():
             wait_for(future.done, 'Record response missing')
             return future.result()
 
+        def set_images(value):
+            future = settings_client.call_async(SetParametersAtomically.Request(parameters=[
+                Parameter('save_images', value=value).to_parameter_msg()]))
+            wait_for(future.done, 'Image settings acknowledgement missing')
+            return future.result().result
+
         rejected = request(True)
         assert not rejected.success and depth_topic in rejected.message, rejected
         assert not output_root.exists(), 'Missing required depth created a session.'
         publish_depth = True
         spin_for(.8)
         preserved = {}
-        for phase in (0, 1):
+        wait_for(settings_client.service_is_ready, 'Recorder parameter service missing')
+        for phase in (0, 1, 2):
+            publish_images = phase != 1
+            assert set_images(publish_images).successful
+            spin_for(.3)
             accepted = request(True)
             assert accepted.success, accepted.message
             wait_for(lambda: statuses and statuses[-1]['state'] == 'recording',
@@ -178,6 +192,7 @@ def main():
             assert directory not in directories, 'Record overwrote a previous session.'
             directories.append(directory)
             assert not request(True).success, 'Duplicate Record overwrote active session.'
+            assert not set_images(not publish_images).successful, 'Settings changed during capture.'
             spin_for(2.0)
             assert request(False).success
             wait_for(lambda: statuses[-1]['state'] in ('stopped', 'failed'),
@@ -186,8 +201,17 @@ def main():
             assert statuses[-1]['data_quality'] == 'complete', statuses[-1]
             metadata = json.loads((directory / 'session.json').read_text())
             assert metadata['snapshot']['contact_segment_id'] == 9
+            assert metadata['snapshot']['save_images'] is publish_images
             assert 'recording_intervals' not in metadata
-            for name in ('hrm_crop', 'hrm_crop_depth'):
+            effective = json.loads((directory / 'recording_config.json').read_text())
+            assert effective['image_archive']['enabled'] is publish_images
+            assert effective['depth_archive']['enabled'] is publish_images
+            if not publish_images:
+                assert not (directory / 'images').exists()
+                postprocess = json.loads((directory / 'postprocess.json').read_text())
+                assert postprocess['image_integrity']['status'] == 'disabled'
+                assert postprocess['depth_integrity']['status'] == 'disabled'
+            for name in (('hrm_crop', 'hrm_crop_depth') if publish_images else ()):
                 root = directory / 'images' / name
                 rows = read_csv(root / 'index.csv')
                 manifest = json.loads((root / 'manifest.json').read_text())
@@ -243,10 +267,10 @@ def main():
             spin_for(.3)  # Sources continue; closed archives must remain unchanged.
             for path, digest in preserved.items():
                 assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
-        assert len(list(output_root.iterdir())) == 2
+        assert len(list(output_root.iterdir())) == 3
         assert not any(name == '/data/record_pause'
                        for name, _ in node.get_service_names_and_types())
-        print('PASS: two separate Record/Stop sessions; exact cropped uint16 depth and '
+        print('PASS: ON/OFF/ON Record/Stop sessions; OFF has no image files; exact uint16 depth and '
               'calibration; lossless RGB; numeric-only bag/CSV; no overwrite; no actuators.',
               flush=True)
         print('Sessions:', *directories, flush=True)

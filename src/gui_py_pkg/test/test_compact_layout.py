@@ -50,6 +50,51 @@ def visible_inside(child, parent):
     assert parent.rect().contains(bounds), (child, bounds, parent.rect())
 
 
+@pytest.mark.parametrize('value,color', [
+    (0.0, 'black'), (999.9, 'black'), (1000.0, 'black'),
+    (1000.1, '#e67e00'), (1499.9, '#e67e00'), (1500.0, 'red'),
+    (2000.0, 'red'), (-1000.0, 'black'), (-1000.1, '#e67e00'),
+    (-1500.0, 'red'), (float('nan'), 'black'), (float('inf'), 'black'),
+])
+def test_sensor_value_colors_and_original_formatting(window, value, color):
+    from geometry_msgs.msg import WrenchStamped
+    from custom_interfaces.msg import LoadcellState
+
+    message = WrenchStamped()
+    for vector in (message.wrench.force, message.wrench.torque):
+        vector.x = vector.y = vector.z = value
+    window.node.fts_data = message
+    window.node.loadcell_data = LoadcellState(stress=[value] * 4)
+    window.update_fts()
+    window.update_loadcell()
+    for field in window.fts_sub_line_edit_list + window.lc_sub_line_edit_list:
+        assert field.styleSheet() == f'QLineEdit {{ color: {color}; }}'
+    assert window.fts_sub_line_edit_list[0].text() == str(value)
+    assert window.fts_sub_line_edit_list[3].text() == f'{value:.1f}'
+    assert window.lc_sub_line_edit_list[0].text() == str(value)
+
+
+def test_sensor_colors_reset_and_missing_loadcells_clear(window):
+    from geometry_msgs.msg import WrenchStamped
+    from custom_interfaces.msg import LoadcellState
+
+    window.node.fts_data = WrenchStamped()
+    window.node.fts_data.wrench.force.x = 1500.0
+    window.node.loadcell_data = LoadcellState(stress=[1500.0] * 4)
+    window.update_fts()
+    window.update_loadcell()
+    assert 'red' in window.fts_sub_line_edit_list[0].styleSheet()
+    window.node.fts_data.wrench.force.x = 0.0
+    window.node.loadcell_data = LoadcellState(stress=[1001.0])
+    window.update_fts()
+    window.update_loadcell()
+    assert 'black' in window.fts_sub_line_edit_list[0].styleSheet()
+    assert '#e67e00' in window.lc_sub_line_edit_list[0].styleSheet()
+    for field in window.lc_sub_line_edit_list[1:]:
+        assert field.text() == '—'
+        assert 'black' in field.styleSheet()
+
+
 @pytest.mark.parametrize('size', [(1366, 768), (1500, 900), (1920, 1080)])
 @pytest.mark.parametrize('aligned', [False, True])
 def test_motor_record_and_previews_fit_without_scroll(app, window, size, aligned):
@@ -72,6 +117,7 @@ def test_motor_record_and_previews_fit_without_scroll(app, window, size, aligned
         window.force_alignment_panel.enabled_checkbox,
         window.force_alignment_panel.summary, window.motor_kinematics_button,
         window.force_alignment_panel.contact_segment_id,
+        window.force_alignment_panel.save_images_checkbox,
         window.LPF_parameter, window.MAF_parameter,
         window.image_preview.near, window.image_preview.far,
         *window.checkbox_mode_list, *window.checkbox_amode_list,
@@ -133,7 +179,8 @@ def test_sine_controls_have_visible_labels_and_follow_move_tip(app, window, size
 
 
 @pytest.mark.parametrize('group,expected_labels', [
-    (0, ['fx', 'fy', 'fz']), (1, ['tx', 'ty', 'tz'])])
+    (0, ['fx', 'fy', 'fz', 'fx_pred', 'fy_pred', 'fz_pred']),
+    (1, ['tx', 'ty', 'tz'])])
 def test_sensor_legend_stays_upper_right_as_traces_and_limits_change(
         window, group, expected_labels):
     axis = window.fts_axes[group]
@@ -169,6 +216,68 @@ def test_torque_display_and_independent_graph_scales(window, monkeypatch):
     window.update_fts_plot(0)
     assert window.fts_axes[0].get_ylim()[1] > 1000
     assert window.fts_axes[1].get_ylim()[1] < 3
+
+
+@pytest.mark.parametrize('size', [(1366, 768), (1500, 900), (1920, 1080)])
+def test_force_torque_grid_is_paired_and_predictions_below(app, window, size):
+    window.resize(*size)
+    window.show()
+    app.processEvents()
+    for i in range(3):
+        force = window.fts_sub_line_edit_list[i]
+        torque = window.fts_sub_line_edit_list[i + 3]
+        assert window.fts_grid.itemAtPosition(i, 1).widget() is force
+        assert window.fts_grid.itemAtPosition(i, 3).widget() is torque
+        assert force.y() == torque.y()
+        assert torque.x() > force.x() + force.width()
+        assert abs(force.width() - torque.width()) <= 1
+        assert force.width() >= 40
+    bottom = max(e.y() + e.height() for e in window.fts_sub_line_edit_list)
+    for field in window.predicted_force_line_edits:
+        assert field.y() >= bottom
+        assert field.isReadOnly() and field.text() == '—'
+
+
+def test_prediction_values_lines_stale_and_recovery(app, window, monkeypatch, tmp_path):
+    import numpy as np
+    from geometry_msgs.msg import Vector3, WrenchStamped
+    from gui_py_pkg import force_prediction, gui_node
+    clock = {'now': 10.0}
+    monkeypatch.setattr(force_prediction.time, 'monotonic', lambda: clock['now'])
+    monkeypatch.setattr(gui_node.rclpy, 'ok', lambda: True)
+    monkeypatch.setattr(gui_node.rclpy, 'shutdown', lambda **kwargs: None)
+    window.node.fts_data = WrenchStamped()
+    window.node.force_prediction = force_prediction.ForcePredictionPreview()
+    window.update_fts()
+    window.update_fts_plot(0)
+    assert np.isnan(window.data_y[6:9]).all()
+    preview = window.node.force_prediction
+    preview.receive(Vector3(x=0.0, y=-12.5, z=1200.0))
+    window.update_fts()
+    window.update_fts_plot(1)
+    assert [f.text() for f in window.predicted_force_line_edits] == ['0.0', '-12.5', '1200.0']
+    assert np.allclose(window.data_y[6:9, -1], [0.0, -12.5, 1200.0])
+    assert window.fts_axes[0].get_ylim()[1] > 1200
+    assert window.fts_axes[1].get_ylim()[1] < 1
+    for i, line in enumerate(window.prediction_lines):
+        assert line.get_linestyle() == '--'
+        assert line.get_color() == window.lines[i].get_color()
+    window.resize(1500, 900)
+    window.show()
+    app.processEvents()
+    window.canvas.draw()
+    assert window.grab().save(str(tmp_path / 'prediction_gui.png'))
+    clock['now'] = 10.6
+    window.update_fts()
+    window.update_fts_plot(2)
+    assert all(f.text() == 'stale' for f in window.predicted_force_line_edits)
+    assert np.isnan(window.data_y[6:9, -1]).all()
+    preview.receive(Vector3(x=float('nan'), y=0.0, z=0.0))
+    window.update_fts()
+    assert all(f.text() == 'invalid' for f in window.predicted_force_line_edits)
+    preview.receive(Vector3())
+    window.update_fts()
+    assert all(f.text() == '0.0' for f in window.predicted_force_line_edits)
 
 
 @pytest.mark.parametrize('size', [(1366, 768), (1500, 900), (1920, 1080)])
