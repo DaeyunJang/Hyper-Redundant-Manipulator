@@ -2,6 +2,19 @@
 
 Last updated: 2026-09-28 (Asia/Seoul)
 
+## ID2 interrupted export recovered (2026-09-28)
+
+- Session under record/20260928 외력 추정 데이터들/
+  static_pan_-30to+30_tilt_-30to+30_interval-15deg_seg-id-2_right now has
+  csv/summary.csv: 20,057 rows, 268 columns, all contact_segment_id=2.
+- Re-exported all 1,455,961 bag messages read-only; SQLite quick_check OK,
+  zero topic decode errors, receive-time integrity complete. Original interrupted
+  csv preserved as csv_interrupted_backup_20260928, bag unchanged.
+- Startup policy skipped 26 leading rows; 18 later rows have incomplete core
+  matching and remain as blanks (not fabricated/removed). See RECOVERY_20260928.json.
+- Original postprocess.json/export.log remain interrupted-export evidence;
+  recovered csv/manifest.json is authoritative for the completed recovery.
+
 ## Sensor numeric colours (2026-09-28)
 
 - GUI measured F/T six axes and loadcell four channels: abs(value)<=1000 black,
