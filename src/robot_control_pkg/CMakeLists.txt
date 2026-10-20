@@ -37,7 +37,6 @@ add_executable(robot_control
   src/main.cpp
   src/control_node.cpp
   src/dynamics_controller.cpp
-  src/damping_friction_model.cpp
   src/HRM_dynamics_model.cpp
   src/admittance_filter.cpp
   src/admittance_controller.cpp
@@ -54,6 +53,9 @@ ament_target_dependencies(robot_control
   std_srvs
   sensor_msgs
   geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
   custom_interfaces
 )
 
@@ -85,8 +87,17 @@ install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Reference snapshots for datasets; runtime hardware.* parameters identify the
+# constants actually compiled into the controller (these files may be newer).
+install(FILES
+  include/robot_control_pkg/hw_definition.hpp
+  include/robot_control_pkg/control_parameters.hpp
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_gtest REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files
   set(ament_cmake_copyright_FOUND TRUE)
@@ -95,6 +106,25 @@ if(BUILD_TESTING)
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  ament_add_gtest(test_surgical_tool_fk
+    test/test_surgical_tool_fk.cpp
+    src/surgical_tool.cpp
+  )
+  target_include_directories(test_surgical_tool_fk PRIVATE
+    include
+    include/robot_control_pkg
+  )
+  ament_target_dependencies(test_surgical_tool_fk Eigen3)
+
+  ament_add_gtest(test_position_controller
+    test/test_position_controller.cpp
+    src/position_controller.cpp
+    src/PID_controller.cpp
+    src/surgical_tool.cpp
+  )
+  ament_target_dependencies(test_position_controller Eigen3)
+  ament_add_gtest(test_ik_sine_motion test/test_ik_sine_motion.cpp)
 endif()
 
 ament_package()

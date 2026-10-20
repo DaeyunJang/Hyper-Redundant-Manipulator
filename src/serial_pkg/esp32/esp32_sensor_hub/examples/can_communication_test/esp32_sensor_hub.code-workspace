@@ -1,0 +1,24 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"name": "can_communication_test",
+			"path": "../../../../Documents/PlatformIO/Projects/can_communication_test"
+		},
+		{
+			"name": "can_communication_test",
+			"path": "../../../can_communication_test"
+		},
+		{
+			"name": "hx711_calibration",
+			"path": "../hx711_calibration"
+		},
+		{
+			"name": "can_communication_test",
+			"path": "."
+		}
+	],
+	"settings": {}
+}

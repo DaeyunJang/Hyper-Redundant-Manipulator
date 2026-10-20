@@ -13,24 +13,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import launch
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, Command, ThisLaunchFileDir
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
-from launch_ros.substitutions import FindPackageShare
-import os
-import xacro
 from launch_ros.descriptions import ParameterValue
 
+
 def generate_launch_description():
-    
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'serial_port', default_value='/dev/ttyUSB0',
+            description='ESP32 serial device, e.g. /dev/ttyUSB1 or /dev/ttyACM0.'),
         Node(
             package='serial_pkg',
             executable='serial_read',
             name='serial_read',
             output='screen',
+            parameters=[{
+                'serial_port': ParameterValue(
+                    LaunchConfiguration('serial_port'), value_type=str),
+            }],
         ),
     ])

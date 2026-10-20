@@ -13,21 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-
 from launch import LaunchDescription
-from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
-  apriltag_param_file = os.path.join(
-        get_package_share_directory('apriltag_ros'),
-        'cfg',
-        'tags_36h11.yaml'
-    )
-  
   return LaunchDescription([
     
     # IncludeLaunchDescription(
@@ -74,15 +65,8 @@ def generate_launch_description():
         [get_package_share_directory('estimation_pkg'), '/launch/_launch.py']),
     ),
     
-    Node(
-      package='apriltag_ros',
-      executable='apriltag_node',
-      name='apriltag_node',
-      output='screen',
-      parameters=[apriltag_param_file],
-      remappings=[
-        ('image_rect', '/camera/camera/color/image_raw'),
-        ('camera_info', '/camera/camera/color/camera_info')
-      ]
+    IncludeLaunchDescription(
+      PythonLaunchDescriptionSource(
+        [get_package_share_directory('launcher'), '/launch/apriltag.launch.py'])
     ),
   ])

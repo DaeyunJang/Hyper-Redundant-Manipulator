@@ -1,0 +1,19 @@
+# D435i/D455 have a separate RGB camera. D405 uses depth_module.color_profile
+# and remains on the independent HRM configuration in estimation_pkg.
+enable_color: true
+rgb_camera.color_profile: "1280,720,30"
+rgb_camera.color_format: RGB8
+rgb_camera.enable_auto_exposure: true
+enable_depth: false
+enable_infra: false
+enable_infra1: false
+enable_infra2: false
+enable_gyro: false
+enable_accel: false
+enable_rgbd: false
+pointcloud.enable: false
+align_depth.enable: false
+enable_sync: false
+color_qos: SENSOR_DATA
+color_info_qos: SENSOR_DATA
+publish_tf: true

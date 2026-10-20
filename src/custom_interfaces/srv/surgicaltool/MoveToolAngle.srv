@@ -4,9 +4,9 @@
 
 # Request
 int8    mode #= 0    # ABSOLUTE=0, RELATIVE=1
-float64 tiltangle    # rad
-float64 panangle     # rad
-float64 gripangle    # rad
+float64 tiltangle    # degree
+float64 panangle     # degree
+float64 gripangle    # degree
 ---
 # Response
 bool success

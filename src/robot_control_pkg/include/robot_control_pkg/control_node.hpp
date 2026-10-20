@@ -34,6 +34,10 @@
 #include <cmath>
 #include <signal.h>
 #include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <array>
+#include <condition_variable>
 #include <tuple>
 #include <cstdint>
 #include <stdexcept>
@@ -41,6 +45,7 @@
 #include <numeric>
 #include <iterator>
 #include <Eigen/Dense>
+#include <Eigen/Geometry>
 
 // Surgical Tool Class
 #include "hw_definition.hpp"
@@ -49,6 +54,7 @@
 #include "dynamics_controller.hpp"
 #include "admittance_controller.hpp"
 #include "position_controller.hpp"
+#include "ik_sine_motion.hpp"
 
 // ROS2
 #include "rclcpp/rclcpp.hpp"
@@ -62,12 +68,16 @@
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "geometry_msgs/msg/point_stamped.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
+#include "tf2_ros/transform_broadcaster.h"
 #include "custom_interfaces/msg/motor_state.hpp"
 #include "custom_interfaces/msg/motor_command.hpp"
 #include "custom_interfaces/msg/loadcell_state.hpp"
 #include "custom_interfaces/msg/dynamic_mimo_values.hpp"
 #include "custom_interfaces/msg/admittance_control.hpp"
 #include "custom_interfaces/msg/position_control.hpp"
+#include "custom_interfaces/msg/segment_angle.hpp"
 #include "custom_interfaces/srv/move_motor_direct.hpp"
 #include "custom_interfaces/srv/move_tool_angle.hpp"
 #include "custom_interfaces/srv/set_goal_position.hpp"
@@ -102,14 +112,22 @@ public:
   using DynamicMIMOValues = custom_interfaces::msg::DynamicMIMOValues;
   using AdmittanceControl = custom_interfaces::msg::AdmittanceControl;
   using PositionControl = custom_interfaces::msg::PositionControl;
+  using SegmentAngle = custom_interfaces::msg::SegmentAngle;
   using MoveMotorDirect = custom_interfaces::srv::MoveMotorDirect;
   using MoveToolAngle = custom_interfaces::srv::MoveToolAngle;
   using SetGoalPosition = custom_interfaces::srv::SetGoalPosition;
   using SetControlMode = custom_interfaces::srv::SetControlMode;
 
   // Common values
-  std::vector<double> theta_actual_;
-  std::vector<double> omega_actual_;
+  std::vector<double> theta_pan_actual_;
+  std::vector<double> theta_tilt_actual_;
+  std::vector<double> omega_pan_actual_;
+  std::vector<double> omega_tilt_actual_;
+
+  void publish_fk_transforms(
+    const builtin_interfaces::msg::Time& stamp,
+    const std::string& base_frame_id,
+    const std::vector<Eigen::Matrix4d>& transforms);
 
 
   /**
@@ -148,7 +166,7 @@ public:
   virtual ~ControlNode();
 
   /**
-   * @author DY, JKim
+   * @author DY
    * @def    cal_inverse_kinematics
    * @ref    A Stiffness-Adjustable Hyperredundant Manipulator Using a Variable Neutral-Line Mechanism for Minimally Invasive Surgery
    * @brief  calculate target values(length of wire) from the surgical tool kinematics,
@@ -156,6 +174,9 @@ public:
    * @return target values
   */
   void cal_inverse_kinematics(double pAngle, double tAngle, double gAngle);
+
+  /** Publish an actuator command only when the explicit safety gate is open. */
+  bool publish_motor_command_if_enabled(const char * command_source);
 
   /**
    * @author DY
@@ -170,12 +191,38 @@ public:
   void set_position_zero();
 
 private:
-  OpMode op_mode_ = kStop;
+  std::atomic<OpMode> op_mode_{kStop};
+
+  // Mode/goal/PD state is shared with ROS callbacks. Feedback has a separate
+  // short lock; the frame worker never waits for an image while holding these.
+  std::recursive_mutex position_control_mutex_;
+  std::mutex feedback_mutex_;
+  std::chrono::steady_clock::time_point motor_received_{}, loadcell_received_{}, force_received_{};
+  bool valid_motor_feedback_ = false;
+  bool valid_loadcell_feedback_ = false;
+  bool valid_force_feedback_ = false;
+  bool position_ready_ = false;
+  bool position_fault_latched_ = false;
+  std::uint64_t position_entry_revision_ = 0;
+  std::uint64_t position_entry_min_sequence_ = 0;
+  int64_t position_entry_source_ns_ = 0;
+  double position_feedback_timeout_sec_ = position_control_params::FEEDBACK_TIMEOUT_SEC;
+  double position_max_speed_deg_s_ = position_control_params::MAX_ANGULAR_SPEED_DEG_S;
+  double position_derivative_filter_sec_ = position_control_params::DERIVATIVE_FILTER_SEC;
+  std::array<int32_t, NUM_OF_MOTORS> position_motor_origin_{};
+  std::array<double, NUM_OF_MOTORS> position_wire_origin_{};
+  std::string last_position_status_;
+  rclcpp::Publisher<MotorCommand>::SharedPtr position_motor_preview_publisher_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr position_status_publisher_;
+  void set_position_status(const std::string& status);
+  void hold_position_from_motor_feedback();  // Caller holds position_control_mutex_.
+  void publish_position_diagnostics(const SegmentAngle& sample, double dt, ControlMode mode);
 
   /**
    * @brief ROS2 parameters 
    */
-  ControlMode control_mode_;
+  std::atomic<ControlMode> control_mode_;
+  std::atomic_bool motor_output_enabled_{false};
   bool hrm_controller_enable_;
   rcl_interfaces::msg::SetParametersResult parameter_callback(const std::vector<rclcpp::Parameter> &parameters);
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
@@ -191,6 +238,15 @@ private:
    * @brief Sine wave publish function
    */
   void publish_sine_wave();
+  hrm::SineConfig sine_config(const std::vector<rclcpp::Parameter>& overrides = {});
+  void publish_ik_sine();
+  void stop_ik_sine(const std::string& reason);
+  bool ik_sine_feedback_safe();
+  hrm::SineMotion ik_sine_;
+  bool ik_sine_active_ = false;
+  std::chrono::steady_clock::time_point ik_sine_tick_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr ik_sine_service_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr ik_sine_status_pub_;
   void publish_sine_wave_1time();
   void publish_circle_motion();
   void publish_moebius_motion();
@@ -243,10 +299,14 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr surgical_tool_pose_publisher_;
   std_msgs::msg::Float64MultiArray tool_endeffector_pose_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr tool_endeffector_pose_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr fk_tip_position_publisher_;
   std_msgs::msg::Float64MultiArray wire_length_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr wire_length_publisher_;
   std_msgs::msg::Float64MultiArray wire_length_velocity_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr wire_length_velocity_publisher_;
+  std_msgs::msg::Float64MultiArray target_wire_length_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr target_wire_length_publisher_;
+  std::unique_ptr<tf2_ros::TransformBroadcaster> fk_tf_broadcaster_;
 
   /**
    * @author DY
@@ -261,18 +321,14 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr external_force_subscriber_;
 
   bool segment_angle_op_flag_ = false;
-  std_msgs::msg::Float64MultiArray segment_angle_relative_;
-  std_msgs::msg::Float64MultiArray segment_angle_relative_prev_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angle_relative_subscriber_;
-  std_msgs::msg::Float64MultiArray segment_angle_absolute_;
-  std_msgs::msg::Float64MultiArray segment_angle_absolute_prev_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angle_absolute_subscriber_;
-
-  bool segment_angular_velocity_op_flag_ = false;
-  std_msgs::msg::Float64MultiArray segment_angular_velocity_relative_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angular_velocity_relative_subscriber_;
-  std_msgs::msg::Float64MultiArray segment_angular_velocity_absolute_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr segment_angular_velocity_absolute_subscriber_;
+  SegmentAngle segment_angle_;
+  std::mutex segment_angle_mutex_;
+  std::condition_variable segment_angle_cv_;
+  std::uint64_t segment_angle_sequence_ = 0;
+  std::chrono::steady_clock::time_point segment_angle_received_{};
+  std::vector<double> segment_angle_pan_absolute_prev_;
+  std::vector<double> segment_angle_tilt_absolute_prev_;
+  rclcpp::Subscription<SegmentAngle>::SharedPtr segment_angle_subscriber_;
 
 
   /**
@@ -310,7 +366,6 @@ private:
    * @todo make thread.
    */
   std::thread position_with_admittance_control_thread_;
-  rclcpp::Rate loop_rate_position_with_admittance_;  // DY == initialize in the constructor of .cpp file (unit. Hz)
   void run_position_with_admittance_control_thread();
 };
 

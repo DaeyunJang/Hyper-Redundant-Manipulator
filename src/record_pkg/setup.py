@@ -11,18 +11,22 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob.glob(os.path.join('launch', '*launch.[pxy][yma]*')))
+        (os.path.join('share', package_name, 'launch'), glob.glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
+        (os.path.join('share', package_name, 'config'), glob.glob('config/*.json')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='daeyun',
     maintainer_email='bigyun9375@gmail.com',
-    description='TODO: Package description',
+    description='Timestamp-preserving HRM sensor and control rosbag recorder',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'record = record_pkg.record_node:main',
+            'apriltag_pose = record_pkg.apriltag_pose:main',
+            'export_csv = record_pkg.export_csv:main',
+            'export_summary = record_pkg.summary_csv:main',
         ],
     },
 )
