@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "enabled": true,
+  "unloaded_force_ranges_mN": {
+    "fx": [-134.326, 134.326],
+    "fy": [-126.814, 126.814],
+    "fz": [-192.670, 192.670]
+  }
+}

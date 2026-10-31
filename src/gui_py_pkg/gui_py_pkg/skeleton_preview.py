@@ -30,6 +30,8 @@ class SkeletonPreviewFrame:
     received_at: float
     estimated_tip: object = None
     fk_tip: object = None
+    geometry: object = None
+    geometry_received_at: float = None
 
 
 class SkeletonFrameBuffer:
@@ -38,10 +40,11 @@ class SkeletonFrameBuffer:
     def __init__(self):
         self.images = OrderedDict()
         self.points = {kind: OrderedDict() for kind in TIP_TOPICS}
+        self.geometry = OrderedDict()
         self.latest_image = None
 
     def _trim(self, now):
-        for cache in (self.images, *self.points.values()):
+        for cache in (self.images, *self.points.values(), self.geometry):
             for key, (_, received) in list(cache.items()):
                 if now - received > TIP_MAX_AGE:
                     del cache[key]
@@ -56,6 +59,22 @@ class SkeletonFrameBuffer:
             self.images[stamp] = (msg, now)
             self.images.move_to_end(stamp)
         self._trim(now)
+
+    def receive_geometry(self, msg, *, now=None):
+        """Cache pixel geometry by image frame as well as exact exposure time."""
+        now = time.monotonic() if now is None else now
+        stamp = source_stamp(msg)
+        if stamp is not None:
+            key = (msg.header.frame_id, *stamp)
+            self.geometry[key] = (msg, now)
+            self.geometry.move_to_end(key)
+        self._trim(now)
+
+    def _frame(self, image, received, *points):
+        stamp = source_stamp(image)
+        key = (image.header.frame_id, *stamp) if stamp is not None else None
+        geometry, geometry_received = self.geometry.get(key, (None, None))
+        return SkeletonPreviewFrame(image, received, *points, geometry, geometry_received)
 
     def receive_tip(self, kind, msg, *, now=None):
         if kind not in self.points:
@@ -75,7 +94,7 @@ class SkeletonFrameBuffer:
         # a complete recent set, but never hold the preview indefinitely.
         for stamp, (image, received) in reversed(self.images.items()):
             if all(stamp in cache for cache in self.points.values()):
-                return SkeletonPreviewFrame(
+                return self._frame(
                     image, received,
                     *(self.points[kind][stamp][0] for kind in TIP_TOPICS))
         image, received = self.latest_image
@@ -83,7 +102,7 @@ class SkeletonFrameBuffer:
         points = [cache[stamp][0] if stamp in cache else None for cache in self.points.values()]
         if now - received > TIP_MAX_AGE:
             points = [None, None]
-        return SkeletonPreviewFrame(image, received, *points)
+        return self._frame(image, received, *points)
 
 
 def format_skeleton_tips(frame, now):

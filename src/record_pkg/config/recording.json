@@ -16,6 +16,7 @@
       "/kinematics/fk_tip_position",
       "/control_mode", "/position_controller", "/admittance_controller",
       "/position/target_motor_command", "/position/control_status",
+      "/control/reference", "/position/sine_reference", "/position/sine_status",
       "/kinematics/sine_status",
       "/dynamic_MIMO_values", "/estimated_external_force"
     ],
@@ -55,6 +56,9 @@
     "enabled": true,
     "max_time_difference_ms": 25.0,
     "startup_required_groups": ["motor", "loadcell", "fts", "wire", "angles"]
+  },
+  "control_tracking_csv": {
+    "enabled": true
   },
   "depth_archive": {
     "enabled": true,

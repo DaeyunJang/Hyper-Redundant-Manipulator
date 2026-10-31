@@ -295,15 +295,17 @@ def test_camera_selector_renders_as_one_compact_row_at_normal_window_size(app, w
 def test_tag_camera_adds_half_second_start_without_changing_existing_schedule(window, monkeypatch):
     specs = {spec.component_id: spec for spec in window.system_manager.specs}
     expected = {
-        'camera': (True, 0.0), 'tag_camera': (True, 0.5), 'serial': (True, 1.0),
-        'tcp': (True, 2.0), 'robot_control': (True, 3.0), 'estimation': (True, 4.0),
-        'record': (False, 5.0), 'apriltag': (True, 6.0),
+        'camera': 0.0, 'tag_camera': 0.5, 'serial': 1.0,
+        'tcp': 2.0, 'robot_control': 3.0, 'estimation': 4.0,
+        'force_id': 4.5, 'record': 5.0, 'apriltag': 6.0,
     }
-    assert {name: (spec.auto_start, spec.delay_sec) for name, spec in specs.items()} == expected
+    assert list(specs) == list(expected)
+    assert {name: spec.delay_sec for name, spec in specs.items()} == expected
     assert specs['camera'].expected_nodes == ('/camera/camera',)
     assert specs['tag_camera'].expected_nodes == ('/tag_camera/tag_camera',)
     assert specs['tag_camera'].label == 'Tag camera (CUDA)'
-    assert window.auto_start_enabled == {name: enabled for name, (enabled, _) in expected.items()}
+    # Start choices are user configuration; only the schedule is fixed here.
+    assert window.auto_start_enabled == {name: spec.auto_start for name, spec in specs.items()}
     timers = []
 
     def new_timer(parent):
@@ -315,12 +317,15 @@ def test_tag_camera_adds_half_second_start_without_changing_existing_schedule(wi
     with monkeypatch.context() as timer_patch:
         timer_patch.setattr('gui_py_pkg.gui_node.QTimer', new_timer)
         window.schedule_auto_start()
+    scheduled = [name for name in expected if specs[name].auto_start]
     assert [timer.start.call_args.args[0] for timer in timers] == [
-        0, 500, 1000, 2000, 3000, 4000, 6000]
+        int(expected[name] * 1000) for name in scheduled]
     window.system_manager.start.assert_not_called()
     # Trigger only the two camera callbacks: no real timers/processes or ROS nodes.
-    for timer, expected_id in zip(timers[:2], ('camera', 'tag_camera')):
+    for timer, expected_id in zip(timers, scheduled):
         timer.setSingleShot.assert_called_once_with(True)
+        if expected_id not in ('camera', 'tag_camera'):
+            continue
         timer.timeout.connect.call_args.args[0]()
         assert window.system_manager.start.call_args.args[0] == expected_id
     window.cancel_scheduled_starts()

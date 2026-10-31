@@ -125,6 +125,18 @@ if(BUILD_TESTING)
   )
   ament_target_dependencies(test_position_controller Eigen3)
   ament_add_gtest(test_ik_sine_motion test/test_ik_sine_motion.cpp)
+  ament_add_gtest(test_position_sine_motion test/test_position_sine_motion.cpp)
+  ament_add_gtest(test_admittance_yz
+    test/test_admittance_yz.cpp
+    src/admittance_filter.cpp
+  )
+  ament_target_dependencies(test_admittance_yz Eigen3 custom_interfaces)
+  ament_add_gtest(test_admittance_controller
+    test/test_admittance_controller.cpp
+    src/admittance_controller.cpp
+    src/admittance_filter.cpp
+  )
+  ament_target_dependencies(test_admittance_controller Eigen3)
 endif()
 
 ament_package()

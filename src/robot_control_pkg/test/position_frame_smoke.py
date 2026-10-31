@@ -3,6 +3,8 @@
 
 Source install/setup.bash, then run with ROS_DOMAIN_ID=78 ROS_LOCALHOST_ONLY=1.
 The actuator topic is additionally remapped to a test-only name.
+HRM_CONTROL_TEST_EXECUTABLE may select an isolated-build controller binary;
+the workspace install is used only when that variable is absent.
 """
 import os
 from pathlib import Path
@@ -45,6 +47,8 @@ def main():
     parameter_client = node.create_client(SetParameters, '/position_pd_smoke_control/set_parameters')
     goal_client = node.create_client(SetGoalPosition, '/position/set_goal_position')
     motor_origin = [10000, 20000, 30000, 40000]
+    feedback_timeout = 1.0
+    max_control_dt = 0.25
     feed = {'motor': False, 'load': False, 'angle': False, 'bad_load': False,
             'angle_kind': 'valid', 'period': 0.1, 'tension': 10.0}
     angle = SegmentAngle()
@@ -130,13 +134,20 @@ def main():
     try:
         spin(0.4)
         assert set(node.get_node_names()) <= {'position_frame_smoke'}, 'Domain 78 already in use'
-        executable = Path(__file__).resolve().parents[3] / 'install/robot_control_pkg/lib/robot_control_pkg/robot_control'
+        default_executable = Path(__file__).resolve().parents[3] / 'install/robot_control_pkg/lib/robot_control_pkg/robot_control'
+        executable = Path(os.environ.get(
+            'HRM_CONTROL_TEST_EXECUTABLE', str(default_executable))).expanduser().resolve(strict=True)
         child = subprocess.Popen([
             str(executable), '--ros-args', '-r', '__node:=position_pd_smoke_control',
             '-r', 'motor_command:=/smoke/blocked_motor_command',
             '-p', 'control_mode:=3', '-p', 'motor_output_enabled:=false',
+            '-p', f'position_control/feedback_timeout_sec:={feedback_timeout}',
             '-p', 'position_control/pid_controller_pan/p_gain:=3.0',
             '-p', 'position_control/pid_controller_tilt/p_gain:=4.0',
+            # Isolate the P angular-rate integration contract here. Error-derivative
+            # target kicks and filtering are covered by the C++ unit tests.
+            '-p', 'position_control/pid_controller_pan/d_gain:=0.0',
+            '-p', 'position_control/pid_controller_tilt/d_gain:=0.0',
         ], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         spin(1.0)
         assert not diagnostics and not previews, 'No-input startup must wait without indexing arrays'
@@ -158,21 +169,24 @@ def main():
         spin(1.2)
         first_step = next(msg for msg in diagnostics[before_goal:]
                           if abs(msg.x_error.position.y) > 0.0009)
-        assert abs(first_step.del_theta_tilt - 0.004) < 1e-7
-        assert abs(first_step.del_theta_pan + 0.003) < 1e-7
+        assert 0.0 < first_step.dt <= max_control_dt
+        assert abs(first_step.del_theta_tilt - 0.004 * first_step.dt) < 1e-7
+        assert abs(first_step.del_theta_pan + 0.003 * first_step.dt) < 1e-7
         assert list(previews[-1].target_position) != motor_origin
-        assert all(msg.target_position == previews[-1].target_position for msg in previews[-5:])
+        assert any(msg.target_position != previews[-1].target_position for msg in previews[-5:])
         assert diagnostics[-1].x_desired.position.x == diagnostics[-1].x_actual.position.x
         assert abs(diagnostics[-1].x_error.position.y - 0.001) < 1e-10
         assert abs(diagnostics[-1].x_error.position.z + 0.001) < 1e-10
-        assert abs(diagnostics[-1].del_theta_pan) < 1e-10
-        assert abs(diagnostics[-1].del_theta_tilt) < 1e-10
+        for message in diagnostics[-5:]:
+            assert 0.0 < message.dt <= max_control_dt
+            assert abs(message.del_theta_tilt - 0.004 * message.dt) < 1e-7
+            assert abs(message.del_theta_pan + 0.003 * message.dt) < 1e-7
         assert parameter('control_mode', 3).successful
         spin(0.25)
         assert diagnostics[-1].x_desired != diagnostics[-1].x_actual
         assert not parameter('position_control/pid_controller_tilt/i_gain', 1.0).successful
         assert not parameter('position_control/pid_controller_pan/p_gain', -1.0).successful
-        print('PASS: constant-error no drift, X ignored, same-mode no reset, bad gain rejection', flush=True)
+        print('PASS: persistent error integrates angular rate using source-frame dt, X ignored, same-mode no reset, bad gain rejection', flush=True)
 
         spin(0.05)
         before = len(diagnostics)
@@ -180,7 +194,7 @@ def main():
         saved_goal = diagnostics[-1].x_desired
         saved_target = list(previews[-1].target_position)
         feed['angle_kind'] = 'duplicate'
-        spin(0.7)
+        spin(feedback_timeout + 0.3)
         assert len(diagnostics) <= before + 1  # Allow one in-flight sample.
         assert len(previews) <= preview_before + 1, 'Camera gaps must not send a hold/extra command'
         assert statuses[-1].startswith('WAITING: fresh image')
@@ -189,30 +203,45 @@ def main():
         before = len(diagnostics)
         spin(0.4)
         assert len(diagnostics) > before, 'Camera-only gaps must resume automatically'
-        assert diagnostics[before].dt > 0.25, 'Preserve the true source-frame gap in diagnostics'
-        assert all(msg.dt > 0.0 for msg in diagnostics[before:]), 'Not a new mode entry'
+        assert all(0.0 < msg.dt <= max_control_dt for msg in diagnostics[before:]), (
+            'Recovery must skip the missing interval and resume on normal frames')
         assert diagnostics[-1].x_desired == saved_goal
-        assert list(previews[-1].target_position) == saved_target
+        for message in diagnostics[before:]:
+            assert abs(message.del_theta_tilt - 0.004 * message.dt) < 1e-7
+            assert abs(message.del_theta_pan + 0.003 * message.dt) < 1e-7
+        assert list(previews[-1].target_position) != saved_target
         assert statuses[-1] == 'READY (dry-run)'
         feed['angle'] = False
-        spin(0.7)
+        spin(feedback_timeout + 0.3)
         assert statuses[-1].startswith('WAITING: fresh image')
         feed['angle'] = True
         before = len(diagnostics)
         spin(0.35)
         assert len(diagnostics) > before and diagnostics[-1].x_desired == saved_goal
+        assert all(0.0 < msg.dt <= max_control_dt for msg in diagnostics[before:])
 
-        # Even a continuous low image rate must not repeatedly latch or reset.
+        # Fresh but slow frames must not accumulate motion allowance. The
+        # integration threshold stays .25s even with a 1s freshness timeout.
         feed['period'] = 0.35
+        spin(0.45)  # Drain the previously scheduled normal-rate frame.
         before = len(diagnostics)
-        spin(1.2)
-        assert len(diagnostics) >= before + 2
-        assert diagnostics[-1].dt > 0.25
-        assert diagnostics[-1].x_desired == saved_goal
+        preview_before = len(previews)
+        saved_target = list(previews[-1].target_position)
+        spin(1.1)
+        assert len(diagnostics) == before, 'Slow frames must not integrate commands'
+        assert len(previews) == preview_before, 'Slow frames must not issue targets'
+        assert list(previews[-1].target_position) == saved_target
+        assert statuses[-1].startswith('WAITING: feedback recovered')
         assert not any(status.startswith('FAULT') for status in statuses)
         feed['period'] = 0.1
+        spin(0.65)
+        assert len(diagnostics) > before, 'Normal frame rate must resume without re-entry'
+        assert diagnostics[-1].x_desired == saved_goal
+        assert all(0.0 < msg.dt <= max_control_dt for msg in diagnostics[before:])
+        assert statuses[-1] == 'READY (dry-run)'
+        assert not any(status.startswith('FAULT') for status in statuses)
         reenter()
-        print('PASS: duplicate/missing/slow camera frames auto-resume, goal/target preserved, no hold or mode reset', flush=True)
+        print('PASS: camera gaps and slow frames preserve goal/target, skip catch-up and resume without a fault latch', flush=True)
 
         feed['period'] = 0.05
         spin(0.6)
@@ -220,12 +249,13 @@ def main():
         for invalid in ['nan', 'wrong_frame', 'stale']:
             saved_goal = diagnostics[-1].x_desired
             feed['angle_kind'] = invalid
-            spin(0.55)
+            spin(feedback_timeout + 0.2)
             assert statuses[-1].startswith('WAITING: fresh image'), invalid
             feed['angle_kind'] = 'valid'
             before = len(diagnostics)
             spin(0.25)
             assert len(diagnostics) > before and diagnostics[-1].x_desired == saved_goal
+            assert all(0.0 < msg.dt <= max_control_dt for msg in diagnostics[before:])
         feed['bad_load'] = True
         spin(0.35)
         assert statuses[-1].startswith('FAULT')
@@ -237,7 +267,7 @@ def main():
             # Real sensor faults still latch, including while the camera is absent.
             feed['angle'] = False
             feed[sensor] = False
-            spin(0.6)
+            spin(feedback_timeout + 0.2)
             assert statuses[-1].startswith('FAULT'), sensor
             feed[sensor] = True
             feed['angle'] = True
@@ -257,8 +287,9 @@ def main():
         spin(0.3)
         first_step = next(msg for msg in diagnostics[before_goal:]
                           if abs(msg.x_error.position.y) > 0.00009)
-        assert abs(first_step.del_theta_tilt - 0.0007) < 1e-7
-        assert abs(first_step.del_theta_pan + 0.0006) < 1e-7
+        assert 0.0 < first_step.dt <= max_control_dt
+        assert abs(first_step.del_theta_tilt - 0.0007 * first_step.dt) < 1e-7
+        assert abs(first_step.del_theta_pan + 0.0006 * first_step.dt) < 1e-7
         print('PASS: motor/loadcell timeout, tension trip, both-axis startup/runtime gains applied', flush=True)
         assert not actual_commands, 'Dry-run leaked an actuator command'
         print(f'PASS: zero actuator messages; diagnostics={len(diagnostics)}; logs={log_dir}', flush=True)

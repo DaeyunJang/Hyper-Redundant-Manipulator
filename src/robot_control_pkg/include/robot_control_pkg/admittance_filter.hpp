@@ -3,8 +3,6 @@
 #define ADMITTANCE_FILTER_HPP
 
 #include <Eigen/Dense>
-#include <iostream>
-// #include "control_parameters.hpp"
 
 class AdmittanceFilter {
 public:
@@ -12,7 +10,7 @@ public:
    * @brief Construct a new Admittance Filter object
    * @note Must be defined as a Cartesian-coordinate(6 DOF) matrix
    */
-  AdmittanceFilter(); // Default(Identity) Matrix
+  AdmittanceFilter(); // Default: passive zero matrices.
   AdmittanceFilter(const Eigen::MatrixXd& mass_matrix,const Eigen::MatrixXd& damping_matrix, const Eigen::MatrixXd& spring_matrix);
   ~AdmittanceFilter();
 
@@ -20,18 +18,16 @@ public:
   void setMassMatrix(const Eigen::MatrixXd& mass_matrix);
   void setDampingMatrix(const Eigen::MatrixXd& damping_matrix);
   void setSpringMatrix(const Eigen::MatrixXd& spring_matrix);
+  void reset();
+  void stopVelocity();
   // void setDesiredForceVector(const Eigen::VectorXd& desired_force);
   // void setExternalForceVector(const Eigen::VectorXd& external_force);
   
-  // Update function to compute x_t based on the given force F_t
   /**
-   * @brief Solve differential equation of x_t from x_d
-   * 
-   * @param force 
-   * @example
-   * setDesiredForceMatrix(desired_force);
-   * setExternalForceMatrix(external_force);
-   * computeAdmittance();
+   * @brief Legacy 6D model: M*xddot + B*xdot + K*x = desired - external.
+   * @note No displacement/velocity saturation is applied by this filter.
+   * Matrices may be symmetric positive semidefinite and coupled. Axes with
+   * zero rows in all three matrices are inactive; their force is ignored.
    */
   Eigen::VectorXd computeAdmittance(
     const Eigen::VectorXd& desired_force,
@@ -55,9 +51,6 @@ public:
   Eigen::VectorXd xtdot_;  // Velocity vector (6x1)
   Eigen::VectorXd xtddot_;  // Acceleration vector (6x1)
   
-  double dt_;
-
-
-private:
+  double dt_ = 0.0;
 };
 #endif  // ADMITTANCE_FILTER_HPP

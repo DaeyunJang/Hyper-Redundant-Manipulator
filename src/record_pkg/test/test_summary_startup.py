@@ -101,7 +101,7 @@ def test_delayed_motor_skips_only_prefix_keeps_original_times_and_sources(tmp_pa
     assert startup['first_written_elapsed_s'] == pytest.approx(.2)
     assert startup['skipped_by_group']['motor'] == 2
     assert startup['later_incomplete_rows'] == 0
-    # Required startup signals do not include tag detection or exact-stamp tip estimates.
+    # Required startup signals do not include tag detection or tip estimates.
     assert rows[0]['tag_id0_to_id1.matched'] == 'False'
     assert rows[0]['estimated_tip.matched'] == 'False'
     assert rows[0]['fk_tip.matched'] == 'False'

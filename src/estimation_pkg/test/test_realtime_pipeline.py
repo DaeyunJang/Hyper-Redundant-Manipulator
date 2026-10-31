@@ -43,6 +43,7 @@ def test_visualization_snapshot_is_independent_of_next_reconstruction():
     node.result_lock = threading.Lock()
     node.event = threading.Event()
     node.segment_skeleton_image_publisher = publisher()
+    node.segment_image_geometry_publisher = publisher(0)
     node.segment_body_binary_image_publisher = publisher()
     node.centerline_points_publisher = publisher()
     node.reconstruction_markers_publisher = publisher()

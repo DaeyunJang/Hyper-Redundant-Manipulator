@@ -37,9 +37,15 @@ public:
    * 2. compute Admittance Y(s) using values set from 1.
    * 3. x_t = x_f + x_d
    * the information are maybe obtained from other processes (ROS2)
-   * @param f_desired 6DOF Desired force for manipulation
-   * @param f_env 6DOF External(or Environment) force
-   * @return Eigen::VectorXd target pose trajectory
+   * @param f_desired Desired force ON the HRM, in hrm_base (N, Nm).
+   * @param f_env Estimated force ON the HRM, in hrm_base (N, Nm).
+   * @note Physical compliance convention:
+   * M*delta_ddot + B*delta_dot + K*delta = f_env - f_desired.
+   * The node applies the model force_sign before this call and adds the returned
+   * offset to the nominal position. Both inputs are negated only at the legacy
+   * desired-minus-environment filter boundary to obtain this RHS. Public force
+   * diagnostics retain the ON-HRM convention; del_f_ reports the physical RHS.
+   * @return Eigen::VectorXd pose offset (not an absolute target pose)
    */
   Eigen::VectorXd compute(
     const Eigen::VectorXd& f_desired,

@@ -28,11 +28,17 @@ Eigen::VectorXd AdmittanceController::compute(
   const Eigen::VectorXd& f_env,
   const double& dt
 ) {
+  // Public forces are forces ON the HRM in hrm_base; offset is ADDED to the
+  // nominal position. Compliance therefore needs RHS = environment - target:
+  // with target=0 a positive external force must produce a positive offset.
+  // Adapt to the legacy filter's desired-minus-environment algebra without
+  // changing its 6x6 dynamics. This is NOT another sensor/frame conversion;
+  // the node's force_sign conversion and the public diagnostics stay intact.
+  auto del_xf = this->admittance_filter_.computeAdmittance(-f_desired, -f_env, dt);
   this->f_desired_ = f_desired;
   this->f_env_ = f_env;
-  this->del_f_ = f_desired - f_env;
+  this->del_f_ = this->admittance_filter_.force_error_;
   this->dt_ = dt;
-  auto del_xf = this->admittance_filter_.computeAdmittance(f_desired, f_env, dt);
   this->del_xf_ = del_xf;
   return del_xf;
 }

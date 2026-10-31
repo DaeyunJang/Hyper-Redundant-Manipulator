@@ -842,6 +842,9 @@ class RBSC:
     def reconstruct_3d_segments(self, points_xyz, timestamp_sec=None):
         """Fit a normalized parametric 3D quartic and reconstruct segments."""
         finite = np.all(np.isfinite(points_xyz), axis=1)
+        # Preserve pixel correspondence for optional GUI overlays only. These
+        # indices never participate in fitting, angle estimation or filtering.
+        source_indices = np.flatnonzero(finite)
         points = points_xyz[finite]
         if len(points) < 5:
             raise ValueError('At least five valid 3D points are required.')
@@ -852,6 +855,7 @@ class RBSC:
                 np.linalg.norm(np.diff(points, axis=0), axis=1) > 1e-9,
             ))
             points = points[keep]
+            source_indices = source_indices[keep]
 
         num_segments = int(self.config['num_of_segments'])
         num_bending_joints = int(self.config['num_of_bending_joints'])
@@ -1073,6 +1077,7 @@ class RBSC:
             curve_length_normalized * self.hardware_length_m
         )
         self.raw_s_3d = s_raw
+        self.raw_s_3d_source_indices = source_indices
         return self.segment_points_xyz, self.segment_directions_xyz
 
     def get_joints(self):
@@ -1147,7 +1152,14 @@ class RBSC:
             transform_camera_from_base=None,
             timestamp_sec=None,
             binary_thresh=120,
-            filfinder_flag=False):
+            filfinder_flag=False,
+            segmentation_only=False):
+        """Process a crop; optionally return the smoothed binary mask before thinning.
+
+        The offline-only option needs neither depth nor calibration. Failure still
+        returns None with last_error, never a cached mask from a previous frame.
+        The default live reconstruction path is unchanged.
+        """
         timing_start = time.perf_counter()
         self.last_error = None
         try:
@@ -1225,6 +1237,9 @@ class RBSC:
             self.body_image_origin = (labels == max_label).astype(np.uint8) * 255
             self.body_image = self.smoothing(binary=self.body_image_origin, k_size=15)
             timing_body_mask_done = time.perf_counter()
+
+            if segmentation_only:
+                return self.body_image
 
             # print(f'{self.image} / {self.image.shape} / {self.image.size} ')
             # print(f'{self.body_image} / {self.body_image.shape} / {self.body_image.size} ')

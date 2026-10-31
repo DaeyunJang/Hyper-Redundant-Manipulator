@@ -8,12 +8,12 @@ from rclpy.qos import QoSReliabilityPolicy
 
 from rclpy.executors import SingleThreadedExecutor
 from rcl_interfaces.msg import ParameterDescriptor
-from geometry_msgs.msg import Point, PointStamped, TransformStamped
+from geometry_msgs.msg import Point, Point32, PointStamped, TransformStamped
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Header, String
 from visualization_msgs.msg import Marker, MarkerArray
-from custom_interfaces.msg import SegmentAngle
+from custom_interfaces.msg import SegmentAngle, SegmentImageGeometry
 from cv_bridge import CvBridge
 from ament_index_python.packages import get_package_share_directory
 from scipy.spatial.transform import Rotation
@@ -23,6 +23,7 @@ from tf2_ros import TransformBroadcaster
 from estimation_pkg.postprocess import RBSC
 from estimation_pkg.runtime import configure_image_transport
 from estimation_pkg.crop_depth import crop_depth_calibration
+from estimation_pkg.segment_image_geometry import segment_image_pixels
 # from postprocess import RBSC
 
 import threading
@@ -221,6 +222,9 @@ class SegmentEstimationNode(Node):
       'estimated_segment_skeleton_image',
       QOS_VISUALIZATION_LATEST
     )
+        self.segment_image_geometry_publisher = self.create_publisher(
+            SegmentImageGeometry, 'estimated_segment_image_geometry',
+            QOS_VISUALIZATION_LATEST)
         self.centerline_points_publisher = self.create_publisher(
       PointCloud2,
       'estimated_segment_centerline_points',
@@ -744,6 +748,19 @@ class SegmentEstimationNode(Node):
         if self.segment_skeleton_image_publisher.get_subscription_count():
             packet['overlay'] = self.rbsc.image.copy()
             packet['extended_yx_coords'] = self.rbsc.extended_yx_coords.copy()
+        if self.segment_image_geometry_publisher.get_subscription_count():
+            try:
+                packet['image_geometry'] = segment_image_pixels(
+                    self.rbsc.extended_yx_coords,
+                    self.rbsc.raw_s_3d_source_indices, self.rbsc.raw_s_3d,
+                    self.rbsc.s_segment, self.rbsc.s_segment_center,
+                    self.rbsc.image.shape)
+            except Exception as error:
+                # An optional display must never suppress feedback angles,
+                # skeleton publication, or the remaining visualization packet.
+                self.get_logger().warning(
+                    f'Contact image geometry unavailable: {error}',
+                    throttle_duration_sec=2.0)
         if self.segment_body_binary_image_publisher.get_subscription_count():
             packet['body_image'] = self.rbsc.body_image.copy()
         if self.centerline_points_publisher.get_subscription_count():
@@ -758,6 +775,24 @@ class SegmentEstimationNode(Node):
         with self.result_lock:
             self.latest_visualization = packet
             self.event.set()
+
+    def publish_segment_image_geometry(self, header, geometry):
+        """Publish crop pixels with the exact skeleton image source header."""
+        try:
+            message = SegmentImageGeometry()
+            message.header = header
+            message.width = geometry.width
+            message.height = geometry.height
+            message.samples_per_segment = geometry.samples_per_segment
+            message.pixels = [Point32(x=float(x), y=float(y), z=0.0)
+                              for x, y in geometry.pixels]
+            message.centers = [Point32(x=float(x), y=float(y), z=0.0)
+                               for x, y in geometry.centers]
+            self.segment_image_geometry_publisher.publish(message)
+        except Exception as error:
+            self.get_logger().warning(
+                f'Contact image geometry publication failed: {error}',
+                throttle_duration_sec=2.0)
 
     def publish_crop_depth(self, packet):
         """Preserve raw depth values and source time; no colorization or rescale."""
@@ -810,11 +845,13 @@ class SegmentEstimationNode(Node):
                 publish_body = 'body_image' in packet
                 publish_cloud = 'points_xyz' in packet
                 publish_markers = 'curve_dense_xyz' in packet
+                publish_image_geometry = 'image_geometry' in packet
                 if not any((
                         publish_skeleton,
                         publish_body,
                         publish_cloud,
-                        publish_markers)):
+                        publish_markers,
+                        publish_image_geometry)):
                     continue
 
                 visualization_start = time.perf_counter()
@@ -828,7 +865,7 @@ class SegmentEstimationNode(Node):
               'First 3D curve reconstruction completed; visualization started.')
                     first_result = False
 
-                if publish_skeleton or publish_body:
+                if publish_skeleton or publish_body or publish_image_geometry:
                     image_header = Header()
                     image_header.stamp = result_stamp
                     image_header.frame_id = result_frame_id
@@ -859,6 +896,9 @@ class SegmentEstimationNode(Node):
                     self.segment_body_binary_image_publisher.publish(
                         segment_body_binary_image_msg
                     )
+                if publish_image_geometry:
+                    self.publish_segment_image_geometry(
+                        image_header, packet['image_geometry'])
                 visualization_images_done = time.perf_counter()
 
                 if publish_cloud or publish_markers:

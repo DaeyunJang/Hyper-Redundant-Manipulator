@@ -460,6 +460,9 @@ class RecordNode(Node):
         if (report.get('summary_csv') or {}).get('status') == 'no_common_start':
             self.session.detail = ('Bag/topic CSVs preserved; summary has no common start for '
                                    'the required training signals. See summary.schema.json.')
+        if (report.get('control_tracking_csv') or {}).get('status') == 'no_commands':
+            self.session.detail += (' No /control/reference samples: control_tracking.csv has '
+                                    'no command rows. Check controller build/topic selection.')
         if self.session.metadata['data_quality'] != 'complete':
             self.session.detail += ' INCOMPLETE required data: inspect postprocess.json.'
         self.session.persist()

@@ -27,6 +27,7 @@ def finalize_session(directory):
                           image_integrity=manifest.get('image_integrity'),
                           depth_integrity=manifest.get('depth_integrity'),
                           summary_csv=manifest.get('summary_csv'),
+                          control_tracking_csv=manifest.get('control_tracking_csv'),
                           status=manifest['status'])
         else:
             report.update(csv_status='disabled', status='complete', integrity=audit_bag(

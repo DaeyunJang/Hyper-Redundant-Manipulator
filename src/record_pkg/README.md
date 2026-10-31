@@ -5,6 +5,80 @@
 GUI 서비스 `/data/record`는 유지한다. **Record component 시작과 녹화 시작은 별개**다.
 recorder는 모터 명령을 발행하지 않으며 물리 출력 Enable을 변경하지 않는다.
 
+## 제어 실험 전용 CSV (2026-10-26)
+
+Record Stop 후 기존 export 과정에서 **`csv/control_tracking.csv`**와
+`csv/control_tracking.schema.json`을 함께 만든다. 학습용 `summary.csv`의
+268개 열과 기존 토픽별 CSV는 변경하지 않는다. 기록 중 실시간으로 CSV를 쓰는
+방식이 아니라, 저장된 수치 bag을 종료 후 변환하는 기존 흐름을 사용한다.
+
+| 항목 | 주요 열 / 의미 |
+|---|---|
+| 제어 기준 | `control_mode`, `source_time_ns`, `feedback_time_ns`, `elapsed_s`, `contact_segment_id` |
+| Kinematics 명령 | `pan_rad`, `tilt_rad`: 실제 cable IK에 전달한 signed rad 값. tip Euler 자세가 아님 |
+| Position/Admittance 명령 | `nominal_y_m/z_m`: 원래 목표, `target_y_m/z_m`: 해당 위치제어 단계에서 사용한 목표. Admittance에서는 변위 보정 이후 값 |
+| 곡선 기반 tip | `estimated_tip.x_m/y_m/z_m`: 길이 보정된 최종 경계점 |
+| 관절각 FK tip | `fk_tip.x_m/y_m/z_m`, `fk_tip_tf.x_m/y_m/z_m/qx/qy/qz/qw/roll_deg/pitch_deg/yaw_deg` |
+| 추정 tip 방향 | `estimated_tip_orientation.qx/qy/qz/qw/roll_deg/pitch_deg/yaw_deg`: 마지막 링크 DH 방향. `center_19`의 **위치는 tip으로 사용하지 않음** |
+| 위치 오차 | `target_minus_fk_y_m/z_m/yz_norm_m`: 실제 사용 목표 − 관측 각도 기반 FK 위치 |
+| 대응 상태 | 각 그룹의 `source_time_ns`, `bag_receive_time_ns`, `time_difference_ms`, `matched`, `numeric_valid`, `frame_id` |
+
+위치는 `hrm_base` 기준 m, 명령 pan/tilt는 rad, Euler 표시는 deg다. X 위치는
+관측/기록만 하며 제어축을 추가하지 않는다. Kinematics에는 Cartesian 목표가
+없으므로 nominal/target XYZ와 위치 오차는 빈칸이다. Admittance와 Position의
+pan/tilt 열은 위치 목표가 아니라 위치제어기가 생성한 각도 명령을 담는다.
+
+- 새 `/control/reference` 메시지마다 한 행을 만든다. 메시지는 명령 생성 시각,
+  모드, 명령값, 피드백 영상 시각을 함께 기록하므로 header 없는 예전
+  `/surgical_tool_pose`에서 모드를 추측하지 않는다.
+- 사인파는 각 명령 갱신이 기록된다. Kinematics의 단발 고정 명령은 그 순간만
+  기록되며, 같은 목표를 유지하는 동안 주기적으로 재발행하지 않는다. 고정 명령
+  실험은 **Record 시작 후 명령을 전송**해야 한다. 녹화 전에만 보낸 고정 명령을
+  추측해 복원하거나 이후 모든 tip 프레임에 자동으로 반복 채우지는 않는다.
+- Kinematics는 명령 시각, Position/Admittance는 그 계산에 사용된 영상 시각에
+  가장 가까운 tip 데이터를 연결한다. 두 시각은 별도 열로 보존한다. 각 위치와
+  방향 스트림은 독립적으로 대응되므로 완전히 같은 촬영 시각을 보장하지 않는다.
+- 기존 tip 저장 정책처럼 **시간차 상한 없이 nearest**를 사용한다. 일시적인
+  공백에도 값을 연결하지만, 긴 공백에도 오래된 값이나 뒤의 값이 연결될 수 있다.
+  `time_difference_ms`는 tip 시각 − 기준 시각이며, 지연 보정/보간은 하지 않는다.
+  RMSE 계산 전 시간차와 유효성 열을 확인한다. 정말 데이터가 없거나 frame이
+  `hrm_base`가 아니면 빈칸으로 두며 0으로 채우지 않는다.
+- `motor_output_enabled`는 설정된 출력 gate일 뿐 실제 모터 구동 성공 확인이
+  아니다. 다른 보호 조건이 명령 출력을 차단할 수 있다. recorder/CSV가 모터를
+  움직이거나 제어 로직/게인/안전 조건을 변경하지 않는다.
+- `/control/reference`, `/position/sine_reference`, `/position/sine_status`는 기본
+  기록 목록에 추가하되 **필수 시작 조건으로 만들지 않았다**. 별도 CSV는 센서나
+  학습 summary의 준비 여부에 종속되지 않는다. config의
+  `control_tracking_csv.enabled=false`로 이 추가 CSV만 끌 수 있다.
+- 새 토픽이 없는 과거 bag/옛 controller는 헤더만 있는 CSV와 `no_commands`
+  상태를 남긴다. 예전 토픽 데이터와 summary는 그대로다. 기존 데이터셋을 자동
+  재변환하거나 덮어쓰지 않는다.
+
+적용 시 녹화/export와 모터 운동을 종료하고 관련 노드를 안전하게 정지한 뒤:
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select custom_interfaces robot_control_pkg record_pkg
+source install/setup.bash
+```
+
+그 다음 controller와 Data recorder를 다시 시작해야 새 메시지/기록 목록이 적용된다.
+이미 토픽별 CSV에 `/control/reference`가 있고 추가 CSV만 아직 없는 경우에는:
+
+```bash
+ros2 run record_pkg export_control_tracking /absolute/session/csv
+```
+
+이 명령은 기존 두 출력 파일이 있으면 덮어쓰기를 거부한다. 상세 열 정의와
+누락/대응 수는 `control_tracking.schema.json`, 자동 변환 결과는 `manifest.json`과
+세션 `postprocess.json`에 남긴다.
+
+검증: 격리 경로의 세 패키지 빌드, recorder 기능 테스트 490건,
+새 메시지 실제 offline bag → CSV 왕복, DDS domain 84의 Kinematics/Position/
+Admittance dry-run 발행 검사를 통과했다. 모터 출력은 false이며 actuator 발행은
+0건이었다. 기존 C++ 기능 테스트는 통과했고 전체 패키지 lint에는 기존 스타일
+오류가 남아 있다. 정상 실행 중인 controller/recorder는 재시작하지 않았다.
+
 ## 이미지 저장 선택 (2026-09-27)
 
 GUI Recording 설정 줄의 **Save crop RGB/depth**로 세션별 저장 여부를 선택한다.
@@ -302,7 +376,14 @@ extrinsic XYZ Euler(deg), 즉 `Rz(yaw) Ry(pitch) Rx(roll)`를 함께 남긴다.
 
 - 센서와 태그는 기본 ±25 ms 이내의 가장 가까운 원본 시각을 연결한다. 과거/미래
   표본 모두 가능하고 가까운 표본이 여러 행에 재사용될 수 있다. 학습용 동기화가 아니다.
-- 추정/FK 위치와 회전은 해당 각도와 **원본 시각이 정확히 같을 때만** 연결한다.
+- `estimated_tip`, `fk_tip`, `fk_tip_tf`, `estimated_tip_orientation`은 **시간 제한 없이**
+  각도 촬영 시각과 가장 가까운 원본 표본을 선택한다. 과거/미래 모두 대상이며,
+  정확히 같은 시각이 우선이고 거리 동률이면 과거를 선택한다.
+  `max_time_difference_ms`와 CLI의 같은 옵션은 이 네 그룹에 적용되지 않는다.
+  데이터 공백이나 발행 종료 뒤에도 먼 표본이 재사용될 수 있으므로 학습 시 실제
+  `time_difference_ms`를 확인한다. 시간차와 원본 시각은 덮어쓰지 않는다.
+  스키마의 해당 그룹에는 `matching=nearest_unbounded`, `max_time_difference_ms=null`을
+  기록한다. 이 최신 정책은 2026-10-11부터 적용되며 기존 summary는 자동 변경되지 않는다.
 - 각 그룹의 `matched`, `source_time_ns`, `bag_receive_time_ns`, `frame_id`,
   `time_basis`, `time_difference_ms`를 함께 남긴다. `matched`는 시간 연결 성공만
   뜻하고, 센서 건강·힘 보정·카메라 동기화를 보장하지 않는다.
@@ -311,7 +392,8 @@ extrinsic XYZ Euler(deg), 즉 `Rz(yaw) Ry(pitch) Rx(roll)`를 함께 남긴다.
 - `/detections` CSV가 있으면 가장 가까운 검출 프레임에 ID0·ID1이 모두 있어야
   하며, 그 프레임과 정확히 같은 시각의 상대 자세만 사용한다. 명시적인 미검출을
   주변 유효 자세로 채우지 않는다. detections가 없으면 `detection_guard=unavailable`.
-- 오래된/미수신 값, 잘못된 숫자/배열 길이는 빈칸이다. 실제 0은 0으로 보존한다.
+- 시간 제한을 넘긴 센서/태그 표본, 미수신 값, 잘못된 숫자/배열 길이는 빈칸이다.
+  Tip 네 그룹은 오래됐다는 이유만으로 빈칸을 만들지 않는다. 실제 0은 0으로 보존한다.
 - 위 시작 조건을 통과한 이후에는 빈칸 때문에 행 전체를 삭제하지 않는다.
   단, 각도 anchor의 시각이 0/누락이거나
   중복/역행하면 그 anchor는 summary에서 제외하고 schema에 건수를 기록한다.

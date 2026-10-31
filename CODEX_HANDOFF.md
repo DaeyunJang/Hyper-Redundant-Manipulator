@@ -1,6 +1,1141 @@
 # Codex Handoff
 
-Last updated: 2026-09-28 (Asia/Seoul)
+Last updated: 2026-10-31 (Asia/Seoul)
+
+## Git staging exclusions (2026-10-31)
+
+- Exclude local `/src/estimation_pkg/models/`: about30.6GiB, mostly validation
+  NPZs/workbooks plus bundles. No files removed. New-PC inference requires
+  separately copied `hrm_bundle.pt`; instructions added to force_id_inference.md.
+- User approved removing blanket `scripts` ignore. Retain command/diagnostic/
+  figure-generation scripts and regression tests; output under docs/figures,
+  build/install/log/record and caches remains ignored. Added coverage exclusions.
+- Existing .gitignore changes otherwise preserved. Dry-run staging checked;
+  no real git add, commit, index removal or history rewrite. Existing tracked
+  deletions (legacy models and docs/analysis files) remain user changes; ignoring
+  paths does not suppress those deletions or reduce existing .git history size.
+- Remaining present modified/untracked candidate files total about1.9MiB, not
+  an estimate of push size. Main .git directory was about32GiB before this change.
+
+## ON-HRM force convention / compliance sign correction (2026-10-31, current)
+
+- After reporting divergence, user confirmed stopping and authorized another
+  correction. Public forces remain ON the HRM in hrm_base, with node input
+  `F_env=-prediction`. Since `goal=nominal+offset`, physical compliance requires
+  `M*offset_ddot+B*offset_dot+K*offset=F_env-F_target`. Restored the wrapper's
+  `computeAdmittance(-f_desired,-f_env,dt)` adapter to the legacy filter algebra.
+  The previous direct desired-env rollback below is superseded. It verified
+  arithmetic but could reverse compliance under the current force definition.
+- Position PID, motor mapping, source-image dt, matrices/solver, resets, force
+  input sign, GUI target signs and hardware guards are NOT modified. No deadband
+  or offset/velocity cap added. User-edited source M=.05/B1/K20 is retained;
+  earlier live M=.1/B15/K50 is not automatically preserved by a node restart.
+  Read actual parameters before testing. Source defaults are not validated gains.
+- During the isolated build, concurrent operator edits temporarily left
+  FORCE_TIMEOUT_SEC empty, then set it to1.0 (outside the current <=.25 guard).
+  User explicitly approved restoring .25 and sign-only work; restored only that
+  constant. Kept operator edits MAX_OFFSET_M=.002/MAX_VELOCITY_M_S=.001; these
+  constants are unused in the current path and do NOT reinstate motion clamps.
+- Concurrent operator edits also changed source position KP20.55→25.55,
+  max angular speed40→25deg/s, position feedback timeout1→.25s, motor velocity
+  profile50→25. Preserved them without editing PID logic. They are included in
+  the new build; do not claim the whole running experiment differs only by sign.
+- Read-only capture after the divergence report saw only three paired frames:
+  latest Y target=-100mN, correctedFy=+550.2mN, nominalY=-11.443mm,
+  offsetY=-11.572mm, effectiveY=-23.014mm; correctedFz=+588.0mN.
+  This was not necessarily the user's reported zero-target/near-zero-force moment.
+  User later estimated near-zero force as about50mN. Neither that nor UNLOADED
+  means numeric zero. Constant50mN gives equilibrium2.5mm atK20 or1mm atK50.
+- Pre-change source files/tests/docs and installed binary backed up at
+  `/tmp/hrm_admittance_pre_compliance_20261031.vsgYEo`. This backup contains the
+  problematic direct legacy sign, not a validated safe rollback. Do not restore
+  it or an older bounded-offset version automatically if a hardware test fails.
+- Validation: isolated Release build `/tmp/hrm_compliance_sign_20261031.Jare5a`
+  passed all six C++ test targets (11 wrapper tests including 108 combinations
+  of gains/axis/contact/target/bias, plus12 signed perturbation cases). Python
+  GUI/diagnostic regressions229 passed. Domain79 localhost fake-feedback smoke
+  passed391 paired diagnostics, zero actuator messages, output disabled, including
+  Y=-.01 nominal with exactzero state/forces, both force signs and existing guards.
+  Normal workspace build completed, and its six C++ test targets also passed.
+  Hardware controller remains stopped; no automatic restart or motor commands.
+- Physical stability caveat: sampled passive-spring/ideal-position analysis is
+  illustrative, not an identified HRM model. With M=.05/B1/K20 and Ke100N/m,
+  the corrected sign can converge at30Hz but diverge at20Hz or with one-frame
+  force delay. Internal numerical substeps do not remove feedback delay. Do not
+  infer physical convergence from algebra or the selected simulation cases.
+
+## Legacy admittance force-error sign restored (2026-10-31, superseded)
+
+- User explicitly requested the legacy convention after comparing the original
+  humble controller with the newer double-input sign adapter. Removed that adapter:
+  `computeAdmittance(f_desired, f_env, dt)` now receives both arguments unchanged.
+  Thus `delta_force = F_target - F_env`, and `x_t = x_desired + delta_x`.
+  This supersedes older entries below describing `F_env - F_target`.
+- Node input `force_sign=-1`, hrm_base/N units, Y/Z matrices, M/B/K defaults,
+  Position PID/rate integration, source-image dt, entry resets, hardware guards
+  and the filter's singular solve/numerical substeps are retained. This is NOT
+  a full rollback to old 2D geometry or fixed-step unsafe numerical integration.
+  Equal target/environment forces still cancel; a nonzero offset is not instantly
+  reset when both forces become zero. Unloaded classification does not zero force.
+- Read-only observation before editing found nominal Y=-10 mm was retained but
+  nonzero corrected force added an offset: one matched sample had Fy=+307.3 mN,
+  offsetY=+10.533 mm, effectiveY=+0.533 mm, measuredY=+0.222 mm. That capture used
+  M=.15/B20/K30; an earlier interval used .15/25/2. Do not describe the observed
+  incident as proven zero-force drift or infer a sole sign/model cause from it.
+- The user confirmed stopping; process presence is checked before replacing the
+  normal binary. Testing uses an isolated build and private ROS domain with motor
+  output disabled and actuator topic remapped. No automatic hardware restart.
+- Validation: isolated Release build `/tmp/hrm_legacy_sign_20261031.OEEH6V`
+  succeeded; all six C++ targets passed, including nine wrapper regressions.
+  GUI/diagnostic regression tests: 229 passed. Private domain 79 fake-feedback
+  smoke passed with 395 paired diagnostics and zero actuator messages. Covers
+  positive/negative Y/Z, input sign exactly once, zero-state nominal hold,
+  retained nonzero state on zero force and all existing feedback/hardware guards.
+  These validate code behavior, not physical contact stability or model accuracy.
+- Normal workspace build completed after confirming the hardware controller
+  process exited; all six C++ test targets also passed in the normal build.
+  Controller process remained stopped after validation. No automatic
+  controller/GUI restart or real motor actuation was performed.
+- The earlier request to simplify the force staircase to 100..500..100 was
+  interrupted before edits. Do not claim that script was updated in this task.
+
+## M/B/K tuning assistant and read-only diagnostics (2026-10-29)
+
+- User wants informed M/B/K selection for slow/nonconvergent force response.
+  Added pure `admittance_tuning.py`, offline `AdmittanceTuningDialog`, and a compact
+  Tune button in the existing 48 px panel. Candidate B=Fe/v, M=B*tau,
+  K=budget/distance (K=0 in force mode); initialized from confirmed values, not
+  autotuned. Current/candidate metrics distinguish free-model decay from M/B
+  velocity time constant, and warn about spring residuals and bias drift.
+- Use candidate only stages editors; existing explicit Apply/mode guards remain.
+  No controller, force-sign, default-gain, mode, Enable or axis-selection changes.
+  Shared Y/Z remain active: Fz*=0 does NOT disable Z compliance.
+  No automatic robot motion or GUI restart.
+- New `scripts/inspect_admittance_tuning.py`: read-only three-topic source-stamp
+  join, per-condition tail-error RMSE, spring-balance/inner-lag/drift hints and
+  optional new CSV. Missing pairs, short windows and disabled output are explicit;
+  analysis thresholds are not controller limits. Force uses the controller sign
+  and N→mN conversion, not raw prediction sign or independent force ground truth.
+  Legacy PositionControl reports only pan PD gains; hold both PD axes fixed.
+- Updated controller README defaults to current source .15/20/30 (documentation
+  only; actual running values may differ). Procedure is in that README and
+  docs/CONTROL_READINESS.md.
+- Validation: 265 focused/regression tests passed (candidate math, offscreen Qt,
+  telemetry analysis, existing M/B/K/force-target/PD controls and staircase CLI).
+  Isolated localhost ROS domain 82 fake telemetry passed exact-stamp pairing,
+  spring-balance evidence and disabled-output caveats; no actuator/services used.
+  An 8 s read-only live capture received no diagnostic messages, so physical
+  convergence was NOT validated. Installed symlink imports of new GUI modules
+  work without rebuilding; user-controlled GUI restart is needed to see Tune.
+
+## Terminal admittance force staircase (2026-10-29)
+
+- User requested Fy/Fz separately:0,200,300,400,500,400,300,200,0mN every3s.
+  New standalone `scripts/admittance_force_steps.py --axis fy|fz`, optional
+  `--sign -1`, `--interval`, `--node`, `--timeout`, and ROS-free `--dry-run`.
+  Holds all9steps including initial/final0 (~27s plus acknowledgement latency).
+- Uses existing parameter service, writes ONLY selected target as N; other axis
+  unchanged. GUI/physical force-on-HRM convention, no implicit model-sign flip.
+  Reads vector limit, checks sequence, awaits ACK and stops on error. No controller
+  mode/enable, gains, model, position reference or control algorithm changes.
+- Ctrl+C/SIGTERM/error after a write attempt best-effort requests selected-axis0;
+  failure is explicit. Zero is NOT motor disable/hold; SIGKILL/network loss can
+  leave the last target. User must verify setup/contact/sign before real use.
+- Validation:38 mock tests passed; private localhost ROS domain81 fake parameter
+  server passed both9-step signed sequences, other-axis preservation and Ctrl+C
+  selected-axis0 ACK. No real robot execution or live parameter writes performed.
+  See robot_control_pkg README for commands; no rebuild required.
+
+## Position rate-PD restored after free-motion oscillation (2026-10-29, current)
+
+- User explicitly requested reverting the immediately preceding Position change.
+  Restored `u=Kp*e+Kd*LPF(de/dt)` as angular rate [rad/s], then
+  `q_next=clamp(q_previous+clamp(u,+/-speed)*image_dt,+/-bend_limit)`.
+  This supersedes ONLY the 10/27 rad/update Position change below. Admittance
+  uses the same inner Position controller, so its inner PD changes too.
+- Read-only 12s observation before stopping: Position mode, P20.55/I0/D10,
+  image rate ~30Hz/dt33.34ms, command rate near +/-40deg/s on Y71.4%/Z58.9%
+  of steps. Command saturation is not actual motor-speed measurement; code
+  regression is a plausible oscillation cause, not proof of sole hardware cause.
+- Numeric source defaults unchanged: P20.55/I0/D5, D tau0.05s,
+  angular speed40deg/s and motor profile35. Runtime GUI D10 was not persisted;
+  restarting uses source defaults unless explicitly overridden. Read gains first.
+  GUI tooltips now use P rad/(m*s), D rad/m. No gains auto-retuned.
+- Admittance 6x6 M/B/K, force signs, force gating, PID scalar implementation,
+  control_node frame handling and all motor/loadcell protections untouched.
+- User confirmed stopping before normal install build. Both isolated build
+  `/tmp/hrm_rate_pd_restore_20261029.2Ij8WT` and normal colcon build succeeded;
+  all6 C++ test targets passed in both, including23 Position cases, plus21 GUI
+  mock tests. Position fake-feedback smoke(domain78) passed with output disabled
+  and actuator remapped: actual actuator messages0. Tests include elapsed-time
+  invariance at15/30/60Hz, source dt, frame gaps, runtime gains and retained guards.
+- Admittance fake-feedback smoke(domain79) also passed:369 paired diagnostics,
+  actuator messages0, force signs/targets, unclipped offsets and existing guards.
+  Its test helper now waits for same-stamp Position diagnostics (maximum3s), fixing
+  a cross-topic callback-order race without omitting samples or changing runtime.
+- No real motor movement or automatic controller/GUI restart. Normal install is
+  ready for user-controlled restart; physical oscillation must still be checked.
+
+## Disconnected skeleton visualization (2026-10-29)
+
+- User asked how fragmented body masks/skeletons are processed and requested overlays.
+  Offline feasibility front end preserves connected components area>=16, Lee thinning,
+  weighted 8-neighbour double-sweep main paths, minimum path points=1, greedy nearest
+  endpoint ordering from image-bottom base. No hidden pixels or XYZ are inserted.
+  Valid-depth points feed the shared origin-constrained 3D quartic; gap parameter
+  distances are endpoint chords, not observed hidden arc lengths. Not unchanged live preprocessing.
+- New `scripts/prepare_segmentation_skeleton_figure.py` reads only frozen NPZ/PNG/CSV.
+  Main figure folder now has `B_visible_body_skeleton.png`, native skeleton PNGs,
+  RGB/mask overlays, `source_data/example_skeleton_pixels.csv`, and
+  `skeleton_visualization.json`. Main A-D and original results are unchanged.
+- Example clean/thick30/multi3_30 support counts146/68/31 match valid observed pixels.
+  Three gaps has4 paths, base-to-tip2/8/3/18 pixels with raw IDs4/3/2/1.
+  P1-P4 denote path traversal order, NOT anatomical segment/joint IDs.
+  First observed pixel is(v295,u189); short pieces can thin to1-2pixels.
+- Portable MATLAB adds `B_skeleton` selector and `preview_skeleton.png`; default all
+  now10figures. Added exact skeleton pixel Excel sheet and supporting PNGs/manifest.
+  No MATLAB/Octave runtime available: static/data checks only; previews are Python renders.
+
+## Portable MATLAB segmentation figures (2026-10-28)
+
+- Copyable bundle: `docs/figures/segmentation_occlusion_matlab_20261028/`.
+  Single MATLAB file `make_segmentation_figures.m` (helpers merged as local functions)
+  plots A/B/B_skeleton/C/C_raw/D/D_position/D_angles/
+  joints/ABCD from included PNG images and `data/segmentation_figure_data.xlsx`.
+  No repository, Python, model, ROS, camera, or external original paths needed at runtime.
+- Excel preserves all104 paired frames and1872 joint deltas, original metric units,
+  exact timestamp strings and signed angles. Builder `scripts/package_segmentation_matlab.py`
+  verifies Excel round trip, per-frame FK/q differences, perjoint RMSE/MAE and source hashes.
+- Targets base MATLAB R2020b+, no image/statistics toolboxes. MATLAB/Octave is absent
+  on this machine: data/static verification only; do not claim MATLAB runtime rendering.
+  `preview_reference.png` is the earlier Python figure, explicitly not a MATLAB render.
+- User requested no PDF/SVG and editable C/D plots: outputs PNG/FIG only in `output/`.
+  C/D use native plot3/scatter/plot/patch graphics, never screenshot images. Third
+  argument `saveFiles=false` opens plots without writing files or creating directories;
+  result includes data, figure handles and validation. ZIP was refreshed accordingly.
+- Latest B panel now compares the original saved Unoccluded mask and Three gaps
+  mask side by side (RGB is already in A). Updated MATLAB, PNGs, caption and ZIP;
+  no new inference or data changes. Older PDF/SVG assets remain unchanged.
+
+## Segmentation Results figure assets (2026-10-28)
+
+- User requested actual A-D assets following `docs/Screenshot from 2026-10-28 15-06-27.png`.
+- New bundle: `docs/figures/segmentation_occlusion_20261028/README_KO.md`; composite and
+  separate PNG/SVG/PDF, Korean guide/English LaTeX caption, selected original RGB-D/masks/NPZ,
+  C coordinate CSVs, D all104-frame and1872joint-delta source CSVs plus perjoint supplement.
+- No training/inference/ROS/shape rerun. A cases regenerated by original seeds and pixel-exact
+  checked against frozen comparison sheets; B uses original saved U-Net masks unchanged.
+- A-C use archive midpoint frame822/source1790484556946270508 (depth filename821, exact stamp).
+  Selected most bent clean-tip transverse among3 previously saved mask examples, not by error.
+- C main uses saved length-normalized curves + FKchains/tips. Separate raw observation panel
+  uses actual depth points and curves divided by recorded lengthscale; never silently scale
+  measured points. Dashed s intervals between observed components are not exact occluder widths.
+- D multi3_30 only:40straight/64bent; means .413/.554mm and1.265/1.477deg meanframeqRMSE;
+  <=1mm38/40 and58/64. All outliers shown; same-method clean reference, noGT/accuracy claim.
+- Generators: `scripts/prepare_segmentation_figure.py`, `scripts/prepare_segmentation_panel_d.py`.
+  D audit recomputed104 NPZ pairs/624metrics/1872deltas and213sourcehashes unchanged.
+
+## Segmentation occlusion paper handoff (2026-10-27)
+
+- User requested a standalone Korean technical/results Markdown for another
+  manuscript-writing AI: `docs/SEGMENTATION_OCCLUSION_PAPER_HANDOFF_KO.md`.
+- Audited sibling Segmentation project's saved V2 short-fragment RGB-D results,
+  not new training/inference. Original archive45deg1 RGB-D64frames plus new black
+  straight40frames; source archive now under sibling `datasets/`, historical
+  main `record/...` paths in protocol no longer exist. Exact-source-stamp pairing.
+- Recomputed all728 U-NetV2 shape NPZ metrics; exact agreement with saved CSV.
+  Includes all6 occlusioncondition pose/q summaries, perjoint18 RMSE/MAE for
+  multi3_30, segmentation Dice, formulas and figure/source paths. Independent
+  table review verified156 displayed numeric entries.
+- Crucial: same-method same-frame clean estimate is reference, NOT AprilTag GT
+  or original OpenCV-mask shape. Known syntheticoccluder depth excluded; nohidden
+  depth reuse, noautomatic realoccluder-depth rejection validated. Offlinefront
+  end differs; production3Dquartic/chord/DH/FK core reused, temporalfiltersOFF.
+- Multi3_30 FKmean .413/.554mm, q18 frameRMSEmean1.265/1.477deg (straight/bent).
+  <=1mm fractions95.0/90.625%; not universal1mm accuracy. Includes p95/max,
+  initialminpath8→final1 development caveat and V3seg-only separation.
+- No robot/controller code, running nodes, recordings or learned models changed.
+
+## Legacy admittance / angular-increment restoration (2026-10-27, historical)
+
+- User compared the original humble filter/controller and explicitly requested
+  restoring prior yielding behavior. At that time this superseded earlier rate-PD
+  and bounded admittance notes below. The Position portion was reverted on10/29;
+  see current entry above. No live robot process, mode, gate or parameter changed.
+- Restored generic6x6 M/B/K branches and legacy desired-env force error. Removed
+  ±5mm/2mm/s clamps and their ROS parameters. Full coupled symmetric PSD matrices
+  supported; inactive axes and rank-deficient consistent systems safely solved.
+- Public forces remain force ON robot in hrm_base. Controller passes (-target,
+  -environment) to legacy filter, keeping its RHS=environment-target, displacement
+  additive to nominalgoal and existing once-only training sign conversion=-1.
+  This adapter deliberately preserves current physical convention, not a blind
+  restoration of old sensor-axis/sign mapping.
+- Legacy acceleration->velocity->position integration uses conservative internal
+  substeps when current M/B/K and source dt require it. No response clipping or
+  parameter retuning. Current .05/5/2 at30Hz is numerically unstable if the old
+  explicit update is applied in one full frame; substeps address numerical error,
+  not a guarantee of closed-loop stability.
+- Position PD output is rad/update again, directly added to previous command.
+  Separate40deg/s angular slew guard, bend limit, I0, Dfilter, fresh-frame pacing,
+  camera recovery and motor/loadcell/force guards retained. Current numeric user
+  P20.55/D5, M.05/B5/K2 and motorprofile35 remain. Their previous rate-PD tuning
+  is NOT equivalent; verify with motors disabled and retune before experiments.
+- GUI PID unit tooltips updated; gain controls/force targets stay unchanged.
+  Invalid per-frame vector-as-%f logging replaced by typed Y/Z DEBUG logging.
+- Validation: isolated robot_control_pkg build passed at
+  `/tmp/hrm_legacy_control_20261027.cgUNli`; all6 C++ gtest targets passed;
+  GUI PD/M/B/K/target tests78passed. Fake-feedback Position(domain78) and
+  Admittance(domain79) smoke tests passed with motor_output_enabled=false and
+  remapped actuator topic; actuator messages0. Verified unclipped >5mm/>2mm/s,
+  force signs/targets, frame gaps, legacy angular increments and retained guards.
+  Normal install and running robot were NOT replaced. Safely stop motion and
+  disable output before building normal install/restarting for deployment.
+
+## GUI M/B/K settings and horizontal controller grouping (2026-10-27, latest)
+
+- User resolved contact/reaction force sign confusion and explicitly requested
+  NO filter/sign changes. Only add GUI M/B/K controls and visual separation.
+  Request called stiffness D_d; existing backend name K_d is retained and explained.
+- New `gui_py_pkg/admittance_parameters.py` edits existing shared Y/Z scalar
+  `admittance/M_d` [kg], `B_d` [N s/m], `K_d` [N/m] through parameter services.
+  This does NOT restore a general 6D solver or introduce per-axis matrix editing.
+  No control_node/admittance_filter, force sign, limits or defaults changed here.
+- Read-before-edit/apply; exactly three DOUBLE parameters written atomically on
+  explicit Apply, ACK plus verifying readback required. Finite/nonnegative/not-all-
+  zero validation; unedited server precision retained. Discovery and 2s refresh
+  read only; refresh preserves pending edits. Timeout/offline states prevent
+  overlapping writes. Runtime settings only; no automatic mode or enable change.
+- Existing backend mode4 restriction remains: M/B/K Apply disabled with
+  `Leave Admit` while Admittance active. Leave mode manually and Read/refresh,
+  then Apply. Separate target Fy/Fz controls still allow live changes as before.
+- Motor control settings row: compact Position PD left, vertical separator,
+  two-row M/B/K panel right. Horizontal separator before existing target-force row.
+  PD service behavior unchanged. Motor layout has no scrollbar at tested sizes;
+  old six-plot regression is NOT reintroduced (two plots /10Hz display retained).
+- Validation uses fake/offscreen ROS services and isolated GUI build only.
+  No live GUI restart, controller parameter writes, mode changes or motor commands.
+  Normal GUI symlink install loads new Python module on next safe GUI restart;
+  stop motion and recording first because GUI owns component subprocesses.
+- Full functional GUI suite595passed (legacy lint templates excluded), including
+  27 M/B/K service/readability tests; isolated gui_py_pkg build, new-file Flake8,
+  py_compile and diff-check passed. Populated mock screenshots at1366x768,
+  1500x900,1920x1080 inspected in `/tmp/hrm_mbk_gui_b9ips1nl`. At1366, PD475px
+  and M/B/K317px fit side by side. Compact numeric displays use4decimals; the
+  M/B/K panel keeps unedited original parameter precision when applying.
+- Existing layout/camera autostart tests now respect user's current per-component
+  auto_start choices (force_id and record true), retaining schedule/delay checks.
+  `system_components.json` was not modified by this task.
+
+## GUI plotting rollback after rate complaint (2026-10-27, latest)
+
+- User reported severe serial/prediction Hz regression and requested reverting
+  graphs if responsible. Independent read-only ~10s subscriber measured FT200.03Hz,
+  loadcell200.03Hz, force-ID30.00Hz, angles29.99Hz, motor242.4Hz. Max gaps8/8/35/43/
+  25ms respectively. GUI instantaneous CPU117.4%; actual producers were healthy.
+- Six full Matplotlib subplot redraws shared Qt with ROS spin. Synthetic equal-size
+  canvas baseline mean27.58ms/p95 28.75ms, exceeding requested25ms refresh. GUI
+  spin_once also handled just one callback per5ms (max200/s vs >640/s input).
+- Restored TWO vertically stacked plots: all measured/predicted forces on top,
+  torques below. Supersedes prior2x3 requirement below. Retains gray grids, fixed
+  legends, differentiated prediction lines, frame caption, nine channels and NaNs.
+  Confirmed red Fy/Fz targets share force plot; target GUI/sign logic unchanged.
+  Force/torque scales grouped separately, xlimits fixed atinit, skip unchangedylimits.
+- Graph-only refresh100ms (10Hz); 50display samples span~5s, not stored dataset
+  cadence. ROS timer remains5ms but drains atmost16 callbacks or2ms budget each
+  tick (running callback notpreempted). No subscriptions/QoS/source rates changed.
+  No control/force/gain/recording changes, no motor/settings writes or GUI restarts.
+- New synthetic two-axis draw mean13.44ms/p95 15.29ms; this is not post-deployment
+  liveGUI performance confirmation. Current running GUI still has old loaded code.
+  Operator must safely stop motion/recording before restarting its owned components.
+- Fake Qt receive test (no ROS network, 640 messages/s, new plot cadence): old
+  single-callback poll p95 delay836ms vs bounded batch13ms. This demonstrates Qt
+  receive capacity improvement, not live DDS/control timing guarantees.
+- Tests adjusted for two-axis semantics, separate `test_gui_ros_drain.py` covers
+  count/time budgets, shutdown, and receive-only callback bursts with fake ROS.
+  Full functional GUI suite561passed (legacy lint templates excluded), compact
+  tests65passed, new drain tests5passed; isolated GUI build and py_compile passed.
+  Normal source symlink install loads edits on safe GUI restart; no rebuild needed
+  for these Python-only edits. No old recordings or saved numeric data altered.
+
+## GUI admittance Fy/Fz targets and sign/log audit (2026-10-27, latest)
+
+- Added `gui_py_pkg/admittance_target.py`: compact Motor control row below Position
+  PD, signed Fy/Fz in mN, Read/Apply/status and read-only sign/max-force norm.
+  Explicit Apply atomically writes only target_force_y_N/target_force_z_N to
+  `/robot_control`. No motor/gate/mode writes; applying during Admittance can
+  immediately affect motion. Settings runtime-only; startup/discovery reads only.
+- Post-ACK readback required; edited/rejected values retain last confirmed plot
+  targets, dispatched/unconfirmed writes and offline hide them. Full precision
+  retained for unedited fields. Read-only 2s refresh follows external changes while
+  preserving pending edits; timed-out writes never overlap/retry automatically.
+- GUI Fy/Fz plots gain thin red target overlays, separate from the nine data lines.
+  Convention is force ON robot: plot target = target_N / force_sign * 1000.
+  With sign=-1, +200mN input draws -200mN on unchanged unnegated prediction plots.
+  Legacy-only sensor-frame prediction hides target overlays; unified-source stale
+  prediction stays NaN while known confirmed target remains. Target included only
+  in corresponding axis scale, not numeric buffers/topics/CSV. Targets visible
+  outside Admittance mean configured targets, not an active-control indicator.
+- Motor status shares Motor control heading; PD inputs/buttons use23px rows to
+  keep added target row and three previews within1366x768 without motor scrolling.
+- Force sign audit: `control_node.cpp:2070-2072` multiplies incoming XYZ once by
+  `admittance_settings_.force_sign`, default `control_parameters.hpp:87 = -1`.
+  `control_node.cpp:2161` passes f_env into admittance; filter uses Y/Z only with
+  force error `F_env-F_target`. No control algorithm, policy or safety change here.
+- Actual user log `/home/daeyun/.ros/log/robot_control_141976_1793068929204.log`
+  around line1585 alternates ACTIVE with/without offset/velocity-limited suffix.
+  Whole status-string changes trigger `set_position_status` logging; no WAITING/
+  FAULT observed in that log. Combined flag cannot distinguish axis or bound.
+  ID display-only policy assumes physical tip contact, not classifier correctness.
+- Read-only runtime check: sign=-1, ID gate=false, maxoffset=.005m,
+  maxvelocity=.002m/s, maxforce=2N, targets0/0N. During audit mode1 (Kinematics),
+  motor_output_enabled=true. Never send actual targets/restart live GUI for tests.
+  Preserve user gains20.55/0/5, speed40deg/s and motor profile75%; no edits to them.
+- Testing uses fake/offscreen ROS services and isolated GUI build in
+  `/tmp/hrm_position_sine_20261026.nRlJ8d`; no physical control settings changed.
+  All 558 functional GUI tests passed (legacy lint templates excluded), including 32
+  target-service tests and 67 compact/integration tests. New module/tests flake8,
+  py_compile and isolated gui_py_pkg build passed. Mock-only previews inspected at
+  1366x768/1500x900/1920x1080 in `/tmp/hrm_admittance_target_gui_hpui1nz3`.
+  Normal `build/gui_py_pkg/gui_py_pkg` links the source package directory, so the
+  new module is visible through the existing symlink install. Stop motion/recording
+  safely before GUI restart; closing it may stop its owned components.
+
+## GUI force/prediction and torque plots (2026-10-27, latest)
+
+- User requested individual Fx/Fy/Fz comparison plots, light gray horizontal
+  major-tick grids, and denser/differentiated prediction lines. They then explicitly
+  corrected layout to TWO ROWS × THREE COLUMNS: top fx/fy/fz (each with prediction),
+  bottom tx/ty/tz. Do not revert to three rows with force/torque columns.
+- `gui_node.py::init_fts_plot`: one existing canvas, six independently scaled axes;
+  public order fx/fy/fz/tx/ty/tz, nine line/data rows remain measured6+predicted3.
+  Measured solid1.5pt, prediction dense dash(1.6,1.0)/1.1pt, darker same hue.
+  Fixed upper-right legends, compact component/unit titles, horizontalgray guides.
+  Shared50sample buffer and25ms animation unchanged; no new ROS inputs or timers.
+- Per-force limits include only its own predicted/measured component. Stale/invalid
+  prediction remains NaN gaps, not held or zero-filled. Frame caption explicitly
+  distinguishes sensor measurement vs unified hrm_base prediction, resets for
+  legacy source; no frame conversion/sign inversion or numeric/topic/CSV change.
+- Short-screen fallback only around graph canvas: minimumheight160, verticalscroll
+  if viewportshort, no horizontalscroll. Offscreen1366x768 uses this graph fallback;
+  1500x900 and1920x1080 show all six. Motor/image layouts and controls unchanged.
+  Ylabels changed to compact titles to avoid narrow-column label overlap.
+- FunctionalGUI suite518passed (linttemplatesexcluded); new tests cover mapping,
+  isolatedscales, tickgrid, dense/thin/darkerlines, fixedlegends, NaN/recovery,
+  framecaption andgraphbounds at3sizes. Isolated gui_py_pkg build passed in
+  `/tmp/hrm_position_sine_20261026.nRlJ8d`. Synthetic screenshots inspected in
+  `/tmp/hrm_force_graph_2rows_final_vnwops7s` (before final4px leftmargin increase).
+- No live GUI/node/process/motor actions or runtime settings changed. Tests mock
+  ROS and prevent process launches. Normal install egg-link points to build package,
+  whose gui_node.py resolves to source: GUI restart loads edits without rebuild.
+  Stop motion/recording safely before closing GUI (owns childcomponents).
+
+## Separate command/pose CSV for control trials (2026-10-26, latest)
+
+- User explicitly requested commands and observed tip pose together for Kinematics
+  and Position, in a separate CSV rather than adding controller fields to summary.
+  New automatic Stop/export outputs: `csv/control_tracking.csv` and
+  `control_tracking.schema.json`. Existing 268-column summary and topic CSVs
+  remain unchanged; no old recordings were regenerated, replaced or deleted.
+- Additive `custom_interfaces/msg/ControlReference.msg`, topic `/control/reference`:
+  generation stamp + feedback image stamp + mode + IK pan/tilt rad + nominal/effective
+  Cartesian goal m + gate flag. Produced in IK command generation and successful
+  feedback-step diagnostics. No control/IK/PID/safety algorithm changed in this task.
+  Gate is NOT actuator acknowledgment; subsequent hardware guard may block output.
+- Recorder adds reference and Position sine reference/status to optional selected
+  topics, not required startup gates. New `control_tracking_csv.enabled=true`;
+  export/finalizer/status integration independent of summary's training-data gate.
+  Export function and ROS CLI `export_control_tracking <existing_csv_directory>`
+  exclusively create new files, refusing overwrites. No extra live subscribers.
+- Rows anchor every reference. Kin uses command time; Position/Admittance use the
+  feedback image time. Independent streaming nearest-source cursors per basis
+  avoid mode-switch backwards clock offsets. No age limit (existing user policy);
+  each group keeps actual stamp, signed time difference, frame and validity. Missing
+  or wrong-frame data stays blank, never zero/identity. Clock/latency correction,
+  interpolation, long-gap rejection and calibrated accuracy claims are not added.
+- Includes estimated tip boundary XYZ, observed-angle FK point + FK TF pose, and
+  estimated last-link DH orientation (center_19 rotation ONLY, not its position).
+  Kin Cartesian columns blank; feedback modes nominal and effective target both
+  stored plus target-minus-FK Y/Z error. Joint aggregate command rad is not Euler.
+  Contact label copied from session; source time and elapsed_s retained.
+- Event-only caveat: Kin sine updates are recorded normally. A single fixed IK
+  command must be issued AFTER Record starts; it is recorded once, not periodically
+  replayed throughout a hold. No guessing pre-record goals or legacy headerless
+  command modes. Missing reference produces header-only `no_commands`, with a
+  recorder status note; it doesn't block ordinary data recording.
+- Validation: isolated custom_interfaces/robot_control_pkg/record_pkg builds in
+  `/tmp/hrm_position_sine_20261026.nRlJ8d`; recorder functional suite 490 passed,
+  including 23 focused +9 integration cases and actual offline rosbag decoding;
+  producer/FK source checks 9 passed; all five C++ functional suites passed.
+  Full controller CTest still reports pre-existing formatting/lint failures
+  (flake8, lint_cmake, pep257, uncrustify), not fixed as unrelated scope.
+  New-files targeted Flake8 clean; installed export CLI help verified.
+- `test/control_reference_smoke.py` passed private localhost DDS84, explicit
+  isolated binary, motor gate false and remapped actuator topic:25 references,
+  24 FK samples, zero actuator publications. Absolute/relative IK, Position and
+  Admittance units/modes/timestamps/target values checked. Log
+  `/tmp/hrm_control_reference_smoke_wsc_mibn`. No live robot commands, parameter
+  changes or restarts; running normal controller binary was not replaced.
+- Deploy after safely stopping motor motion/controller and recording/export:
+  `colcon build --symlink-install --packages-select custom_interfaces robot_control_pkg record_pkg`,
+  then source install/setup.bash and restart controller + Data recorder.
+  Do not attempt to load new-message binary with old custom_interfaces overlay.
+
+## Y/Z sine reference speed default 10 mm/s (2026-10-26, latest)
+
+- User confirmed the Start rejection `2*pi*amplitude/period <= max_speed_m_s`
+  and requested10mm/s. Changed PositionSineConfig::speed .005 -> .010m/s.
+  This is a per-axis reference peak/approach limit, not position tolerance or
+  measured actuator speed. Defaults A=.010m/T=20s/phase0,90 and PD gains unchanged.
+- T=20s allows up to31.83mm amplitude under the speed condition; combined
+  workspace validation remains. User can reduce amplitude/increase period.
+- No launch/GUI override shadows the default; GUI Start only sends Y/Z/period.
+  Existing smoke's explicit .005 override intentionally tests slower operation.
+  Older5mm/s notes below are historical. Live node unchanged; after stopping
+  sine the user may set `motion.position_sine.max_speed_m_s` to0.01 at runtime,
+  or rebuild/restart robot_control_pkg to obtain the new persistent default.
+- Validation: all10 PositionSine unit tests passed in the isolated build,
+  including20mm/20s acceptance at10mm/s and rejection with a5mm/s override.
+  No normal controller binary rebuild or live parameter/motion changes.
+
+## Position motor speed and transient-feedback recovery (2026-10-26, latest)
+
+- User reports Position much slower than Kinematics, Kp-induced overshoot,
+  and goal rejection after an apparent recognition loss. They also requested
+  negative predicted force for admittance; `admittance/force_sign=-1` already
+  applies exactly once at the input. No extra negation was added.
+- Confirmed active motor profile mismatch: Kinematics50 vs Position/Admittance10.
+  New integer `position_control/motor_velocity_profile_percent` defaults50,
+  startup/runtime validated1–100 before any atomic batch mutation. Both feedback
+  modes use it; software hold remains10. TCP passes it unchanged; source firmware
+  scales by VELMAX/VELRES. This removes a5x profile discrepancy, NOT a measured
+  5x improvement or proof that closed-loop motion now matches IK duration.
+- PRESERVE operator's header edits max angular speed20deg/s and freshness1.0s.
+  P5/I0/D.05 unchanged. At10mm error P requests only2.86deg/s. Angular-command
+  integration can lead slow actual motors even with PID I=0; no encoder-following
+  anti-windup was added and physical overshoot is not claimed solved.
+- Source dt integration cap is now independently0.25s. On longer gap or explicit
+  force/vision pause recovery, re-anchor time/reset PID history without resetting
+  goal, IK command, encoder origins, admittance offset, or sine phase; the next
+  normal frame resumes. No catch-up angle/force/sine integration. A sustained
+  image period>0.25s pauses updates; invalid/stale vision is never consumed.
+- Force receipt/source delays and exact producer warming_up, stale_input:*,
+  missing_or_invalid_input:*, input_time_skew pause and auto-resume. Other invalid
+  force, inference_failed, valid NaN, model/frame/scope errors, overforce, and
+  motor/loadcell/tension faults still latch. Paused feedback does not send a
+  physical hold; motor may finish the prior target. ID-display-only policy stays.
+- Historical warning1792998445.553369077 was preceded by MOTOR/LOADCELL freshness
+  FAULT, not a recognition fault. Log `/home/daeyun/.ros/log/robot_control_90070_1792997582192.log`
+  lines90/95. Old combined message cannot identify which sensor. New log names
+  missing motor/loadcell separately and goal rejection includes actual status.
+- Validation: isolated build passed;62 C++ tests passed. Isolated ROS smoke
+  suites passed for position(DDS78,102diagnostics), admittance(DDS79,350diagnostics),
+  sine(DDS82,114diagnostics/86references), and velocity profiles(DDS79, runtime,
+  startup, types/ranges/atomic batch failures). All had0 actuator messages.
+  Test build `/tmp/hrm_position_sine_20261026.nRlJ8d`, logs:
+  `/tmp/hrm_position_smoke_zi8uapl0`, `/tmp/hrm_admittance_smoke_lzcd4fug`,
+  `/tmp/hrm_position_sine_smoke_rqs9sveg`, `/tmp/hrm_motor_profile_smoke_r4y0m7fp`.
+- Live read-only audit found controller INACTIVE but motor_output_enabled=true;
+  streams healthy at that time. No live commands, gains/modes/gates changed,
+  restarts or normal-workspace executable replacement. User must safely stop
+  motor output/controller then build robot_control_pkg and restart to deploy.
+
+## Configurable no-load policy + ID visualization-only force control (2026-10-26)
+
+- User requested separate editable load bounds, then explicitly clarified:
+  **ID는 표시만, 힘 제어 계속**, including ID9 misclassification during physical
+  tip loading. This supersedes older below notes saying all body/unknown IDs
+  always block Admittance. Do not reintroduce that unconditional gate.
+- New `estimation_pkg/estimation_pkg/id_localization_config.json`: schema1,
+  enabledtrue, unloaded_force_ranges_mN initiallyfx±134.326/fy±126.814/fz±192.670.
+  Operator subsequently edited it to±200mNallaxes; preservetheeditablefile.
+  Compares inferred hrm_base force with published/training sign (NOT FT sensor
+  truth, GUI rounded values, or controller-negated force). All axes inclusive
+  inside=>UNLOADED/control18; otherwiseLOADED/positiveclassifierwinner.
+  Works for masked/class0; rawclass0=0outsidebox usespositivecandidate forcontrol.
+- Rawcontact_id/probabilities/continuousforce remain untouched; no forcezeroing.
+  status exact `ready_force_ranges` identifies this operating policy. No new
+  message fields/wire-schema changes; old bags remain decodable. Disabledconfig
+  restoresnativeclass0/maskedUNKNOWN; malformedconfigfails, no silentfallback.
+- Nodeparam/launcharg `id_localization_config` picksfile; startup-onlyread and
+  runtimeeditsrejected. Packagedvia setup.py toshare root. Subsequent JSON edits
+  needrestart, not rebuild under symlink-install. No hysteresis/debounce added.
+- IMPORTANT actual default masked KalmanNet/Transformer checkpoint now declares
+  force_scope=all_single_contact even though old siblingmetadata stillsays tip.
+  Runtimealwaysreads actualbundle. Supporttip/all_single_contact inpolicy/controller;
+  unknownscope remainsrejected. No training weights/scalers/featureorder changed.
+- Controllerbool `admittance/use_contact_id_gate=false` default explicitlyrequested.
+  ID/load/tip_force_valid/bodyflags doNOTgate validFy/Fz in thismode. Realexperiment
+  mustrestrict forceto tip; oneXYZoutputcannotseparateID18force frombodyforces.
+  Commonvalid/frame/model/window/timestamp/nonfinite/maxforce andmotor/strain
+  guards stayintact; no stale-valueholding or automaticmotorenable added.
+  SettingtrueoutsideAdmittance restoresoptionalstrictID-gatedeligibility.
+- GUI numericrawheatmap retained; UNLOADEDskeletonoverlay hiddenforbothmodes;
+  loadedclass0raw0canstilldisplaypositivecandidate. Tipeligibilitytooltip now
+  describesID-gateddiagnostic, notactualdefaultcontrolauthorization.
+- Validation: purePython policy/config/history118pass; full focused estimator
+  suite196tests (22optional archived cases skipped), GUI509functionalpass,
+  C++57pass (including19admittance/forcepolicy). PrivateDDS13integrationcases
+  covertip/all_single_contact ×masked/class0 ×enabled/disabled +actualMLPbundles.
+  ActualdefaultKalmanNet/Transformer withsynthetic26-column30-rowinput produced
+  finiteforce/rawID5 andUNLOADED/control18; implementationtest, NOTaccuracy.
+- NewprivateDDS79 controller smokePASS16.67s/242position+242admittancediagnostics,
+  0actuatorcommands. AllbodyIDs1..17/unknown/unloadedallowcontinuousvalidforce
+  withdefaultgatefalse; stale/NaN/model/frame/scope/maxforce/tensionstillfault;
+  optionalgate trueandmode-timeparamrejectionverified. Test updated torequire
+  explicitisolatedbinary andemptyisolateddomainbeforepublishing syntheticinputs.
+- Allthreepackages built under `/tmp/hrm_position_sine_20261026.nRlJ8d` (newJSON
+  installsymlink verified). Live GUI/controller/inference detectedrunning;
+  NO normalbinaryreplacement, live servicechanges, restarts, or motormovement.
+  User muststopmotors/control, rebuild estimation_pkg+gui_py_pkg+robot_control_pkg
+  normally, thenrestarttoapply. Earliernormalbuildsection predates thispolicy.
+  TestXML/JSON inthat/tmpdir; controllerlog `/tmp/hrm_admittance_smoke_39w49uvi`.
+- Operator edited JSONduringwork; preserved theirvalues/commentednotes, added
+  whole-line //comment support (inline/blockcommentsstillinvalid). Tests validate
+  editablefile semantics withoutlockingtheuser'sthresholds totrainingdefaults.
+
+## Position / Admittance sine reference (2026-10-26)
+
+- User requested m-based sine Start/Stop in Position and Admittance, in addition
+  to the existing angle-based Kinematics waveform. One stacked GUI row switches
+  with mode, preserving independent values; no extra vertical row/scroll.
+- Move Tip Y/Z are absolute hrm_base sine centres even when manual Publish uses
+  Relative. Degree and metre Move Tip entries are remembered separately.
+  Defaults: Ay=Az=.010m, phi_y=0deg, phi_z=90deg, T=20s. A=0 holds its centre.
+- New backend `motion.position_sine.y/z=[centre,amplitude,phase]`,
+  `.period_sec`, `.max_speed_m_s=.005` (per-axis reference slew/peak bound).
+  New SetBool `/position/sine_motion`, transient String `/position/sine_status`,
+  PointStamped `/position/sine_reference` (nominal, hrm_base metres, image stamp).
+- Start requires ready Position/Admittance and no other motion. Approach first
+  phase smoothly, update only nominal Y/Z on accepted new image-source frames;
+  X passive. Admittance then adds its force offset. No per-step PID/filter/origin
+  reset, and no gain/force eligibility/motor gate changes.
+- Camera gaps freeze phase without catch-up; faults/mode/gate changes stop.
+  Stop holds last nominal target with feedback still running, not motor disable
+  or emergency stop. Manual goals/other motions/wave edits rejected while active.
+- Validation: GUI functional504pass (lint/copyright excluded), C++47pass across
+  FK/IK5, positionPD19, IKsine5, CartesianSine9, admittance9. Offscreen1366x768
+  Kinematics/Position/Admittance screenshots fit without added right scrolling.
+- New `test/position_sine_smoke.py`: isolated DDS82, localhost, motor gate false
+  throughout and motor topic additionally remapped. PASS:130syntheticframes,
+  113positiondiagnostics,83references,0actuatorcommands. Checks readiness, config
+  rejection, source-stamp correspondence, ramp/quadrature/Xpassive, manual-goal
+  conflict, stop, image-gapfreeze/resume, mode/faultstop and admittanceoffsetsum.
+  Existing position_frame_smoke alsoPASS in DDS78 (107diagnostics,0commands).
+  Gate-enable changes were reviewed statically, not exercised live.
+- Build/install: isolated `/tmp/hrm_position_sine_20261026.nRlJ8d` and then normal
+  workspace `colcon build --symlink-install --packages-select robot_control_pkg
+  gui_py_pkg` bothpassed. This normal controller build ALSO includes the earlier
+  absolute-position PD velocity-law change; its former isolated-only deployment
+  note below is historical. No GUI/real controller/hardware was started/restarted.
+  Motor output must be off before the user restarts GUI/controller for real tests.
+- Installed normal-workspace binary was also smoke-tested in isolatedDDS82 with
+  gatefalse:PASS132syntheticframes/114diagnostics/85references/0actuatorcommands;
+  logs `/tmp/hrm_position_sine_smoke_2u_sgp6k`. Test node exited normally.
+- Test XML/result JSON in `/tmp/hrm_position_sine_20261026.nRlJ8d`; screenshots
+  `/tmp/hrm_position_sine_gui_wfqng6ap/{kinematics,position,admittance}_1366x768.png`.
+  Existing compiler reorder/unused-variable warnings remain; no physical tracking
+  accuracy/stability is claimed by the synthetic integration tests.
+
+## Contact heatmap on GUI skeleton image (2026-10-26)
+
+- User requested implementation after a read-only feasibility explanation.
+  Added GUI-only Contact overlay checkbox (default ON) in the existing image
+  controls row. Existing numeric ID heatmap and force routing remain unchanged.
+- New custom_interfaces/SegmentImageGeometry on
+  `/estimated_segment_image_geometry`: same crop image stamp/frame/dimensions,
+  18 blocks of 9 pixel samples plus 18 centers. Coordinates are crop u/v pixels,
+  NOT metric XYZ or TF. Contact ID i uses physical segment i, skipping fixed
+  os at index0; ID18 covers the final moving segment through the last boundary.
+- Estimator retains indices through finite/duplicate XYZ filtering and maps its
+  existing raw_s_3d/s_segment/s_segment_center back to original extended skeleton
+  pixels. Does not project hardware-length-scaled XYZ. Tiny normalized endpoint
+  roundoff is tolerated. Geometry calculation only runs with subscribers and its
+  failures cannot suppress angles, normal skeleton, cloud or marker publication.
+- GUI shares existing ForceIdPreview with ImagePreviewPanel, no extra model or
+  inference subscription. Independent QPainter overlay changes no source RGB,
+  published image, record, angle/FK, filter, controller or force eligibility.
+  Red/white fixed0..1 intensity uses raw probabilities inside the same ±tol band;
+  selected candidate has blue outline/ID. No conditional probability rescaling.
+- Geometry must exactly match image frame/stamp/dimensions (receipt age <=0.2s).
+  Force stamp is newest selected input, so allow source gap <=0.5s and force
+  receipt age <=0.5s rather than exact image equality. Invalid/stale/missing or
+  Class0 unloaded/ID0 clears overlay; control fallback ID18 is not tip contact.
+  Masked load status remains unknown. Force-only updates, expiry and checkbox
+  changes redraw without RGB conversion. Body-monitor OFF retains diagnostics.
+- Validation: GUI functional suite 480 tests, estimator focused regression
+  92 tests; offscreen layouts including1366x768 unchanged. Four archived RGB/depth
+  datasets ×10 frames =40/40 reconstructed/geometries valid; helper median0.116ms,
+  maximum0.244ms in this run. Numeric angle/tip outputs unchanged by helper.
+  Screenshots show archived images with explicitly SYNTHETIC ID1/9/18 probabilities,
+  not learned localization accuracy. Artifacts/script:
+  `/tmp/hrm_contact_overlay_20261026.j6sNi4/` (temporary).
+- Built custom_interfaces, estimation_pkg, gui_py_pkg successfully. Existing live
+  nodes were not restarted; no live ROS service/motor/control command was sent.
+  Installed imports and new-message serialization roundtrip checked. Restart GUI
+  and Segment estimation safely with motor output OFF to display new geometry.
+  This feature itself does not require robot_control changes/rebuild.
+- Details: src/gui_py_pkg/README.md contact overlay section and
+  src/estimation_pkg/docs/force_id_inference.md. Existing PD rebuild instructions
+  below still apply independently of this visualization feature.
+
+## GUI position gains and requested default force/ID bundle (2026-10-26)
+
+- User requested GUI gain adjustment and Masked force=KalmanNet / ID=Transformer
+  default, then explicitly chose cable+loadcell+joint-angle inputs.
+- ForceModelSelector preselects ONLY the exact existing bundle
+  `cable_loadcell_angle/models/masked__force_kalmannet__location_transformer/hrm_bundle.pt`
+  on the initial scan. Refresh preserves manual/blank choice; missing default
+  never falls back to another feature group. Inference auto-start remains OFF,
+  running model not switched; CLI/node default model_path remains blank/explicit.
+- Actual bundle loaded/predicted offline on CPU: masked, kalmannet/transformer,
+  26 features (cable length4 + loadcell4 + relative_angle18), 30-sample window,
+  force N/hrm_base and probability vector19 (p0=0, no class0/no-load probability).
+  all_single_contact scope does not bypass existing tip-force eligibility guards.
+- Compact PositionPIDPanel below IK sine uses GetParameters and atomic six-gain
+  SetParametersAtomically on /robot_control. Pan(Z),Tilt(Y) separate P/I/D.
+  I disabled/fixed0 by existing PD policy; successful Read needed before Apply.
+  No auto-write on launch/reconnect, no motor enable/mode/goal commands, no
+  persisted gain override. Controller restart resets startup gains; explicit Read
+  refreshes actual values. Timeouts/rejections are not displayed as applied.
+- GUI/readme and inference docs describe defaults and units. The 2026-10-26
+  rate-PD controller uses P rad/(m*s), D rad/m; GUI cannot change a running old
+  binary's control law. Previous controller rebuild/restart instructions still apply.
+- Verified 447 GUI functional tests (style/copyright checks excluded), including
+  19 fake parameter-service PID tests. Offscreen layout fits 1366x768, 1500x900,
+  1920x1080 with aligned-record settings on/off and all three image previews;
+  existing right-side spacing/heights were reduced to accommodate the PD rows.
+- `colcon build --symlink-install --packages-select gui_py_pkg` succeeded; installed
+  import and exact default-bundle discovery verified. Existing GUI/controller/model
+  processes were NOT restarted; no live ROS gain/mode/motor requests were sent.
+  Restart GUI to load widgets; controller source still needs its separate rebuild
+  from the preceding PD task before using the new control law.
+- GUI tests/screenshots: `/tmp/hrm_gui_controls_20261026.vse1FT/` (temporary).
+
+## Absolute Y/Z position PD correction (2026-10-26)
+
+- User confirmed Absolute Z=0.010m, observed FK near3mm. Previous read-only live
+  probe: goalZ10mm/actualZ3.158mm, ACTIVE ~30Hz; no GUI m/mm scaling error.
+  Main cause: fixed `entry_angle + PD` offset, Kp5rad/m/I0, leaving large error.
+- Restored scalar PID **error law** through `compute_output`: e, I*integral(e dt),
+  D*filtered((e-e_previous)/dt). Position keeps I=0 (no stored error integral).
+  D-on-measurement changed to D-on-error; tau parameter remains functional.
+- Output explicitly angular velocity rad/s; update current command by
+  `clamp(u,±speed)*min(image_dt,.25)`, then clamp angle. No fixed entry reference,
+  no frame-rate-dependent full-output addition. q-entry initializes only;
+  encoder/cable entry offsets MUST remain for bumpless motor conversion.
+- Numerical defaults unchanged P5/I0/D.05 but units now P rad/(m*s),D rad/m.
+  Keep±60deg,5deg/s,source-frame pacing,sensor/tension gates,camera-gap reset.
+  Scalar PID optional tau defaults0 for existing 3-arg callers; vector PID unchanged.
+  Use rad/torad for the local IK degree conversion to avoid float round-trip drift.
+- This changes the shared PositionController inner loop for Admittance as well;
+  force routing/admittance law/GUI/kinematic-angle sine generator are unchanged.
+- Package built in isolated `/tmp/hrm_position_pd_20261026.n76Nlu`, NOT normal
+  workspace install. Running hardware controller not restarted/replaced; no motor
+  commands or runtime parameter changes. User must motor-output OFF/stop old node,
+  rebuild and restart explicitly before hardware verification. Gains remain slow
+  bring-up values; ideal FK tests cannot certify physical stability/tracking.
+- Current controller docs: `docs/CONTROL_READINESS.md` top section supersedes
+  September fixed-entry PD sections; `src/robot_control_pkg/README.md` updated.
+- Verified38C++tests:19PD+5FK/IK+5sine+9admittance/eligibility. IdealproductionFK
+  +/-10mmsteps fromzero/nonzeroentry,dualaxis,10/30/50Hz,constantdisturbance,
+  small/slowposition sine pass. NOT realpositionaccuracy or fasttracking proof.
+- Updated position_frame_smoke.py for ratePD (isolatesP withD0) and optional
+  HRM_CONTROL_TEST_EXECUTABLE. Domain78/localhost/disabledoutput/remappedmotor
+  integration passed105diagnostics,0actuator messages; synthetic sensors only.
+  Logs `/tmp/hrm_position_smoke_nmnv4scz/control.log`. No actualhardware changes.
+
+## Explicit base/tip-near perspective follow-up and paper assets (2026-10-24)
+
+- Sibling Segmentation repo: `runs/perspective_pose_followup_20261024/report.html`.
+  User requested explicit base-large/tip-small and reverse perspective augmentation,
+  plus organized image/pose evidence for the paper. No ROS/controller changes or motor commands.
+- `feasibility_augmentation_v3.py` uses a source-base-to-tip-aligned virtual textured
+  planar card, pinhole tilt 25/45/60 degrees, both near-end directions. These are NOT
+  real joint angles or novel articulated 3D/depth views. Changed RGB is never paired
+  with unchanged source depth. Some original-background composites have inpainting seams.
+- New V3 U-Net: same V2 train 1600 / val 96 records, 16 epochs, seed173, batch8,
+  size384, optimizer and validation conditions. Fresh ImageNet initialization, not V2
+  fine-tuning. Single-seed development comparison, not blind final evaluation.
+- Evaluation: 128 sources x11 conditions x3 methods =4224 rows, zero runtime errors.
+  V3 plain perspective Dice 97.78–98.34%, background+placement+3-gap 96.18–96.52%.
+  Improvements over V2 are small (plain max +0.44 pp); clean falls98.09→97.93%.
+  OpenCV remains higher on simple perspective pseudo-labels; learned advantage is
+  composite background/occlusion robustness, not universal superiority.
+- All1408 augmented RGB/visible-label/occlusion cases and4224 predicted masks are
+  saved under `segmentation_evaluation/assets/<condition>/<source>/` with timestamp,
+  source SHA256, H, magnification and depth-incompatibility metadata. Per-case
+  provenance.json, cases.json and figure_sources.json map paper figures to originals.
+  figure_sources relative asset paths use asset_path_base='segmentation_evaluation'.
+- Strong near-base taper can create spurious medial-skeleton endpoint branches.
+  V3 synthetic occluder placement therefore follows the SOURCE skeleton transformed
+  by the SAME H; this guide is only label-generation metadata, never a network input.
+  Frozen V3 preflight2048 cases passed; full suite122 tests passed. Independent PNG
+  audit recomputed54912 metrics from all4224 predictions with zero discrepancies.
+- `paper_pose_summary.{html,csv,json}` is a SEPARATE re-analysis of V2 original RGB-D
+  occlusion results, not V3 warped-image poses. It includes per-condition availability,
+  mean/median/p95/max, <=1mm fractions, q18 wrapped RMSE and SO(3) rotation difference.
+  `paper_pose_source_index.json` links104 original RGB/depth/K/source metadata/NPZ.
+  In3-gap30%: mean FK delta0.413/0.554mm and <=1mm95.0%/90.6% (straight/bent).
+  Across all624 occluded frame-condition pairs: max FK delta2.280/3.716mm.
+  These are own-clean estimate differences, NOT actual GT accuracy or all-frame1mm
+  guarantees. Known synthetic occluder depth exclusion and physical/manual-GT caveats remain.
+
+## Segmentation V2 and paired angle/FK occlusion sensitivity (2026-10-24)
+
+- Follow-up work lives in the sibling Segmentation repo; README and
+  `runs/occlusion_pose_20261024/report.html` are the entry points. No main ROS
+  estimator/controller changes or motor commands. Captured80fresh alignedRGB-D
+  pairs with new black background using camera-only D405CUDA launch; stopped
+  only owned camera process. Stored camera/ROI/K/source timestamps.
+- New V2 U-Net1600trainingframes/16epochs, validation96x3. Augmentation includes
+  single2/10/20/30% and3-stripe15/30% centerline occlusion, white/gray/black/color
+  materials, backgrounds, hard-negativebrightobjects, scale/rotation/translation/
+  planarprojectivehomography. Preserve visible-only labels. Not true3Dviewpoint
+  synthesis or wide-angle rendering. Source data/previousmodels untouched.
+- Segmentation128frames x10conditions x3methods. Bg+projective+3gaps Dice:
+  OpenCV20.33%,V1 84.49%,V2 96.03%; multi3_30:31.69/95.62/96.50. V2 slightly
+  regresses some simplecases; not uniformlybetter. Same pseudo-label limitations;
+  archive was seen in pilot1, so this is development stress testing, not blind.
+- Offline RGB-D evaluation40fresh+64archived frames x7conditions x3methods.
+  Archive45deg1 RGB/depth filename indices are shifted; exact source_time_ns join
+  is mandatory. Occlusionmap invalidatesdepthonly; never oracleclip prediction
+  or reuse hidden depth. This is missing-depth simulation, not automatic rejection
+  of valid real-occluderdepth. RGBprojectivecases excluded fromRGB-D evaluation.
+- feasibility_shape.py reuses exact productionquartic/reconstruct/projection via
+  AST, no originalmoduleimports. 19geometriclinks/18tilt-first localZjoints;
+  PythonFK verified against compiled original surgical_tool.cpp methods/Eigen.
+  Newfront-end: all visiblepieces, graph skeletonpaths, nearestendpointordering,
+  mask-awaredepthmedian, chord approximationacrossgaps; no2Dextrapolation.
+  Kalman/baseaverageOFF, sameframeowncleanbasecalibrationfixed. Metrics mean
+  per-frameq18wrappedRMSE,FKpositiondistance/SO3rotation difference, notGTerror.
+- Initial pose_evaluation preserved: minpath8 wronglydiscards shortvisiblebase
+  stubs aftermultiocclusion. Optionalminpath1/singleton preservesactualobserved
+  pixels, nohiddenpointinsertion. Finalvariant pose_evaluation_short_fragments
+  recordedseparately with sameweights/cases. This is explicitposthocfrontend
+  development, not an independentvalidation. Failuresalwaysremainindenominator.
+- Finalmin1V2 outputs728/728cases(104framesx7), notGTaccuracy100%. multi3_30
+  live40frames meanq18RMSE1.265deg/FKdelta0.413mm/rotation3.305deg, dynamic64:
+  1.477deg/0.554mm/3.603deg. Tipdelta p95 .804/1.390mm. Initialmin8V2availability
+  15/40 and31/64 recovers40/40 and64/64. No assertionthat actualerror<1mm.
+  Finalallmethods1675/2184valid;OpenCV492fail,V1 17fail,V2 0fail.90testsPASS.
+
+## Occlusion segmentation feasibility — separate repository (2026-10-24)
+
+- User authorized augmentation/training/comparison and camera-only capture to
+  examine visible-body masking under occlusion for reviewer response. Work is in
+  `/home/daeyun/Hyper-Redundant-Manipulator-Segmentation`; see its README and
+  `runs/feasibility_20261024/report.html`. Production ROS estimation/control code
+  is NOT switched to learned segmentation. No motors or controller were started.
+- Trained basic and robust-augmentation ResNet18 U-Nets: 1,200 frames from two
+  sessions, 12 epochs each; validation 64 frames with fixed clean and occlusion+
+  background conditions. Current-manifest held-out candidate 45deg_1 supplied
+  96 test frames, 10 conditions, 5 backends (4,800 predictions, zero exceptions).
+  Historical development exposure unknown; masks are OpenCV pseudo-labels, NOT
+  independent manual GT or clinical validation. All original datasets preserved.
+- Middle 20% synthetic occlusion mean visible-mask Dice: OpenCV71.90%, basic
+  U-Net91.20%, robust U-Net97.76%, robust+MobileSAM97.52%. Background+20%:47.18%,
+  87.03%,97.78%,98.69%. Full-ROI MobileSAM often picks background (middle-occlusion
+  Dice0%); weak target prompt, not evidence that SAM generally cannot work.
+  U-Net~5ms, hybrid~49ms on RTX3060; no camera/ROS/3D time included.
+- Occluders remove covered pixels from labels; hidden geometry is NOT invented.
+  Original OpenCV largest-component selection often discards one visible half.
+  Any future production integration must retain multiple visible pieces and
+  separately constrain depth sampling to observed-body mask pixels; do not feed
+  imagined/amodal pixels or arbitrary neighboring occluder depths into 3D fit.
+- Captured20 paired color/depth crops with existing D405 CUDA camera-only script,
+  same source timestamps, then stopped only that newly launched camera process.
+  Straight/unoccluded live images plus synthetic10/20% conditions:300 inferences,
+  zero exceptions; no GT accuracy score. Robust U-Net retains body but can detect
+  a bright corner object; SAM refinement can amplify this into background. These
+  failure examples are retained. Actual physical-occlusion test remains needed.
+- Additional offline depth diagnostic uses clean live masks only, in-mask5x5
+  median (>=3 valid samples), crop intrinsics once, camera-frame XYZ; no gap
+  interpolation/curve/angle/FK/ROS output. False-positive mask can still admit
+  wrong depth. RGB augmentation must never reuse unchanged real depth geometry.
+- Depth preview actually exported20cleanpairs,3978candidates→3881finitepoints;
+  background false positives produced depths0.113–0.663m, so these are NOT all
+  verified HRM points. Retained as a failure example. Strict source/condition/
+  timestamp/RGB provenance guard rejects synthetic masks.54CPUtests passed.
+- Local isolated segmentation `.venv` reuses HRM_env torch2.7.1+cu126 via .pth;
+  HRM_env/system ROS dependencies unchanged. New torchvision0.22.1+cu126 and
+  segmentation/SAM packages local only. No large dataset copies. Models/plots/
+  source snapshots are ignored artifacts; copy them explicitly to another PC.
+
+## Shape-dataset pre-skeleton binary PNG export (2026-10-21)
+
+- User requested the final segmented/smoothed binary mask immediately before
+  skeletonization, from four September27 shape datasets. Actual parent directory:
+  `record/20260927_HRM_shape_estimation_apriltag` (not the shortened name in chat).
+  Read-only SQLite inspection of all four bag_0.db3 files found36 topics each,
+  **no Image/body-binary/skeleton image topic**. Live code can publish
+  `/estimated_segment_body_binary_image`, but it was not recorded in these bags.
+- Reprocessed every existing `images/hrm_crop/*.png` with CURRENT production RBSC
+  segmentation: unchanged HSV exclusions → grayscale threshold120 → largest
+  8-connected component → closing15 → filled external contours → Gaussian15 →
+  threshold127. Exact requested output is `RBSC.body_image`, not binary_image.
+  Added optional `postprocess(..., segmentation_only=True)` to return at this
+  stage without skeleton/curve/depth/calibration. Default live path unchanged.
+- New offline script: `scripts/export_hrm_crop_segmentation.py DATASET_ROOT`;
+  source ROS/workspace and use HRM_env Python, MPLBACKEND=Agg. `--inspect-only`
+  audits without writes. Requires new destinations and refuses overwrite.
+  Uses archived PNG as BGR (archive already converted original ROS RGB); no new
+  crop, normalization, depth processing or image resizing. No ROS playback,
+  camera launch or motor command. Current-code reproduction does not claim exact
+  historical online frames (those were also gated by successful3D reconstruction).
+- Created `<session>/images/hrm_crop_segmentation/` for all four datasets:
+  35deg_1:2241; 35deg_2:1529; 45deg_1:1670; 45deg_2:1619. **7059 saved,0 failed**.
+  Lossless mono8 PNG, body255/background0, same filenames/dimensions as crop RGB.
+  Combined PNG payload10,219,662 bytes (~9.75MiB); index/manifest small extra.
+  Original RGB/depth, bags, recording settings and numerical CSVs untouched.
+- Each output folder has index.csv retaining ALL source index columns/timestamps,
+  plus status, output filename, foreground area, PNG size and source/output SHA256.
+  manifest.json records algorithm/source hash, checked bag inventory and counts.
+  Original index input_encoding/payload_bytes still describe RGB; mask_encoding
+  and mask_png_bytes describe derived masks. Failed frames would be explicit,
+  never silently reuse the last successful mask or invent all-black success.
+- Validation: all7059 PNGs reread, verified same size, uint8{0,255}, hashes/areas,
+  filename/index correspondence and unchanged source-image hashes. Sample RGB
+  and mask visually checked. 13 new segmentation tests +11 existing realtime
+  pipeline tests passed (24 total): independent stage parity, BGR/RGB, no later
+  stages, unchanged default continuation, invalid-frame/recovery behavior.
+
+## Learned force connected to Y/Z admittance (2026-10-15)
+
+- User requested `/force_id_estimation` → Y/Z position/admittance integration and
+  target-force test readiness. Implemented software path; **no physical motor
+  movement, production controller launch or powered stability validation**.
+  This supersedes the historical deferred-control notes in the 10/12 entries.
+- New force_feedback.hpp validates the combined ForceIdEstimate: hrm_base,
+  finite XYZ N, class0 tip-scope, consistent raw/load/control IDs and tip flags,
+  complete window, source/publication + receipt freshness. Loaded ID18 or unloaded
+  raw ID0/control ID18 eligible; unloaded force retained. Body ID1..17 ineligible
+  with monitor OFF or ON; masked remains inference-only pending a load detector.
+  Legacy Vector3 force no longer refreshes/authorizes admittance (retained only
+  for legacy dynamics, which this task did not validate or rewrite).
+- Apply documented training-sign negation once (`admittance/force_sign=-1`), no
+  axis swap or N conversion. F_env/target mean external force ON HRM in hrm_base.
+  X remains observable but passive. Equation on Y/Z is Mδ''+Bδ'+Kδ=F_env−F_target;
+  reference Y/Z + δ feeds existing PD (Y→tilt, Z→pan), then cable IK/motor preview.
+  The existing motor-output gate still defaults false; no auto-enable anywhere.
+- New target_force_y_N/target_force_z_N parameters default zero and may be edited
+  live. Defaults M=.05 kg, B=1 N·s/m, K=20 N/m; added initial offset±5 mm per axis,
+  velocity±2 mm/s, estimated XYZ/target YZ force-norm limit2 N, timeout.25 s.
+  Values are unvalidated bring-up defaults, not hardware safety ratings. Gain/
+  sign/limit edits require leaving mode4; complete parameter batch validation.
+- Replaced singular 6x6 inverse/explicit Euler with two-axis implicit Euler and
+  bounded state, no hidden velocity windup. Reset at fresh mode/gate entry with
+  PD/encoder origins. Source-image paced; long camera gaps freeze integrator,
+  zero velocity and skip catch-up, preserving existing camera auto-resume.
+  Force-model history loss during camera gaps still causes a force fault.
+- Existing feedback-fault behavior reused: WAITING before readiness; afterwards
+  stale/invalid/body/unknown/overlimit force/model change triggers current-encoder
+  software hold if fresh and latches until mode exit/re-entry/gate transition.
+  No previous-force reuse or synthetic0N and no body-evasion commands. Async
+  question asked whether user prefers this manual recovery or automatic recovery;
+  no response received at implementation time. Do not claim explicit approval of
+  that policy. Motor/loadcell/tension guards unchanged. Driver watchdog/E-stop
+  remain essential; stale motor feedback prevents computing a fresh hold.
+- Updated GUI explanatory label (no new controls), inference/controller docs and
+  message comments to avoid claiming that inference has no controller consumer.
+  Target commands/test steps live in src/robot_control_pkg/README.md.
+- Validation: robot_control build passed (existing warnings); all31 C++ tests
+  passed (5 FK/IK,12 PD,5 sine,9 new admittance/eligibility),18 GUI force-preview
+  tests passed. Private-domain position smoke passed. Admittance smoke checks
+  legacy rejection, N/sign/X-passivity, two-axis motor previews, target changes,
+  atomic rejection, camera gap/recovery, body/unknown/stale/NaN/model/force/tension
+  faults, reset, and asserts ZERO actuator messages. No learned-model physical
+  accuracy or closed-loop plant test. Existing inference parity tests remain
+  documented in the earlier section.
+- Remaining: verify hardware PD directions, force sign/calibration and model lag;
+  choose recovery policy and masked load detector; tune actual contact dynamics.
+  With K>0 steady force error=Kδ, so target-only operation does not ensure exact
+  force tracking. K=0 removes spring bias but does not establish stability or
+  contact in free space. Axial X and Cartesian cross-coupling remain uncontrolled.
+
+## Force inference tip/TF input support (2026-10-12, follow-up)
+
+- User added input-combination bundles and requested fk_tip_tf / estimated_tip
+  support plus a simple explanation of automatic arrays. Model feature_columns
+  supplies the order; feature_spec maps each name to live fields, and
+  FeatureHistory.sample builds the numeric row in that exact order. No per-model
+  hardcoded array is necessary, but new feature kinds require an adapter.
+- Added PointStamped sources `/estimated_tip_position` and
+  `/kinematics/fk_tip_position`; TFMessage `/tf` filtering direct hrm_base parent
+  and children `hrm_fk_tip` / `estimated_segment_center_19`.
+  `fk_tip_tf` includes m XYZ + xyzw. Estimated-pose models combine final boundary
+  XYZ (`estimated_tip`) and last-center quaternion (`estimated_tip_orientation`),
+  matching recorded summary columns; never substitute the center's translation.
+  Original quaternion values/signs retained; optional Euler degree fields follow
+  recorder formulas. Wrong frame, zero/nonfinite quaternion or invalid XYZ fails.
+- FeatureHistory now tracks TF children separately from physical topics so a
+  live unrelated TF broadcaster cannot conceal stale/missing tip data. One /tf
+  subscription with depth 100, all other subscriptions keep previous depth 1.
+  Each transform's source stamp is preserved. No TF lookup/interpolation, frame
+  remapping, controller changes, hardware launches or motor commands.
+- Current source models: six groups x 242 = 1,452 bundles. Groups and per-row
+  dimensions: cable_loadcell 8; cable_angle/loadcell_angle 22;
+  cable_loadcell_angle 26; cable_loadcell_fk_tip_tf/estimated_pose 15.
+  All 1,452 input mappings + strict restores + finite inference passed. Existing
+  archived numerical parity tests remain cable/loadcell-only. Unit/runtime/
+  shutdown/pose tests: 147 passed; isolated DDS-domain synthetic ROS tests with
+  real cable/FK-pose/estimated-pose class0 + masked models: 3 passed, including
+  ordered input values, model switches and stale recovery. Not physical accuracy.
+- Updated force_id_inputs.py, force_id_estimation.py, package.xml (tf2_msgs),
+  tests and docs/force_id_inference.md. Rebuilt estimation_pkg with symlink install
+  to install the newly added model groups without copying NPZ archives.
+
+## Optional force/contact inference implemented (2026-10-12)
+
+- Read user-provided `docs/CHATGPT_WORK.md` section 97. Current scope is learned
+  inference + GUI diagnostics, **not motor/admittance integration**. No motor
+  command or camera was started for these tests. User freed disk; ~72 GiB free
+  at handoff. Existing dataset edits/deleted legacy H5 files and unrelated GUI
+  serial-port changes were preserved.
+- New `estimation_pkg/force_id_estimation.py` node `/force_id_estimator` and
+  standalone `force_id_estimation.launch.py`. New combined topic
+  `/force_id_estimation` (`custom_interfaces/msg/ForceIdEstimate`) contains XYZ
+  force, raw/control ID, original 19 probabilities, readiness, load state,
+  model/window/timing metadata and body/tip eligibility flags.
+  It never publishes legacy `/estimated_external_force` or actuator commands.
+- Models discovered recursively under `src/estimation_pkg/models/**/hrm_bundle.pt`.
+  Current 242 schema-2 `independent_hrm` bundles: class0/masked, 11 force x 11
+  location architectures. `force_id_runtime.py` / `force_id_models.py` restore
+  strict state dictionaries with weights_only loading, independently normalize
+  each branch, and inverse-scale force. `.npz` is archived validation output,
+  not the scaler; scalers are in `.pt`. Some copied experiment JSON/YAML files
+  are empty and unused. Install only `.pt`, not large offline NPZ files.
+- Bundle feature order/window is authoritative. Current inputs: four wire
+  lengths (mm, `/wire_length`) + four unchanged loadcell tensions
+  (`/loadcell_state`); window 30. No camera, F/T ground truth or unused angles
+  required. Future angle features use odd tilt/even pan, radians. Unknown or
+  target/label features fail explicitly. `force_id_inputs.py` checks finite
+  values, new source messages, age/skew/gaps and clears history on invalid data.
+  Default timer 30 Hz, timeout .25 s, max skew .1 s, max window gap .15 s;
+  30 fresh rows required after startup/recovery. Headerless wire uses receipt
+  time. This is not exact camera-stamp alignment of the training dataset.
+- Forces are N / hrm_base, **training sign unchanged**. Future control negation
+  (-1) deliberately deferred. Class0 raw ID0 gives UNLOADED/control ID18 without
+  replacing force or probabilities. Masked has no load classifier: UNKNOWN,
+  control ID -1, tip_force_valid false; no invented 150/200 mN threshold.
+  Loaded raw ID1..17 is not valid tip force (current force models are tip-only).
+  Invalid output uses NaN/-1, not a fabricated zero-force observation.
+- GUI Packages has optional **Force / contact**, automatic start OFF. Explicit
+  model selection + Refresh; stop component before selecting another bundle.
+  Body monitor and +/-ID can update via estimator parameters. Heatmap uses raw
+  ID1..18 probabilities and active-ID argmax +/- tolerance, never renormalizes
+  or treats band probability as accuracy. Fx_pred/Fy_pred/Fz_pred display mN,
+  base-frame labels; measured F/T remains sensor-frame. Unified stream invalid
+  or stale never silently falls back to the legacy force topic. Body setting
+  is diagnostic/future-policy only, not an implemented stop/hold controller.
+- Launch uses HRM_INFERENCE_PYTHON, else ~/HRM_env/bin/python3 when available,
+  else current Python. Here ROS system Python lacks Torch; HRM_env has it.
+  CPU / one BLAS thread by default. GUI does not import Torch. Model-load
+  failures show status; invalid dynamic selection keeps the previous model.
+- Verified: custom_interfaces + estimation_pkg + gui_py_pkg symlink builds;
+  all 242 bundles strict restore/finite inference; 22 architecture/mode pairs
+  compared to archived NPZ outputs (three windows each, atol 2e-6); 113 input/
+  runtime tests, five shutdown tests, 422 GUI tests, isolated DDS-domain ROS
+  integration test (warm-up, stale/recovery, model switch, body/ID parameters,
+  no legacy-force/motor publishers). Standalone launch loaded the real bundle
+  and exited cleanly on SIGINT. Synthetic tests do not validate physical force
+  accuracy. Transformer requires tanh-approximate GELU per archived parity.
+- Next control discussion: current robot_control legacy force callback copies
+  only x/y; adopt combined XYZ/frame/validity, apply agreed sign once and use
+  **Y/Z admittance only**, X observable. Agree masked load detection, body
+  behavior and invalid/stale force policy before enabling any motor response.
+- Usage/contract/tests: `src/estimation_pkg/docs/force_id_inference.md`;
+  GUI details in `src/gui_py_pkg/README.md`. Training code remains separate.
+
+## September 26 sine dataset pose refresh (2026-10-11)
+
+- Later user request: collected all 40 refreshed CSVs under dataset root
+  `summaries_sine_35deg_both/`, named `summary_<session-name>.csv`. Initially hard
+  links, then converted to INDEPENDENT COPIES at the user's explicit request.
+  Collection has 238,401 rows across its files and adds 859,667,824 CSV bytes.
+  Original per-session files retained; source/copy SHA256 matches and distinct
+  inodes verified. `collection_manifest.json` records source paths, row counts,
+  hashes and independent-copy semantics. Editing copies does not change originals;
+  future source refreshes do not update copies automatically. Do not double-count
+  originals and collection in training.
+- Refreshed `record/20260926 외력 추정 데이터 1/*/csv/summary.csv` in place:
+  40 sessions, 238,401 actual existing rows, unchanged 268 columns. Only the four
+  tip groups changed using production `summary_csv.py` unbounded nearest logic.
+  All other cells, manual labels/force edits, timestamp formatting and row order
+  are identical to the old CSVs. No deleted rows were restored.
+- Six CSVs have spreadsheet-rounded scientific-notation timestamps. Matched them
+  to exact original angle stamps using rounding bounds, receive times and elapsed
+  times; preserved displayed cells while tip time differences use exact anchors.
+  Four old schemas overstated rows by 115 total (ID15/16/17/18 right); updated
+  schema row counts to actual CSV counts, without adding/removing any data rows.
+- Source tip/TF exports have zero decode errors; message counts agree with bag
+  metadata and actual CSV row counts agree with export manifests. Reused existing
+  topic CSVs instead of redundantly exporting whole bags. Bags and topic CSVs
+  unchanged. No ROS replay, hardware node launch or motor commands.
+- Blank counts before -> after: estimated_tip 94 -> 0; fk_tip 108 -> 0;
+  estimated_tip_orientation 95,497 -> 0; fk_tip_tf 92,527 -> 0. Largest absolute
+  match gaps respectively 66.7 ms, 1.968 s, 2.767 s and 5.300 s. These are recorded
+  samples associated without age limits, not interpolated/contemporaneous truth.
+- Backups: dataset-root `summary_refresh_20261011/previous_metadata/<session>/csv/`
+  contains `summary.csv.gz`, original schema/manifest, and replacement hashes.
+  All 40 old compressed and new CSV checksums verified. Entire report/backup folder
+  ~307.5 MB (compressed CSVs 303.3 MB); no separate latest-summary collection.
+  Refreshed CSVs grew ~40.5 MB total; free space after work ~4.7 GiB.
+- Report: dataset-root `summary_refresh_20261011/report.json`. Independent bisect
+  validation checked all 953,604 tip-group matches; 480 first/middle/last poses
+  decoded directly from read-only SQLite bags agree. 91 summary/startup tests
+  passed with ROS imports enabled. No staging folders remain.
+- One-off task helpers: `/tmp/refresh_hrm_20260926_poses.py` and
+  `/tmp/verify_hrm_20260926_poses.py`. Production bag decoder is
+  `src/record_pkg/record_pkg/export_csv.py`; summary joining/conversion is
+  `src/record_pkg/record_pkg/summary_csv.py`. The one-off refresh deliberately
+  preserves current summary rows/non-tip cells instead of regenerating those.
+
+## Recorded datasets refreshed in place (2026-10-11)
+
+- Collected independent copies of all 18 refreshed main summaries under
+  summaries_static_pan_-30to+30_tilt_-30to+30_interval-15deg/ in the dataset root.
+  Names: summary_static_pan_-30to+30_tilt_-30to+30_interval-15deg_seg-id-1.csv
+  through -18.csv (no right suffix). All hashes verified against refreshed originals.
+  collection_manifest.json retains source mapping, row counts, hashes and ID1's
+  22 trial boundaries. Total 2.708 GB; original files unchanged. Do not double-count
+  copies and original/backup summaries in training. Free disk now about 2.68 GiB.
+- Updated all 18 main summaries under record/20260928 외력 추정 데이터들/:
+  759,945 rows, unchanged 268 columns. Tip four-group unbounded nearest policy;
+  every non-tip cell (including force, angles, labels and timestamps) preserved.
+- ID1's 22 originals in seperated_folders were refreshed individually, then
+  remerged; no matching across trial boundaries. 39 source summaries + 1 merged.
+- All previous summaries retained under summary_refresh_20261011/previous_metadata/
+  (about 2.72 GB). Initial eight were replaced before user freed space; their old
+  copies were reconstructed and verified byte-for-byte against recorded SHA256.
+  All 40 old and 40 new checksums independently verified. Bag/topic CSVs untouched.
+- ID10 had rounded scientific-notation timestamps and aligned forces absent from
+  source topic CSVs. Preserved existing non-tip cells instead of overwriting them
+  with regenerated data; row correspondence checked against source time/elapsed/ID.
+- Main-summary blanks now: estimated_tip 170->0; estimated_tip_orientation
+  149285->0; fk_tip 115->0; fk_tip_tf 151824->0. Time-gap caveat: max orientation
+  difference 3.200 s / FK TF 3.834 s. Filled does not mean contemporaneous truth.
+- Report/checksums/per-session time-gap stats: summary_refresh_20261011/report.json.
+  Training must exclude backup folders and ID1 separated originals when using its
+  merged summary to avoid duplicate samples. Final free space about 5.2 GiB.
+
+## Summary tip/pose nearest-time matching (2026-10-11)
+
+- Latest user request removed the 25 ms bound for estimated_tip, fk_tip,
+  fk_tip_tf and estimated_tip_orientation. All four now use UNBOUNDED nearest
+  source time (past or future, exact preferred, past wins ties), superseding the
+  earlier same-day bounded change. No change to sensor/tag tolerances (25 ms).
+  Source stamp and signed time_difference_ms remain truthful. Missing/invalid
+  streams stay blank, but distant tips may be reused across gaps/end of stream;
+  inspect age in training. Schema groups matching=nearest_unbounded and
+  max_time_difference_ms=null. CLI tolerance option only controls sensors/tags.
+- Existing 268 columns, angle anchors, startup policy, sensor matching and tag
+  detection guard unchanged. Bag and per-topic export unchanged; existing datasets
+  NOT regenerated or overwritten. Old summary can be rebuilt from complete topic
+  CSVs; actual messages missing from the recording cannot be recreated by matching.
+- 458 recorder functional tests passed, including all four tip groups outside
+  25 ms, multi-second gaps, no limit even at zero sensor tolerance, missing streams,
+  exact/nearest selection, TF child filtering and signed provenance. Symlink imports
+  updated source; no build needed. No hardware/ROS nodes started or restarted.
 
 ## ID2 interrupted export recovered (2026-09-28)
 

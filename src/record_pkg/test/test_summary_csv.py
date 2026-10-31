@@ -59,7 +59,7 @@ def test_all_channels_all_angles_and_uncompensated_pose_are_separate_columns(tmp
                 'point.x': .082, 'point.y': 0, 'point.z': .003}])
     write_topic(tmp_path, manifest, '/estimated_tip_position_unscaled', [{
         **stamp(1_000_000_000), 'point.x': .09, 'point.y': 0, 'point.z': .004}])
-    # Wrong stamp must not attach another frame's estimate to this angle.
+    # Tip telemetry uses nearest source time, without an age limit.
     write_topic(tmp_path, manifest, '/kinematics/fk_tip_position', [{**stamp(1_001_000_000),
                 'point.x': .08, 'point.y': 0, 'point.z': .002}])
     write_topic(tmp_path, manifest, '/tf', [{
@@ -83,7 +83,8 @@ def test_all_channels_all_angles_and_uncompensated_pose_are_separate_columns(tmp
     assert not any(key.startswith('estimated_tip_unscaled.') for key in row)
     assert 'estimated_tip_unscaled' not in report['groups']
     assert row['estimated_tip.x_m'] == '0.082'
-    assert row['fk_tip.x_m'] == '' and row['fk_tip.matched'] == 'False'
+    assert row['fk_tip.x_m'] == '0.08' and row['fk_tip.matched'] == 'True'
+    assert row['fk_tip.time_difference_ms'] == '1.0'
     assert row['fk_tip_tf.x_m'] == '0.081' and row['fk_tip_tf.qw'] == '1.0'
     assert row['tag_id0_to_id1.frame_id'] == 'ID0'
     assert row['tag_id0_to_id1.x_m'] == '0.12'  # No mounting compensation.
@@ -97,6 +98,114 @@ def test_all_channels_all_angles_and_uncompensated_pose_are_separate_columns(tmp
         assert all(len(raw_row) == 268 for raw_row in csv.reader(handle))
     for name, digest in before.items():
         assert hashlib.sha256((tmp_path / name).read_bytes()).hexdigest() == digest
+
+
+def write_tips(directory, manifest, offsets):
+    """Each offset gets distinct values; nearby unrelated TF must be ignored."""
+    point_rows, tf_rows = [], []
+    for index, offset in enumerate(offsets):
+        ns = 1_000_000_000 + offset
+        point_rows.append({**stamp(ns), 'point.x': -(index + 1),
+                           'point.y': 0., 'point.z': .02})
+        rotation = {'transform.rotation.x': 0., 'transform.rotation.y': 0.,
+                    'transform.rotation.z': 0., 'transform.rotation.w': -(index + 1)}
+        for child in ('hrm_fk_tip', 'estimated_segment_center_19'):
+            tf_rows.append({**stamp(ns), 'child_frame_id': child,
+                            'transform.translation.x': -(index + 1),
+                            'transform.translation.y': 0., 'transform.translation.z': .02,
+                            **rotation})
+    tf_rows.append({**stamp(1_000_000_000), 'child_frame_id': 'unrelated_frame',
+                    'transform.translation.x': 999., 'transform.rotation.w': 1.})
+    for topic in ('/estimated_tip_position', '/kinematics/fk_tip_position'):
+        write_topic(directory, manifest, topic, point_rows)
+    write_topic(directory, manifest, '/tf', sorted(tf_rows, key=lambda r: r['source_time_ns']))
+
+
+TIP_GROUPS = ('estimated_tip', 'fk_tip', 'fk_tip_tf', 'estimated_tip_orientation')
+
+
+@pytest.mark.parametrize('offset_ns,tolerance_ms', [
+    (0, 25), (-1_000_000, 25), (1_000_000, 25),
+    (-25_000_000, 25), (25_000_000, 25),
+    (-25_000_001, 25), (25_000_001, 25),
+    (-100_000_000, 25), (100_000_000, 25),
+    (-900_000_000, 25), (5_000_000_000, 25),
+    (10_000_000, 10), (10_000_001, 10),
+    (0, 0), (1, 0),
+])
+def test_all_tip_groups_use_unbounded_nearest_time(
+        tmp_path, offset_ns, tolerance_ms):
+    manifest = {'status': 'complete', 'topics': {}}
+    write_topic(tmp_path, manifest, ANGLE_TOPIC, [angle_row()])
+    write_tips(tmp_path, manifest, [offset_ns])
+    report = export_summary(tmp_path, manifest, max_time_difference_ms=tolerance_ms)
+    row = read_summary(tmp_path)[0]
+    assert len(row) == 268
+    for group in TIP_GROUPS:
+        key = 'qw' if group == 'estimated_tip_orientation' else 'x_m'
+        assert row[f'{group}.matched'] == 'True'
+        assert row[f'{group}.{key}'] == '-1.0'
+        assert report['groups'][group]['exact_source_stamp_only'] is False
+        assert report['groups'][group]['matching'] == 'nearest_unbounded'
+        assert report['groups'][group]['max_time_difference_ms'] is None
+        assert int(row[f'{group}.source_time_ns']) == 1_000_000_000 + offset_ns
+        assert float(row[f'{group}.time_difference_ms']) == offset_ns / 1e6
+        assert row[f'{group}.time_basis'] == 'source'
+
+
+def test_tip_time_limit_removed_without_changing_sensor_limit(tmp_path):
+    manifest = {'status': 'complete', 'topics': {}}
+    write_topic(tmp_path, manifest, ANGLE_TOPIC, [angle_row(), angle_row(5_000_000_000)])
+    write_tips(tmp_path, manifest, [-100_000_000])
+    write_topic(tmp_path, manifest, '/fts_data', [{**stamp(900_000_000),
+                'wrench.force.x': 12., 'wrench.force.y': 0., 'wrench.force.z': 0.}])
+    export_summary(tmp_path, manifest)
+    for row in read_summary(tmp_path):
+        assert row['fts.matched'] == 'False'
+        for group in TIP_GROUPS:
+            assert row[f'{group}.matched'] == 'True'
+            assert row[f'{group}.source_time_ns'] == '900000000'
+            assert float(row[f'{group}.time_difference_ms']) == (
+                900_000_000 - int(row['source_time_ns'])) / 1e6
+
+
+def test_unbounded_tip_matching_does_not_invent_missing_topics(tmp_path):
+    manifest = {'status': 'complete', 'topics': {}}
+    write_topic(tmp_path, manifest, ANGLE_TOPIC, [angle_row()])
+    # Invalid stamps must still be rejected, even without a time limit.
+    write_topic(tmp_path, manifest, '/estimated_tip_position', [{**stamp(0),
+                'point.x': 9., 'point.y': 0., 'point.z': 0.}])
+    export_summary(tmp_path, manifest)
+    row = read_summary(tmp_path)[0]
+    for group in TIP_GROUPS:
+        assert row[f'{group}.matched'] == 'False'
+        assert row[f'{group}.source_time_ns'] == ''
+
+
+@pytest.mark.parametrize('offsets,selected', [
+    ([-20_000_000, 5_000_000], 1),
+    ([-5_000_000, 20_000_000], 0),
+    ([-10_000_000, 0, 10_000_000], 1),
+    ([-5_000_000, 5_000_000], 0),
+])
+def test_tips_choose_nearest_exact_or_past_on_tie_without_changing_other_columns(
+        tmp_path, offsets, selected):
+    manifest = {'status': 'complete', 'topics': {}, 'contact_segment_id': 2}
+    write_topic(tmp_path, manifest, ANGLE_TOPIC, [angle_row()])
+    write_topic(tmp_path, manifest, '/fts_data', [{**stamp(1_000_000_000),
+                'wrench.force.x': -123., 'wrench.force.y': 0., 'wrench.force.z': 5.}])
+    write_tips(tmp_path, manifest, offsets)
+    export_summary(tmp_path, manifest)
+    row = read_summary(tmp_path)[0]
+    for group in TIP_GROUPS:
+        key = 'qw' if group == 'estimated_tip_orientation' else 'x_m'
+        assert float(row[f'{group}.{key}']) == -(selected + 1)
+        assert float(row[f'{group}.time_difference_ms']) == offsets[selected] / 1e6
+    assert row['fts.fx'] == '-123.0'
+    assert row['fts.fy'] == '0.0'
+    assert row['contact_segment_id'] == '2'
+    assert row['source_time_ns'] == '1000000000'
+    assert row['pan_relative_18_rad'] == '0.17'
 
 
 def test_active_relative_velocities_keep_zero_sign_order_and_same_sample():

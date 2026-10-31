@@ -1,4 +1,4 @@
-"""Explicit, nonblocking controls for the controller's existing IK sine motion."""
+"""Explicit, nonblocking controls for IK-angle and Cartesian-reference sine motion."""
 
 import math
 import time
@@ -18,16 +18,26 @@ TIMEOUT_SECONDS = 3.0
 class SineMotionPanel(QWidget):
     """Only Start applies settings; Stop never changes mode or enables motors."""
 
+    title = 'IK sine'
+    service_root = '/kinematics'
+    parameter_root = 'motion.sine'
+    axis_defaults = (('pan', 90.), ('tilt', 0.))
+    parameter_axes = ('tilt', 'pan')
+    amplitude_default = 45.
+    amplitude_maximum = 45.
+    amplitude_suffix = '°'
+    required_mode = 'Kinematics'
+
     def __init__(self, node, parent=None, kinematics_selected=None):
         super().__init__(parent)
         self._kinematics_selected = kinematics_selected or (lambda: True)
         self._parameters = node.create_client(
             SetParametersAtomically, '/robot_control/set_parameters_atomically')
-        self._motion = node.create_client(SetBool, '/kinematics/sine_motion')
+        self._motion = node.create_client(SetBool, self.service_root + '/sine_motion')
         self._status_message = None
         self._seen_status = None
         self._subscription = node.create_subscription(
-            String, '/kinematics/sine_status', self.receive_status,
+            String, self.service_root + '/sine_status', self.receive_status,
             QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL))
         self._pending = None
         self._future = None
@@ -44,12 +54,13 @@ class SineMotionPanel(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
-        row.addWidget(QLabel('IK sine'))
+        row.addWidget(QLabel(self.title))
         self.amplitude, self.phase = {}, {}
-        for axis, phase in (('pan', 90.), ('tilt', 0.)):
+        for axis, phase in self.axis_defaults:
             row.addSpacing(4)
             row.addWidget(QLabel(axis.capitalize() + ' A'))
-            self.amplitude[axis] = self._spin(0., 45., 45., '°')
+            self.amplitude[axis] = self._spin(
+                0., self.amplitude_maximum, self.amplitude_default, self.amplitude_suffix)
             self.amplitude[axis].setToolTip(
                 'Amplitude [deg], centred on 0°. 0 means target 0°, not hold current pose.')
             row.addWidget(self.amplitude[axis])
@@ -67,7 +78,7 @@ class SineMotionPanel(QWidget):
         self.start_button.setFixedWidth(45)
         self.stop_button.setFixedWidth(45)
         self.start_button.setToolTip(
-            'Apply settings then start IK sine. Kinematics mode required. '
+            f'Apply settings then start {self.title}. {self.required_mode} mode required. '
             'Does not enable physical motor output.')
         self.stop_button.setToolTip(
             'Stop new sine targets; retain the last target. No zero return. '
@@ -118,18 +129,11 @@ class SineMotionPanel(QWidget):
             return
         try:
             if not self._kinematics_selected():
-                raise ValueError('Select Kinematics mode first; no automatic mode switching.')
+                raise ValueError(
+                    f'Select {self.required_mode} mode first; no automatic mode switching.')
             if not self._parameters.service_is_ready() or not self._motion.service_is_ready():
                 raise RuntimeError('Services unavailable. Start robot_control, then retry.')
-            if any(2 * math.pi * spin.value() / self.period.value() > 15.
-                   for spin in self.amplitude.values()):
-                raise ValueError('Peak speed >15 deg/s. Increase period or reduce amplitude.')
-            parameters = [
-                Parameter('motion.sine.' + axis,
-                          value=[0., self.amplitude[axis].value(), self.phase[axis].value()]
-                          ).to_parameter_msg() for axis in ('tilt', 'pan')]
-            parameters.append(Parameter(
-                'motion.sine.period_sec', value=self.period.value()).to_parameter_msg())
+            parameters = self.motion_parameters()
             self._future = self._parameters.call_async(
                 SetParametersAtomically.Request(parameters=parameters))
             self._pending = 'configure'
@@ -139,6 +143,23 @@ class SineMotionPanel(QWidget):
         except Exception as error:
             self._status('Error', str(error), True)
         self._controls()
+
+    def motion_parameters(self):
+        """IK settings retain the existing angle/peak-speed convention."""
+        if any(2 * math.pi * spin.value() / self.period.value() > 15.
+               for spin in self.amplitude.values()):
+            raise ValueError('Peak speed >15 deg/s. Increase period or reduce amplitude.')
+        return self._parameter_messages({axis: 0. for axis in self.parameter_axes})
+
+    def _parameter_messages(self, centers):
+        parameters = [
+            Parameter(self.parameter_root + '.' + axis,
+                      value=[centers[axis], self.amplitude[axis].value(),
+                             self.phase[axis].value()]).to_parameter_msg()
+            for axis in self.parameter_axes]
+        parameters.append(Parameter(self.parameter_root + '.period_sec',
+                                    value=self.period.value()).to_parameter_msg())
+        return parameters
 
     def stop_motion(self):
         self._cancel_start = True
@@ -265,8 +286,55 @@ class SineMotionPanel(QWidget):
             if not self._pending and self._stop_future is None and not self._unknown:
                 self._seen_status = message
                 text = message.data
-                if text.startswith(('RUNNING', 'DRY_RUN', 'STOPPED')):
+                if text.startswith(('RUNNING', 'DRY_RUN', 'PAUSED', 'STOPPED')):
                     self._active = not text.startswith('STOPPED')
                     self._status('Stopped' if not self._active else
-                                 ('Dry run' if text.startswith('DRY_RUN') else 'Running'), text)
+                                 ('Paused' if text.startswith('PAUSED') else
+                                  'Dry run' if text.startswith('DRY_RUN') else 'Running'), text)
         self._controls()
+
+
+class PositionSineMotionPanel(SineMotionPanel):
+    """Absolute Y/Z reference waveform; reuses the guarded asynchronous controls."""
+
+    title = 'Y/Z sine'
+    service_root = '/position'
+    parameter_root = 'motion.position_sine'
+    axis_defaults = (('y', 0.), ('z', 90.))
+    parameter_axes = ('y', 'z')
+    amplitude_default = 0.010
+    amplitude_maximum = 1.0  # The controller validates its configured workspace.
+    amplitude_suffix = ' m'
+    required_mode = 'Position or Admittance'
+
+    def __init__(self, node, parent=None, position_selected=None, center_provider=None):
+        self._center_provider = center_provider or (lambda: {'y': 0., 'z': 0.})
+        super().__init__(node, parent, kinematics_selected=position_selected)
+        for spin in self.amplitude.values():
+            spin.setDecimals(4)
+            spin.setSingleStep(0.0001)
+            spin.setFixedWidth(86)
+            # The shared degree widget's one-decimal initialization rounds
+            # 0.010 m to zero, so restore its default after setting precision.
+            spin.setValue(self.amplitude_default)
+            spin.setToolTip(
+                'Amplitude [m], e.g. 0.010 m = 10 mm. Uses the corresponding Move Tip '
+                'Y/Z value as an absolute hrm_base centre, even in Relative actuation mode. '
+                'A=0 holds that centre, not the current measured position.')
+        for spin in self.phase.values():
+            spin.setToolTip('Phase [deg]. Z φ − Y φ is the phase difference.')
+        self.period.setToolTip(
+            'Common period [s]; Y/Z reference = centre + A sin(2πt/T + φ). '
+            'Backend validates per-axis reference speed and workspace; PID gains unchanged.')
+        self.stop_button.setToolTip(
+            'Stop the waveform and retain its last nominal position. Position PD / '
+            'admittance control continues. No zero return; NOT a hardware emergency stop.')
+
+    def motion_parameters(self):
+        raw_centers = self._center_provider()
+        centers = {axis: float(raw_centers[axis]) for axis in self.parameter_axes}
+        if not all(math.isfinite(center) for center in centers.values()):
+            raise ValueError('Y/Z sine centres must be finite absolute hrm_base coordinates [m].')
+        # Only the backend knows current workspace and configurable speed limits.
+        # It rejects the complete atomic configuration before any Start is sent.
+        return self._parameter_messages(centers)

@@ -9,18 +9,27 @@
 
 /**
  * @brief Image-paced PD: hrm_base Y -> tilt, Z -> pan; X is passive.
- * reset() fixes the operating-point angles on mode entry. update() applies an
- * absolute PD correction about that point, not a repeated full-output sum.
- * I=0 can leave steady-state error; cross-axis compensation is deferred.
+ * PID output is an angular velocity [rad/s], with I=0. update() limits this
+ * velocity, then integrates it once using the source-frame dt into the current
+ * IK command. Constant-error P action depends on elapsed time, not frame count.
+ * reset() seeds that command once, NOT a fixed reference for later targets.
+ * Cross-axis compensation and physical tuning remain to be validated.
  */
 class PositionController {
 public:
+  // Motion integration has its own limit; a relaxed sensor-freshness timeout
+  // must not permit accumulated motion across missing source-image frames.
+  static constexpr double MAX_CONTROL_FRAME_DT_SEC = 0.25;
+
   PositionController();
   ~PositionController();
 
   void initialize();
-  // Establish an operating point once on mode entry, not on every frame.
+  // Initialize the command and clear PID history once on mode entry.
   void reset(const Eigen::VectorXd& x_actual, double pan_rad, double tilt_rad);
+  // Resume feedback after a pause without changing the current IK command.
+  void reset_feedback_history(
+    const Eigen::VectorXd& x_desired, const Eigen::VectorXd& x_actual);
   void set_limits(double max_speed_deg_s, double derivative_filter_sec);
 
   PIDController pid_controller_pan_;
@@ -49,8 +58,6 @@ public:
 
 private:
   bool initialized_ = false;
-  double reference_pan_ = 0.0;
-  double reference_tilt_ = 0.0;
   double max_speed_rad_s_ = position_control_params::MAX_ANGULAR_SPEED_DEG_S * std::acos(-1.0) / 180.0;
   double derivative_filter_sec_ = position_control_params::DERIVATIVE_FILTER_SEC;
 };

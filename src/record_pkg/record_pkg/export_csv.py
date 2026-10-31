@@ -424,6 +424,18 @@ def export_session(source, output=None):
         except Exception as exc:
             manifest['summary_csv'] = {'status': 'failed', 'error': str(exc)}
             manifest['status'] = 'partial'
+        # Independent of the training summary and its required-signal gate.
+        # Only command/pose topic CSVs are read; original files stay unchanged.
+        try:
+            from record_pkg.control_tracking import export_control_tracking
+            settings = config.get('control_tracking_csv', {})
+            if settings.get('enabled', True):
+                manifest['control_tracking_csv'] = export_control_tracking(directory, manifest)
+            else:
+                manifest['control_tracking_csv'] = {'status': 'disabled'}
+        except Exception as exc:
+            manifest['control_tracking_csv'] = {'status': 'failed', 'error': str(exc)}
+            manifest['status'] = 'partial'
         manifest['completed_utc'] = datetime.now(timezone.utc).isoformat()
         save_manifest(manifest_path, manifest)
     return manifest

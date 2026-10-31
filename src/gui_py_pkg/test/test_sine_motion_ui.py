@@ -49,28 +49,30 @@ class FakeClient:
 
 
 class FakeNode:
-    def __init__(self):
+    def __init__(self, root='/kinematics'):
         self.calls = []
         self.clients = {}
         self.subscriptions = {}
         self.unavailable = set()
+        self.motion_service = root + '/sine_motion'
+        self.status_topic = root + '/sine_status'
 
     def create_client(self, service_type, service, **kwargs):
         assert (service_type, service) in (
-            (SetParametersAtomically, CONFIG_SERVICE), (SetBool, MOTION_SERVICE))
+            (SetParametersAtomically, CONFIG_SERVICE), (SetBool, self.motion_service))
         client = FakeClient(self, service_type, service)
         self.clients[service] = client
         return client
 
     def create_subscription(self, message_type, topic, callback, qos, **kwargs):
         assert message_type is String
-        assert topic == STATUS_TOPIC
+        assert topic == self.status_topic
         self.subscriptions[topic] = (callback, qos)
         return object()
 
     @property
     def motion_calls(self):
-        return [call for call in self.calls if call.service == MOTION_SERVICE]
+        return [call for call in self.calls if call.service == self.motion_service]
 
     def answer(self, call, successful=True, reason=''):
         response = call.service_type.Response()
@@ -477,3 +479,138 @@ def test_config_timeout_does_not_allow_new_config_until_old_request_settles(pane
         node.answer(node.motion_calls[-1], reason='stopped after configuration')
         widget.poll()
     assert widget.start_button.isEnabled()
+
+
+@pytest.fixture
+def position_panel(app, monkeypatch):
+    now = [100.]
+    monkeypatch.setattr(sine_motion.time, 'monotonic', lambda: now[0])
+    node = FakeNode('/position')
+    widget = sine_motion.PositionSineMotionPanel(node)
+    yield widget, node, now
+    widget.timer.stop()
+    widget.close()
+
+
+def test_position_defaults_units_and_atomic_parameter_order(position_panel):
+    widget, node, unused = position_panel
+    assert set(widget.amplitude) == {'y', 'z'}
+    assert widget.amplitude['y'].value() == .010
+    assert widget.amplitude['z'].value() == .010
+    assert widget.amplitude['y'].decimals() == 4
+    assert widget.amplitude['y'].singleStep() == .0001
+    assert widget.amplitude['y'].suffix() == ' m'
+    assert widget.phase['y'].value() == 0.
+    assert widget.phase['z'].value() == 90.
+    assert widget.period.value() == 20.
+    assert not node.calls
+    widget._center_provider = lambda: {'y': '-0.002', 'z': '0.007'}
+    widget.start_motion()
+    assert [p.name for p in node.calls[0].request.parameters] == [
+        'motion.position_sine.y', 'motion.position_sine.z', 'motion.position_sine.period_sec']
+    assert parameters(node.calls[0]) == {
+        'motion.position_sine.y': [-.002, .010, 0.],
+        'motion.position_sine.z': [.007, .010, 90.],
+        'motion.position_sine.period_sec': 20.}
+    assert not node.motion_calls
+    node.answer(node.calls[0])
+    widget.poll()
+    assert node.motion_calls[0].service == '/position/sine_motion'
+    assert node.motion_calls[0].request.data is True
+    assert '/position/sine_status' in node.subscriptions
+
+
+@pytest.mark.parametrize('stationary', ['y', 'z'])
+def test_position_zero_amplitude_holds_signed_absolute_centre(position_panel, stationary):
+    widget, node, unused = position_panel
+    widget._center_provider = lambda: {'y': -.004, 'z': .008}
+    widget.amplitude[stationary].setValue(0.)
+    widget.phase[stationary].setValue(-45.)
+    widget.start_motion()
+    assert parameters(node.calls[0])[f'motion.position_sine.{stationary}'] == [
+        -.004 if stationary == 'y' else .008, 0., -45.]
+    assert 'not the current measured position' in widget.amplitude[stationary].toolTip()
+
+
+@pytest.mark.parametrize('centers', [
+    {'y': 'nan', 'z': '0'}, {'y': '0', 'z': 'inf'},
+    {'y': 'bad', 'z': '0'}, {'y': '0'}, None,
+])
+def test_position_invalid_centre_never_sends_request(position_panel, centers):
+    widget, node, unused = position_panel
+    widget._center_provider = lambda: centers
+    widget.start_motion()
+    assert not node.calls
+    assert widget.status_label.text() == 'Error'
+
+
+def test_position_backend_owns_workspace_speed_and_rejection_never_starts(position_panel):
+    widget, node, unused = position_panel
+    widget._center_provider = lambda: {'y': .080, 'z': -.010}
+    widget.amplitude['y'].setValue(.080)
+    widget.period.setValue(1.)
+    widget.start_motion()
+    assert len(node.calls) == 1
+    sent = parameters(node.calls[0])
+    assert not any('speed' in key or 'gain' in key for key in sent)
+    node.answer(node.calls[0], successful=False, reason='workspace / reference speed exceeded')
+    widget.poll()
+    assert not node.motion_calls
+    assert 'workspace' in detail(widget)
+
+
+def test_position_mode_gate_never_switches_mode_or_enables_output(position_panel):
+    widget, node, unused = position_panel
+    widget._kinematics_selected = lambda: False
+    widget.poll()
+    assert not widget.start_button.isEnabled()
+    widget.start_motion()
+    assert not node.calls
+    assert 'position or admittance' in detail(widget)
+    assert widget.stop_button.isEnabled()
+    widget.stop_motion()
+    assert len(node.calls) == 1
+    assert node.calls[0].service == '/position/sine_motion'
+    assert node.calls[0].request.data is False
+    assert 'control continues' in widget.stop_button.toolTip()
+
+
+@pytest.mark.parametrize('scenario', [
+    test_config_timeout_never_continues_to_start_when_late_ack_arrives,
+    test_start_timeout_blocks_restart_and_keeps_late_start_stoppable,
+    test_stop_during_pending_start_reasserts_stop_after_late_start_ack,
+    test_mode_change_during_configuration_prevents_start,
+    test_config_timeout_does_not_allow_new_config_until_old_request_settles,
+])
+def test_position_reuses_asynchronous_safety_state_machine(position_panel, scenario):
+    scenario(position_panel)
+
+
+def test_position_editing_and_stop_never_change_pid_or_motor_gate(position_panel):
+    widget, node, unused = position_panel
+    widget.amplitude['y'].setValue(.005)
+    widget.phase['z'].setValue(-90.)
+    widget.period.setValue(30.)
+    widget.poll()
+    assert not node.calls
+    widget.stop_motion()
+    node.answer(node.motion_calls[-1], reason='hold last nominal position; PD continues')
+    widget.poll()
+    assert len(node.calls) == 1
+    assert node.calls[0].service == '/position/sine_motion'
+
+
+def test_position_paused_status_preserves_active_waveform_and_stop(position_panel):
+    widget, node, unused = position_panel
+    widget.receive_status(String(data='PAUSED because camera feedback is delayed'))
+    widget.poll()
+    assert widget.status_label.text() == 'Paused'
+    assert widget._active
+    assert not widget.start_button.isEnabled()
+    assert not widget.amplitude['y'].isEnabled()
+    assert widget.stop_button.isEnabled()
+    assert not node.calls
+    widget.receive_status(String(data='RUNNING after feedback resumed'))
+    widget.poll()
+    assert widget.status_label.text() == 'Running'
+    assert not widget.start_button.isEnabled()

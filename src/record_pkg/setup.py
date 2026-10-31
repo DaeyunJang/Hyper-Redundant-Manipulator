@@ -27,6 +27,7 @@ setup(
             'apriltag_pose = record_pkg.apriltag_pose:main',
             'export_csv = record_pkg.export_csv:main',
             'export_summary = record_pkg.summary_csv:main',
+            'export_control_tracking = record_pkg.control_tracking:main',
         ],
     },
 )

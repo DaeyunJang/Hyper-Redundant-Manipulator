@@ -15,8 +15,7 @@ void PIDController::set_PID_gains(double kp, double ki, double kd) {
 void PIDController::reset(double desired_value, double measured_value) {
   integral_ = 0.0;
   previous_error_ = desired_value - measured_value;
-  previous_measurement_ = measured_value;
-  filtered_measurement_velocity_ = 0.0;
+  filtered_error_derivative_ = 0.0;
   dt_ = 0.0;
   integral_vector_.setZero();
   previous_error_vector_.setZero();
@@ -34,15 +33,8 @@ double PIDController::compute_pd_output(
   {
     throw std::invalid_argument("Position PD requires finite inputs, dt>0 and I=0.");
   }
-  const double velocity = (measured_value - previous_measurement_) / dt;
-  const double alpha = dt / (derivative_filter_sec + dt);
-  filtered_measurement_velocity_ += alpha * (velocity - filtered_measurement_velocity_);
-  previous_measurement_ = measured_value;
-  previous_error_ = desired_value - measured_value;
-  integral_ = 0.0;
-  dt_ = dt;
-  // D on measurement: a target step alone must not create a derivative kick.
-  return kp_ * previous_error_ - kd_ * filtered_measurement_velocity_;
+  // Compatibility helper; position and scalar PID share the same error law.
+  return compute_output(desired_value, measured_value, dt, derivative_filter_sec);
 }
 
 double PIDController::get_integral() {
@@ -53,23 +45,34 @@ double PIDController::get_previous_error() {
 }
 
 
-double PIDController::compute_output(const double& desired_value, const double& measured_value, const double& dt) {
-  // 오차 계산 (목표값 - 측정값)
-  double error = desired_value - measured_value;
-  dt_ = dt;
-  
-  // 적분 계산 (I 항)
-  integral_ += error * dt;
-
-  // 미분 계산 (D 항)
-  double derivative = (error - previous_error_) / dt;
-
-  // PID 제어 계산: P * error + I * integral + D * derivative
-  double control_signal = kp_ * error + ki_ * integral_ + kd_ * derivative;
-
-  // 이전 오차 업데이트
+double PIDController::compute_output(
+  const double& desired_value, const double& measured_value, const double& dt,
+  double derivative_filter_sec)
+{
+  if (!std::isfinite(desired_value) || !std::isfinite(measured_value) ||
+      !std::isfinite(dt) || dt <= 0.0 ||
+      !std::isfinite(derivative_filter_sec) || derivative_filter_sec < 0.0 ||
+      !std::isfinite(kp_) || !std::isfinite(ki_) || !std::isfinite(kd_))
+  {
+    throw std::invalid_argument("PID requires finite inputs/gains, dt>0 and filter tau>=0.");
+  }
+  const double error = desired_value - measured_value;
+  // I=0 disables the error integral as well as its output contribution.
+  const double integral = ki_ == 0.0 ? 0.0 : integral_ + error * dt;
+  const double derivative = (error - previous_error_) / dt;
+  const double alpha = dt / (derivative_filter_sec + dt);
+  const double filtered_derivative = derivative_filter_sec == 0.0 ? derivative :
+    filtered_error_derivative_ + alpha * (derivative - filtered_error_derivative_);
+  const double control_signal = kp_ * error + ki_ * integral + kd_ * filtered_derivative;
+  if (!std::isfinite(error) || !std::isfinite(integral) ||
+      !std::isfinite(filtered_derivative) || !std::isfinite(control_signal))
+  {
+    throw std::invalid_argument("Non-finite PID state/output.");
+  }
+  integral_ = integral;
   previous_error_ = error;
-
+  filtered_error_derivative_ = filtered_derivative;
+  dt_ = dt;
   return control_signal;
 }
 

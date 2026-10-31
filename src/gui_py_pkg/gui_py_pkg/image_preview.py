@@ -9,12 +9,13 @@ import time
 from apriltag_msgs.msg import AprilTagDetectionArray
 import cv2
 from cv_bridge import CvBridge
+from custom_interfaces.msg import SegmentImageGeometry
 from geometry_msgs.msg import PointStamped, PoseStamped
 import numpy as np
-from PyQt5.QtCore import QRect, QSize, Qt, QTimer
-from PyQt5.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter
+from PyQt5.QtCore import QPointF, QRect, QSize, Qt, QTimer
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
-    QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QSizePolicy,
+    QCheckBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QSizePolicy,
     QVBoxLayout, QWidget,
 )
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
@@ -27,6 +28,7 @@ from sensor_msgs.msg import Image
 from gui_py_pkg.skeleton_preview import (
     TIP_TOPICS, SkeletonFrameBuffer, SkeletonPreviewFrame, format_skeleton_tips,
 )
+from gui_py_pkg.contact_overlay import CONTACT_GEOMETRY_TOPIC, contact_overlay
 
 
 IMAGE_TOPICS = {
@@ -203,6 +205,10 @@ class LatestImages(Node):
                 PointStamped, topic, lambda msg, kind=kind: self.receive_tip(kind, msg), qos)
             for kind, topic in TIP_TOPICS.items()
         ] if self._skeleton_buffer is not None else []
+        self.geometry_subscription = (
+            self.create_subscription(SegmentImageGeometry, CONTACT_GEOMETRY_TOPIC,
+                                     self.receive_geometry, qos)
+            if self._skeleton_buffer is not None else None)
         self.worker_executor = SingleThreadedExecutor(context=context)
         self.worker_executor.add_node(self)
         self.worker = threading.Thread(target=self._run,
@@ -236,6 +242,11 @@ class LatestImages(Node):
         with self._lock:
             self._skeleton_buffer.receive_tip(kind, msg)
 
+    def receive_geometry(self, msg):
+        """Cache the estimator's crop-pixel geometry without doing projection."""
+        with self._lock:
+            self._skeleton_buffer.receive_geometry(msg)
+
     def take_latest(self):
         """Consume pending frames while retaining last-arrival timestamps."""
         with self._lock:
@@ -252,7 +263,8 @@ class LatestImages(Node):
             if getattr(self, '_skeleton_buffer', None) is not None:
                 frame = self._skeleton_buffer.snapshot(time.monotonic())
                 if frame is not None:
-                    signature = (id(frame.image), id(frame.estimated_tip), id(frame.fk_tip))
+                    signature = (id(frame.image), id(frame.estimated_tip), id(frame.fk_tip),
+                                 id(frame.geometry))
                     if signature != self._skeleton_signature:
                         latest['skeleton'] = frame
                         self._skeleton_signature = signature
@@ -394,6 +406,7 @@ class ImageCanvas(QWidget):
         super().__init__()
         self.image = QImage()
         self.overlay_lines = ()
+        self.contact_overlay = None
         self.setMinimumSize(150, 100)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -415,6 +428,45 @@ class ImageCanvas(QWidget):
         if self.overlay_lines != lines:
             self.overlay_lines = lines
             self.update()
+
+    def set_contact_overlay(self, overlay):
+        """Keep display geometry separate from the owned source-image pixels."""
+        if self.contact_overlay != overlay:
+            self.contact_overlay = overlay
+            self.update()
+
+    @staticmethod
+    def contact_point(point, overlay, area):
+        """Map original crop pixel centres into the actual letterboxed image area."""
+        return QPointF(area.left() + (point[0] + 0.5) * area.width() / overlay.width,
+                       area.top() + (point[1] + 0.5) * area.height() / overlay.height)
+
+    def paint_contact_overlay(self, painter, area):
+        overlay = self.contact_overlay
+        if overlay is None:
+            return
+        painter.save()
+        painter.setClipRect(area)
+        painter.setRenderHint(QPainter.Antialiasing)
+        for segment_id, probability, points, center in overlay.segments:
+            faded = round(255 * (1.0 - probability))
+            color = QColor(255, faded, faded, 200)
+            pen = QPen(color, 7, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            painter.setPen(pen)
+            path = QPainterPath(self.contact_point(points[0], overlay, area))
+            for point in points[1:]:
+                path.lineTo(self.contact_point(point, overlay, area))
+            painter.drawPath(path)
+            if segment_id == overlay.center_id:
+                marker = self.contact_point(center, overlay, area)
+                painter.setBrush(Qt.NoBrush)
+                painter.setPen(QPen(QColor('#5bbaff'), 1.5))
+                painter.drawEllipse(marker, 5, 5)
+                font = painter.font()
+                font.setPixelSize(10)
+                painter.setFont(font)
+                painter.drawText(marker + QPointF(7, -5), str(segment_id))
+        painter.restore()
 
     def paintEvent(self, event):
         """Letterbox the image without changing its aspect ratio."""
@@ -444,6 +496,7 @@ class ImageCanvas(QWidget):
                 area = QRect(0, 0, size.width(), size.height())
                 area.moveCenter(available.center())
             painter.drawImage(area, self.image)
+            self.paint_contact_overlay(painter, area)
         if self.overlay_lines:
             painter.setPen(QColor('#e2edf7'))
             painter.drawText(QRect(6, 4, self.width() - 12, header_height - 8),
@@ -475,6 +528,14 @@ class ImagePreviewPanel(QGroupBox):
         controls.addWidget(self.near)
         controls.addWidget(QLabel('far (blue)'))
         controls.addWidget(self.far)
+        self.contact_checkbox = QCheckBox('Contact overlay')
+        self.contact_checkbox.setChecked(True)
+        self.contact_checkbox.setToolTip(
+            'Display only: raw ID probabilities in the selected ±tol band, '
+            'fixed 0..1 red scale. Blue ring: highest positive-ID candidate.\n'
+            'Image geometry must match this exposure. Inference may differ by at most '
+            '0.5 s; stale/invalid/unloaded inference is hidden. No motor commands.')
+        controls.addWidget(self.contact_checkbox)
         controls.addStretch(1)
         layout.addLayout(controls)
         self.canvases = {}
@@ -519,12 +580,27 @@ class ImagePreviewPanel(QGroupBox):
         self.last_depth = None
         self.tag_frame = None
         self.skeleton_frame = None
+        self.force_id_snapshot = None
         self.range_dirty = False
         self.near.valueChanged.connect(self.range_changed)
         self.far.valueChanged.connect(self.range_changed)
+        self.contact_checkbox.toggled.connect(self.refresh_contact_overlay)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(34)  # Display ceiling ~30 Hz; no queue of old images.
+
+    def set_force_id_snapshot(self, snapshot):
+        """Receive the GUI's existing diagnostic cache; never subscribe twice."""
+        self.force_id_snapshot = snapshot
+        self.refresh_contact_overlay()
+
+    def refresh_contact_overlay(self, _checked=None):
+        """Force-only arrivals, checkbox changes and expiry never reconvert RGB."""
+        overlay = None
+        if self.contact_checkbox.isChecked() and 'skeleton' not in self.errors:
+            overlay = contact_overlay(self.skeleton_frame, self.force_id_snapshot,
+                                      time.monotonic())
+        self.canvases['skeleton'].set_contact_overlay(overlay)
 
     def range_changed(self):
         """Request recoloring even when no new depth frame arrives."""
@@ -576,6 +652,7 @@ class ImagePreviewPanel(QGroupBox):
                              'FK: image unavailable') if 'skeleton' in self.errors
                             else format_skeleton_tips(self.skeleton_frame, now))
         self.canvases['skeleton'].set_overlay(skeleton_overlay)
+        self.refresh_contact_overlay()
         for key, label in self.status_labels.items():
             age = now - received_at[key] if key in received_at else None
             if key in self.errors:

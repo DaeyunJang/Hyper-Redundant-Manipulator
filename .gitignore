@@ -2,12 +2,27 @@
 build
 install
 log
+figures
+docs/figures
+
 .cuda_realsense/
 .isaac_ros_compare/
 .ros_image_proc/
 .git
 record
 .mypy_cache
+.pytest_cache
+.vscode
+
+# Local model bundles and offline training/validation exports (provided separately).
+# Keep inference code and regression-test sources in Git, not generated assets.
+/src/estimation_pkg/models/
+
+# Generated test/coverage output; do not ignore scripts/ or src/*/test/ sources.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # Ignore Python bytecode and cache files
 **/__pycache__

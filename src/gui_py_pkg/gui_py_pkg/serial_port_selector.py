@@ -105,6 +105,7 @@ class SerialPortSelector(QWidget):
     def _update_note(self):
         if self.error:
             self.note.setText(self.error)
+            self.note.setToolTip(self.error)
             self.note.setStyleSheet('color: #d93025;')
             return
         selected = self.selected_port()
@@ -122,4 +123,5 @@ class SerialPortSelector(QWidget):
                     if selected else 'Choose the ESP32 port before starting Serial sensors. ')
             text += 'A single connected port is selected automatically; choose if multiple.'
         self.note.setText(text)
+        self.note.setToolTip(text)
         self.note.setStyleSheet('color: #666;')

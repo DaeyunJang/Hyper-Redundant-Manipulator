@@ -53,8 +53,11 @@
 #include "control_parameters.hpp"
 #include "dynamics_controller.hpp"
 #include "admittance_controller.hpp"
+#include "admittance_settings.hpp"
+#include "force_feedback.hpp"
 #include "position_controller.hpp"
 #include "ik_sine_motion.hpp"
+#include "position_sine_motion.hpp"
 
 // ROS2
 #include "rclcpp/rclcpp.hpp"
@@ -77,6 +80,7 @@
 #include "custom_interfaces/msg/dynamic_mimo_values.hpp"
 #include "custom_interfaces/msg/admittance_control.hpp"
 #include "custom_interfaces/msg/position_control.hpp"
+#include "custom_interfaces/msg/control_reference.hpp"
 #include "custom_interfaces/msg/segment_angle.hpp"
 #include "custom_interfaces/srv/move_motor_direct.hpp"
 #include "custom_interfaces/srv/move_tool_angle.hpp"
@@ -112,6 +116,7 @@ public:
   using DynamicMIMOValues = custom_interfaces::msg::DynamicMIMOValues;
   using AdmittanceControl = custom_interfaces::msg::AdmittanceControl;
   using PositionControl = custom_interfaces::msg::PositionControl;
+  using ControlReference = custom_interfaces::msg::ControlReference;
   using SegmentAngle = custom_interfaces::msg::SegmentAngle;
   using MoveMotorDirect = custom_interfaces::srv::MoveMotorDirect;
   using MoveToolAngle = custom_interfaces::srv::MoveToolAngle;
@@ -201,6 +206,13 @@ private:
   bool valid_motor_feedback_ = false;
   bool valid_loadcell_feedback_ = false;
   bool valid_force_feedback_ = false;
+  custom_interfaces::msg::ForceIdEstimate force_estimate_;
+  hrm::AdmittanceSettings admittance_settings_;
+  std::string active_force_model_;
+  hrm::AdmittanceSettings read_admittance_settings(
+    const std::vector<rclcpp::Parameter>& overrides = {}) const;
+  void apply_admittance_settings(const hrm::AdmittanceSettings& settings);
+  rclcpp::Subscription<custom_interfaces::msg::ForceIdEstimate>::SharedPtr force_id_subscriber_;
   bool position_ready_ = false;
   bool position_fault_latched_ = false;
   std::uint64_t position_entry_revision_ = 0;
@@ -209,6 +221,7 @@ private:
   double position_feedback_timeout_sec_ = position_control_params::FEEDBACK_TIMEOUT_SEC;
   double position_max_speed_deg_s_ = position_control_params::MAX_ANGULAR_SPEED_DEG_S;
   double position_derivative_filter_sec_ = position_control_params::DERIVATIVE_FILTER_SEC;
+  int position_motor_velocity_profile_percent_ = position_control_params::MOTOR_VELOCITY_PROFILE_PERCENT;
   std::array<int32_t, NUM_OF_MOTORS> position_motor_origin_{};
   std::array<double, NUM_OF_MOTORS> position_wire_origin_{};
   std::string last_position_status_;
@@ -247,6 +260,17 @@ private:
   std::chrono::steady_clock::time_point ik_sine_tick_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr ik_sine_service_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr ik_sine_status_pub_;
+  hrm::PositionSineConfig position_sine_config(
+    const std::vector<rclcpp::Parameter>& overrides = {});
+  void stop_position_sine(const std::string& reason);
+  void set_position_sine_status(const std::string& status);
+  hrm::PositionSineMotion position_sine_;
+  bool position_sine_active_ = false;
+  int64_t position_sine_start_ns_ = 0;
+  std::string last_position_sine_status_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr position_sine_service_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr position_sine_status_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr position_sine_reference_pub_;
   void publish_sine_wave_1time();
   void publish_circle_motion();
   void publish_moebius_motion();
@@ -283,6 +307,9 @@ private:
 
   PositionControl position_control_msgs_;
   rclcpp::Publisher<PositionControl>::SharedPtr position_control_msgs_publisher_;
+
+  // Recording-only requested reference; never an actuator-execution acknowledgement.
+  rclcpp::Publisher<ControlReference>::SharedPtr control_reference_publisher_;
   
   std_msgs::msg::String control_mode_msgs_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr control_mode_msgs_publisher_;

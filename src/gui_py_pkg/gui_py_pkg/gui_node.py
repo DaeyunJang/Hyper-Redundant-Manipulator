@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import QCheckBox
 from PyQt5.QtWidgets import QDialog
+from PyQt5.QtWidgets import QFrame
 from PyQt5.QtWidgets import QGroupBox
 from PyQt5.QtWidgets import QGridLayout
 from PyQt5.QtWidgets import QHBoxLayout
@@ -19,11 +20,13 @@ from PyQt5.QtWidgets import QPushButton
 from PyQt5.QtWidgets import QScrollArea
 from PyQt5.QtWidgets import QSizePolicy
 from PyQt5.QtWidgets import QSplitter
+from PyQt5.QtWidgets import QStackedWidget
 from PyQt5.QtWidgets import QVBoxLayout
 from PyQt5.QtWidgets import QWidget
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.animation import FuncAnimation
+from matplotlib.ticker import MaxNLocator
 import numpy as np
 
 import rclpy
@@ -44,6 +47,7 @@ from custom_interfaces.msg import MotorState
 from custom_interfaces.msg import DataFilterSetting
 from custom_interfaces.msg import AdmittanceControl
 from custom_interfaces.msg import PositionControl
+from custom_interfaces.msg import ForceIdEstimate
 from custom_interfaces.srv import MoveMotorDirect
 from custom_interfaces.srv import MoveToolAngle
 from custom_interfaces.srv import SetGoalPosition
@@ -58,9 +62,14 @@ from gui_py_pkg.image_preview import ImagePreviewPanel
 from gui_py_pkg.serial_port_selector import SerialPortSelector
 from gui_py_pkg.camera_selector import CameraSelector
 from gui_py_pkg.camera_exposure import CameraExposurePanel
-from gui_py_pkg.sine_motion import SineMotionPanel
+from gui_py_pkg.sine_motion import PositionSineMotionPanel, SineMotionPanel
+from gui_py_pkg.position_pid import PositionPIDPanel
+from gui_py_pkg.admittance_target import AdmittanceTargetPanel
+from gui_py_pkg.admittance_parameters import AdmittanceParametersPanel
 from gui_py_pkg.force_alignment import ForceAlignmentPanel, request_record_start
 from gui_py_pkg.force_prediction import ForcePredictionPreview
+from gui_py_pkg.force_id_preview import ForceIdMonitor, ForceIdPreview
+from gui_py_pkg.force_model_selector import ForceModelSelector
 from gui_py_pkg.roi_editor import RoiEditorDialog, load_roi_config
 
 
@@ -157,6 +166,18 @@ class GUINode(Node):
             self.force_prediction.receive,
             QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT,
                        durability=QoSDurabilityPolicy.VOLATILE))
+
+        self.declare_parameter('force_id_topic', '/force_id_estimation')
+        self.declare_parameter('force_id_timeout_sec', 0.5)
+        self.force_id_preview = ForceIdPreview(
+            timeout_sec=self.get_parameter('force_id_timeout_sec').value)
+        self.force_id_subscriber = self.create_subscription(
+            ForceIdEstimate, self.get_parameter('force_id_topic').value,
+            self.force_id_preview.receive,
+            QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT,
+                       durability=QoSDurabilityPolicy.VOLATILE))
+        self.force_id_parameter_client = self.create_client(
+            SetParametersAtomically, '/force_id_estimator/set_parameters_atomically')
 
         self.loadcell_data = LoadcellState()
         self.last_loadcell_data_time = None
@@ -496,9 +517,11 @@ class MyGUI(QWidget):
         self.sensor_raw_widget = QWidget()
         self.sensor_plot_widget = QWidget()
         self.system_layout = QVBoxLayout(self.system_tab)
+        self.system_layout.setContentsMargins(6, 4, 6, 4)
+        self.system_layout.setSpacing(3)
         self.control_layout = QVBoxLayout(self.control_tab)
-        self.control_layout.setContentsMargins(6, 4, 6, 4)
-        self.control_layout.setSpacing(2)
+        self.control_layout.setContentsMargins(6, 2, 6, 2)
+        self.control_layout.setSpacing(1)
         self.sensor_layout = QHBoxLayout(self.sensor_tab)
         self.sensor_raw_layout = QVBoxLayout(self.sensor_raw_widget)
         self.sensor_plot_layout = QVBoxLayout(self.sensor_plot_widget)
@@ -531,7 +554,8 @@ class MyGUI(QWidget):
 
         self.init_system_ui()
         self.layout_global = self.control_layout
-        self.add_section_heading('Motor control')
+        self.motor_data_status_label = QLabel('● motor_state: no recent data')
+        self.add_section_heading('Motor control', self.motor_data_status_label)
         self.init_motor_safety_ui()
         self.init_motor_ui()
         self.init_filter_checkbox()
@@ -548,16 +572,27 @@ class MyGUI(QWidget):
 
         self.layout_global = self.sensor_plot_layout
         self.add_section_heading('Sensor monitoring')
+        self.force_id_monitor = ForceIdMonitor()
+        self.force_id_monitor.settings_requested.connect(self.set_force_id_options)
+        self.sensor_plot_layout.addWidget(self.force_id_monitor)
+        self.force_id_request_sequence = 0
         self.init_fts_plot()
         self.init_timer()
 
         if self.node.auto_start_components:
             self.schedule_auto_start()
 
-    def add_section_heading(self, text):
+    def add_section_heading(self, text, detail=None):
         heading = QLabel(text)
         heading.setStyleSheet('font-size: 18px; font-weight: 600;')
-        self.layout_global.addWidget(heading)
+        if detail is None:
+            self.layout_global.addWidget(heading)
+        else:
+            row = QHBoxLayout()
+            row.addWidget(heading)
+            row.addStretch(1)
+            row.addWidget(detail)
+            self.layout_global.addLayout(row)
 
     def _system_config_path(self):
         try:
@@ -584,13 +619,17 @@ class MyGUI(QWidget):
         self.system_layout.addWidget(heading)
 
         explanation = QLabel(
-            'Green means the expected ROS node is visible. Processes started '
-            'outside this GUI are shown in blue and are never stopped by it.'
+            'Green: running · Blue: external (not stopped by this GUI)'
         )
         explanation.setWordWrap(True)
         self.system_layout.addWidget(explanation)
 
         self.serial_port_selector = SerialPortSelector()
+        # Keep detailed port help in its tooltip instead of consuming the plot height.
+        self.serial_port_selector.note.setWordWrap(False)
+        self.serial_port_selector.note.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.serial_port_selector.note.setMaximumHeight(18)
+        self.serial_port_selector.note.setStyleSheet('color: #666; font-size: 11px;')
         self.system_layout.addWidget(self.serial_port_selector)
 
         self.roi_editor_active = False
@@ -615,6 +654,8 @@ class MyGUI(QWidget):
 
         components_box = QGroupBox('Packages')
         components_layout = QVBoxLayout(components_box)
+        components_layout.setContentsMargins(6, 4, 6, 4)
+        components_layout.setSpacing(3)
         self.camera_selector = CameraSelector()
         self.tag_camera_selector = CameraSelector(
             default_model='D455', substitution_prefix='tag_camera')
@@ -622,15 +663,14 @@ class MyGUI(QWidget):
             'camera': self.camera_selector,
             'tag_camera': self.tag_camera_selector,
         }
+        self.force_model_selector = ForceModelSelector()
         for spec in specs:
             row = QHBoxLayout()
             status_label = QLabel('● STOPPED')
             status_label.setMinimumWidth(105)
             name_label = QLabel(spec.label)
             name_label.setMinimumWidth(150)
-            description_label = QLabel(spec.description)
-            description_label.setStyleSheet('color: #666;')
-            description_label.setWordWrap(True)
+            name_label.setToolTip(spec.description)
             auto_checkbox = QCheckBox(
                 f'Auto ({spec.delay_sec:g}s)'
             )
@@ -654,8 +694,9 @@ class MyGUI(QWidget):
                 # Reuse the existing description line, not another panel/row.
                 details.addWidget(self.camera_selectors[spec.component_id])
                 name_label.setToolTip(spec.description)
-            else:
-                details.addWidget(description_label)
+            elif spec.component_id == 'force_id':
+                details.addWidget(self.force_model_selector)
+                name_label.setToolTip(spec.description)
             row.addLayout(details, 1)
             row.addWidget(auto_checkbox)
             row.addWidget(action_button)
@@ -685,7 +726,7 @@ class MyGUI(QWidget):
         self.motor_safety_box.setToolTip(
             'Actuator safety: commands stay preview-only until physical motor output is enabled.')
         safety_layout = QHBoxLayout(self.motor_safety_box)
-        safety_layout.setContentsMargins(8, 6, 8, 6)
+        safety_layout.setContentsMargins(8, 2, 8, 2)
         self.motor_output_checkbox = QCheckBox('Enable physical motor output')
         self.motor_output_checkbox.setChecked(False)
         self.motor_output_checkbox.toggled.connect(self.motor_output_toggled)
@@ -827,6 +868,9 @@ class MyGUI(QWidget):
                 substitutions['serial_port'] = self.serial_port_selector.port_for_start()
             elif component_id in self.camera_selectors:
                 substitutions.update(self.camera_selectors[component_id].for_start())
+            elif component_id == 'force_id':
+                substitutions.update(self.force_model_selector.for_start())
+                substitutions.update(self.force_id_monitor.substitutions())
             started = self.system_manager.start(
                 component_id,
                 self.node.discovered_node_names(),
@@ -837,6 +881,10 @@ class MyGUI(QWidget):
                     self.serial_port_selector.mark_started(substitutions['serial_port'])
                 elif component_id in self.camera_selectors:
                     self.camera_selectors[component_id].mark_started(substitutions)
+                elif component_id == 'force_id':
+                    self.force_model_selector.set_process_status('starting')
+                    self.force_id_monitor.settings_label.setText(
+                        'Starting selected model · diagnostic only')
                 self.node.get_logger().info(
                     f'Starting component: {component_id}'
                     + (f" on {substitutions['serial_port']}" if component_id == 'serial' else '')
@@ -864,6 +912,38 @@ class MyGUI(QWidget):
     def stop_all_components(self):
         self.cancel_scheduled_starts()
         self.system_manager.stop_all()
+
+    def set_force_id_options(self, body_enabled, id_tol):
+        """Only configure the estimator; never touch robot_control or motor services."""
+        self.force_id_request_sequence += 1
+        sequence = self.force_id_request_sequence
+        client = self.node.force_id_parameter_client
+        if not client.service_is_ready():
+            self.force_id_monitor.settings_label.setText('Settings selected for next inference Start')
+            return
+        request = SetParametersAtomically.Request()
+        request.parameters = [
+            Parameter('body_contact_enabled', Parameter.Type.BOOL, body_enabled).to_parameter_msg(),
+            Parameter('id_tol', Parameter.Type.INTEGER, id_tol).to_parameter_msg(),
+        ]
+        self.force_id_monitor.settings_label.setText('Applying inference settings…')
+        try:
+            future = client.call_async(request)
+            future.add_done_callback(lambda result: QTimer.singleShot(
+                0, lambda: self._force_id_options_finished(result, sequence)))
+        except Exception as error:
+            self.force_id_monitor.settings_label.setText(f'Inference settings failed: {error}')
+
+    def _force_id_options_finished(self, future, sequence):
+        if self.is_closing or sequence != self.force_id_request_sequence:
+            return
+        try:
+            result = future.result().result
+            text = ('Applied · diagnostic only · no motor connection' if result.successful
+                    else f'Rejected: {result.reason}')
+        except Exception as error:
+            text = f'Inference settings failed: {error}'
+        self.force_id_monitor.settings_label.setText(text)
 
     def update_system_status(self):
         if self.is_closing:
@@ -907,6 +987,8 @@ class MyGUI(QWidget):
                 self.serial_port_selector.set_process_status(status)
             elif component_id in self.camera_selectors:
                 self.camera_selectors[component_id].set_process_status(status)
+            elif component_id == 'force_id':
+                self.force_model_selector.set_process_status(status)
             text, color = styles[status]
             widgets['status'].setText(text)
             widgets['status'].setStyleSheet(
@@ -936,6 +1018,9 @@ class MyGUI(QWidget):
                 widgets['button'].setText('Start')
                 widgets['button'].setEnabled(True)
         self.camera_exposure.update_nodes(discovered)
+        self.position_pid_panel.update_nodes(discovered)
+        self.admittance_target_panel.update_nodes(discovered)
+        self.admittance_parameters_panel.update_nodes(discovered)
         self.update_data_status_labels()
 
     def update_data_status_labels(self):
@@ -1041,9 +1126,9 @@ class MyGUI(QWidget):
 
     def init_recorder_ui(self):
         self.record_layout = QVBoxLayout()
-        self.record_layout.setSpacing(3)
+        self.record_layout.setSpacing(2)
         self.force_alignment_panel = ForceAlignmentPanel()
-        self.force_alignment_panel.layout().setContentsMargins(8, 6, 8, 6)
+        self.force_alignment_panel.layout().setContentsMargins(8, 3, 8, 3)
         self.force_alignment_panel.layout().setSpacing(2)
         self.record_layout.addWidget(self.force_alignment_panel)
         self.record_label = QLabel('Recording')
@@ -1051,7 +1136,7 @@ class MyGUI(QWidget):
         self.record_button.setStyleSheet('QPushButton {color: green;}')  # 초록색으로 변경
         self.record_button.clicked.connect(self.toggle_record)
         self.record_button.setFixedWidth(110)
-        self.record_button.setFixedHeight(28)
+        self.record_button.setFixedHeight(24)
         record_actions = QHBoxLayout()
         record_actions.addWidget(self.record_button)
         self.record_label.setWordWrap(True)
@@ -1170,8 +1255,6 @@ class MyGUI(QWidget):
         @ autor DY
         @ note motor subscriber and publisher list
         '''
-        self.motor_data_status_label = QLabel('● motor_state: no recent data')
-        self.layout_global.addWidget(self.motor_data_status_label)
         self.layout_mode = QHBoxLayout()
         self.layout_mode.setSpacing(12)
         self.label_mode = QLabel('Operation Mode')
@@ -1232,17 +1315,17 @@ class MyGUI(QWidget):
         # lambda F for apply the funtion to all the list arugments)
         list(map(lambda x: x.setAlignment(Qt.AlignVCenter | Qt.AlignRight), self.motor_state_label_list))        
         list(map(lambda x: x.setFixedWidth(85), self.motor_state_line_edit_list))
-        list(map(lambda x: x.setFixedHeight(26), self.motor_state_line_edit_list))
+        list(map(lambda x: x.setFixedHeight(22), self.motor_state_line_edit_list))
         list(map(lambda x: x.setReadOnly(True), self.motor_state_line_edit_list))
         list(map(lambda x: x.setAlignment(Qt.AlignVCenter | Qt.AlignRight), self.target_wire_length_label_list))
         list(map(lambda x: x.setFixedWidth(85), self.target_wire_length_line_edit_list))
-        list(map(lambda x: x.setFixedHeight(26), self.target_wire_length_line_edit_list))
+        list(map(lambda x: x.setFixedHeight(22), self.target_wire_length_line_edit_list))
         list(map(lambda x: x.setReadOnly(True), self.target_wire_length_line_edit_list))
         list(map(lambda x: x.setAlignment(Qt.AlignVCenter | Qt.AlignRight), self.motor_pub_label_list))
         list(map(lambda x: x.setFixedWidth(85), self.motor_pub_line_edit_list))
-        list(map(lambda x: x.setFixedHeight(26), self.motor_pub_line_edit_list))
+        list(map(lambda x: x.setFixedHeight(22), self.motor_pub_line_edit_list))
         list(map(lambda x: x.setFixedWidth(80), self.motor_pub_button_list))
-        list(map(lambda x: x.setFixedHeight(26), self.motor_pub_button_list))
+        list(map(lambda x: x.setFixedHeight(22), self.motor_pub_button_list))
 
         for i in range(self.node.numofmotors):
             try:
@@ -1273,7 +1356,7 @@ class MyGUI(QWidget):
         self.layout_global.addLayout(self.layout_amode)
 
         self.motor_kinematics_layout = QVBoxLayout()
-        self.motor_kinematics_layout.setSpacing(3)
+        self.motor_kinematics_layout.setSpacing(2)
         self.motor_kinematics_label_list = []
         self.motor_kinematics_label_list.append(QLabel("Move Tip (degree) | Pan (E-W, q2)"))
         self.motor_kinematics_label_list.append(QLabel("Move Tip (degree) | Tilt (S-N, q1 about Base Z)"))
@@ -1291,11 +1374,11 @@ class MyGUI(QWidget):
                 pass
         list(map(lambda x: x.setAlignment(Qt.AlignVCenter | Qt.AlignRight), self.motor_kinematics_label_list))        
         list(map(lambda x: x.setFixedWidth(85), self.motor_kinematics_line_edit_list))
-        list(map(lambda x: x.setFixedHeight(26), self.motor_kinematics_line_edit_list))
+        list(map(lambda x: x.setFixedHeight(23), self.motor_kinematics_line_edit_list))
         self.motor_kinematics_button = QPushButton('Publish')
         self.motor_kinematics_button.clicked.connect(self.publish_motion)
         self.motor_kinematics_button.setFixedWidth(110)
-        self.motor_kinematics_button.setFixedHeight(55)
+        self.motor_kinematics_button.setFixedHeight(48)
 
         self.motor_kinematics_layout_fin = QHBoxLayout()
         self.motor_kinematics_layout_fin.addLayout(self.motor_kinematics_layout)
@@ -1304,7 +1387,46 @@ class MyGUI(QWidget):
 
         self.sine_motion_panel = SineMotionPanel(
             self.node, kinematics_selected=lambda: self.checkbox_mode_list[1].isChecked())
-        self.layout_global.addWidget(self.sine_motion_panel)
+        self.position_sine_panel = PositionSineMotionPanel(
+            self.node,
+            position_selected=lambda: (self.checkbox_mode_list[3].isChecked()
+                                       or self.checkbox_mode_list[4].isChecked()),
+            center_provider=lambda: {
+                axis: self.motor_kinematics_line_edit_list[index].text()
+                for index, axis in enumerate(('y', 'z'))})
+        self.sine_motion_stack = QStackedWidget()
+        self.sine_motion_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.sine_motion_stack.addWidget(self.sine_motion_panel)
+        self.sine_motion_stack.addWidget(self.position_sine_panel)
+        self.layout_global.addWidget(self.sine_motion_stack)
+        # Keep the two tuning sections side by side without adding vertical rows.
+        self.controller_settings_panel = QFrame()
+        settings_row = QHBoxLayout(self.controller_settings_panel)
+        settings_row.setContentsMargins(0, 0, 0, 0)
+        settings_row.setSpacing(5)
+        self.position_pid_panel = PositionPIDPanel(self.node)
+        settings_row.addWidget(self.position_pid_panel, 3)
+        self.controller_settings_separator = QFrame()
+        self.controller_settings_separator.setFrameShape(QFrame.VLine)
+        self.controller_settings_separator.setFrameShadow(QFrame.Sunken)
+        self.controller_settings_separator.setFixedWidth(2)
+        settings_row.addWidget(self.controller_settings_separator)
+        self.admittance_parameters_panel = AdmittanceParametersPanel(self.node)
+        settings_row.addWidget(self.admittance_parameters_panel, 2)
+        self.layout_global.addWidget(self.controller_settings_panel)
+        self.admittance_target_separator = QFrame()
+        self.admittance_target_separator.setFrameShape(QFrame.HLine)
+        self.admittance_target_separator.setFrameShadow(QFrame.Sunken)
+        self.admittance_target_separator.setFixedHeight(1)
+        self.layout_global.addWidget(self.admittance_target_separator)
+        self.admittance_target_panel = AdmittanceTargetPanel(self.node)
+        self.admittance_target_panel.settings_changed.connect(self.update_admittance_target_plot)
+        self.layout_global.addWidget(self.admittance_target_panel)
+        self._tip_input_kind = 'angles'
+        self._tip_inputs = {'angles': ['0', '0'], 'position': ['0', '0']}
+        for checkbox in self.checkbox_mode_list:
+            checkbox.stateChanged.connect(self.update_sine_motion_mode)
+        self.update_sine_motion_mode()
 
         # self.motor_kinematics_label = QLabel("Move Tip(Degree) | Tilt")
         # self.motor_kinematics_line_edit = QLineEdit('0')
@@ -1333,13 +1455,13 @@ class MyGUI(QWidget):
         self.LPF_parameter_label.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
         self.LPF_parameter = QLineEdit('0.5')
         self.LPF_parameter.setFixedWidth(60)
-        self.LPF_parameter.setFixedHeight(26)
+        self.LPF_parameter.setFixedHeight(23)
 
         self.MAF_parameter_label = QLabel('Buffer size:')
         self.MAF_parameter_label.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
         self.MAF_parameter = QLineEdit('5')
         self.MAF_parameter.setFixedWidth(60)
-        self.MAF_parameter.setFixedHeight(26)
+        self.MAF_parameter.setFixedHeight(23)
 
         self.layout_LPF.addWidget(self.LPF_parameter_label)
         self.layout_LPF.addWidget(self.LPF_parameter)
@@ -1412,9 +1534,12 @@ class MyGUI(QWidget):
         self.layout_global.addLayout(self.fts_grid)
 
         self.predicted_force_line_edits = []
+        self.predicted_force_labels = []
         for axis in ('fx_pred', 'fy_pred', 'fz_pred'):
             row = QHBoxLayout()
-            row.addWidget(QLabel(axis))
+            label = QLabel(axis)
+            self.predicted_force_labels.append(label)
+            row.addWidget(label)
             value = QLineEdit('—')
             value.setReadOnly(True)
             value.setMinimumWidth(0)
@@ -1482,31 +1607,71 @@ class MyGUI(QWidget):
 
     def init_fts_plot(self):
         try:
-            # Matplotlib graph
-            self.figure, self.fts_axes = plt.subplots(2, 1, sharex=True)
-            self.figure.subplots_adjust(left=0.18, right=0.97, bottom=0.12,
-                                        top=0.97, hspace=0.15)
+            # Restore the lightweight force/torque plots: full six-axis redraws
+            # starved ROS callbacks sharing the Qt event loop.
+            # Keep data/line ordering fx,fy,fz,tx,ty,tz,fx_pred,fy_pred,fz_pred.
+            self.figure, axes = plt.subplots(2, 1, sharex=True)
+            self.fts_axes = list(axes)
+            self.force_axes, self.torque_axes = [axes[0]], [axes[1]]
+            self.figure.subplots_adjust(left=0.18, right=0.99, bottom=0.12,
+                                        top=0.82, hspace=0.50)
+            self.fts_frame_note = self.figure.text(
+                0.18, 0.99, 'Measured / predicted: sensor',
+                ha='left', va='top', fontsize=6.5, color='#555555')
             self.canvas = FigureCanvas(self.figure)
-            self.layout_global.addWidget(self.canvas)
+            # Keep both plots readable on short displays.
+            # Only the graph scrolls if necessary; motor/image controls stay put.
+            self.canvas.setMinimumSize(0, 160)
+            self.sensor_graph_scroll = QScrollArea()
+            self.sensor_graph_scroll.setFrameShape(QFrame.NoFrame)
+            self.sensor_graph_scroll.setWidgetResizable(True)
+            self.sensor_graph_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.sensor_graph_scroll.setWidget(self.canvas)
+            self.sensor_graph_scroll.setMinimumSize(0, 0)
+            self.layout_global.addWidget(self.sensor_graph_scroll, 1)
             self.data_y = np.full((9, 50), np.nan)
-            self.data_x = [i for i in range(len(self.data_y))]
+            self.data_x = np.arange(self.data_y.shape[1])
 
-            # 그래프 초기화
             labels = ('fx', 'fy', 'fz', 'tx', 'ty', 'tz')
-            self.lines = [self.fts_axes[i // 3].plot([], [], label=label)[0]
-                          for i, label in enumerate(labels)]
+            colors = ('#1f77b4', '#ff7f0e', '#2ca02c')
+            prediction_colors = ('#15527c', '#b2580a', '#1e6e1e')
+            self.lines = [
+                self.fts_axes[i // 3].plot(
+                    [], [], label=label, color=colors[i % 3], linewidth=1.5)[0]
+                for i, label in enumerate(labels)]
             self.prediction_lines = [
-                self.fts_axes[0].plot([], [], label=f'f{axis}_pred', linestyle='--',
-                                      color=self.lines[i].get_color())[0]
+                self.force_axes[0].plot(
+                    [], [], label=f'f{axis}_pred', linestyle=(0, (1.6, 1.0)),
+                    linewidth=1.1, color=prediction_colors[i], zorder=3)[0]
                 for i, axis in enumerate('xyz')]
             self.lines.extend(self.prediction_lines)
-            # Avoid Matplotlib's default 'best' location following live traces.
+            # Targets are reference overlays, not samples in the measured/predicted buffer.
+            self.admittance_target_lines = {
+                name: self.force_axes[0].axhline(
+                    0.0, color='#d62728', linewidth=0.7, linestyle='-',
+                    label=f'_admittance_target_{name}', visible=False, zorder=2.5)
+                for name in ('y', 'z')}
+            self.canvas.setToolTip(
+                'Thin red Fy/Fz lines: confirmed admittance targets on the prediction scale '
+                '(target / force_sign, mN). With force_sign=-1 a +200 mN controller target '
+                'is drawn at -200 mN. Measured sensor axes are not automatically aligned. '
+                'Targets are hidden until controller settings and a unified hrm_base '
+                'prediction source are known.')
             for axis, label in zip(self.fts_axes, ('Force [mN]', 'Torque [mN m]')):
-                axis.set_ylabel(label, fontsize=8)
-                axis.legend(loc='upper right', ncol=3, fontsize=8)
-                axis.tick_params(labelsize=8)
-            # 애니메이션 시작
-            self.animation = FuncAnimation(self.figure, self.update_fts_plot, frames=100, interval=25)
+                axis.set_title(label, fontsize=7, pad=3)
+                # Fixed legends and horizontal guides never follow the live traces.
+                axis.legend(loc='upper right', ncol=3, fontsize=6.5, handlelength=1.1,
+                            borderpad=0.25, labelspacing=0.15, framealpha=0.85)
+                axis.tick_params(labelsize=6.5, pad=2)
+                axis.yaxis.set_major_locator(MaxNLocator(nbins=3, min_n_ticks=3))
+                axis.xaxis.set_major_locator(MaxNLocator(nbins=3, integer=True))
+                axis.set_axisbelow(True)
+                axis.grid(visible=True, which='major', axis='y', color='#d9d9d9',
+                          linewidth=0.6, alpha=0.85)
+                axis.set_xlim(0, self.data_y.shape[1] - 1)
+            self.animation = FuncAnimation(
+                self.figure, self.update_fts_plot, frames=100, interval=100,
+                cache_frame_data=False)
             # self.node.data_received_signal.connect(self.generateTimerRosNode)
 
         except Exception as e:
@@ -1571,8 +1736,35 @@ class MyGUI(QWidget):
             self.checkbox_mode_list[1].setChecked(False)
             self.checkbox_mode_list[2].setChecked(False)
             self.checkbox_mode_list[3].setChecked(False)
-            self.motor_kinematics_label_list[0].setText("Move Tip (m) | y-axis")
-            self.motor_kinematics_label_list[1].setText("Move Tip (m) | z-axis")
+
+        self.update_sine_motion_mode()
+
+    def update_sine_motion_mode(self, _state=None):
+        """One compact sine row; degree and Cartesian settings never overwrite each other."""
+        position = (self.checkbox_mode_list[3].isChecked()
+                    or self.checkbox_mode_list[4].isChecked())
+        kind = 'position' if position else 'angles'
+        if kind != self._tip_input_kind:
+            self._tip_inputs[self._tip_input_kind] = [
+                edit.text() for edit in self.motor_kinematics_line_edit_list]
+            for edit, value in zip(self.motor_kinematics_line_edit_list, self._tip_inputs[kind]):
+                edit.setText(value)
+            self._tip_input_kind = kind
+        self.sine_motion_stack.setCurrentIndex(1 if position else 0)
+        labels = (('Move Tip | Y (m) / sine centre', 'Move Tip | Z (m) / sine centre')
+                  if position else ('Move Tip (degree) | Pan (E-W, q2)',
+                                    'Move Tip (degree) | Tilt (S-N, q1 about Base Z)'))
+        for label, edit, text in zip(self.motor_kinematics_label_list,
+                                     self.motor_kinematics_line_edit_list, labels):
+            label.setText(text)
+            tip = ('Publish uses the selected Absolute/Relative mode. Sine Start ALWAYS '
+                   'uses this value as the absolute hrm_base centre [m]; '
+                   'amplitude 0 holds this centre, not the measured current position.'
+                   if position else 'Move Tip target angle [degree].')
+            label.setToolTip(tip)
+            edit.setToolTip(tip)
+        self.sine_motion_panel._controls()
+        self.position_sine_panel._controls()
 
     def checkbox_amode_clicked(self):
         sender = self.sender()
@@ -1680,10 +1872,13 @@ class MyGUI(QWidget):
 
     def node_spin_once(self):
         try:
-            if rclpy.ok():
-                # Never block Qt's event loop while waiting for ROS data.
-                # With no motor/serial connection, the default timeout (None)
-                # would freeze repainting and leave the window black.
+            # FT/loadcells/motor alone exceed 600 callbacks/s. One callback per
+            # 5 ms tick caps receipt at 200/s even before plotting. Drain a short
+            # bounded batch without waiting for data or monopolizing Qt.
+            deadline = time.monotonic() + 0.002
+            for _ in range(16):
+                if not rclpy.ok() or time.monotonic() >= deadline:
+                    break
                 rclpy.spin_once(self.node, timeout_sec=0.0)
         except rclpy.exceptions.RCLError:
             print("⚠️ ROS shutdown 이후 spin_once 호출 방지됨")
@@ -1716,13 +1911,54 @@ class MyGUI(QWidget):
             # self.node.get_logger().warning(f'F:update_fts() -> {e}')
             pass
         prediction, status = self._prediction_snapshot()
+        unified = self._using_force_id_preview()
         for i, field in enumerate(self.predicted_force_line_edits):
             field.setText(f'{prediction[i]:.1f}' if prediction is not None else
                           ('—' if status == 'Waiting' else status.lower()))
-            field.setToolTip(f'{status} | sensor axes, mN; GUI axis/unit conversion only.')
+            frame = 'hrm_base' if unified else 'sensor axes (legacy)'
+            field.setToolTip(f'{status} | {frame}, mN; display only, no control sign inversion.')
+            self.predicted_force_labels[i].setText(
+                f'f{"xyz"[i]}_pred' + (' [base]' if unified else ''))
+        if unified:
+            force_id_snapshot = self.node.force_id_preview.snapshot()
+            self.force_id_monitor.refresh(force_id_snapshot)
+            self.image_preview.set_force_id_snapshot(force_id_snapshot)
+        else:
+            self.image_preview.set_force_id_snapshot(None)
+        frame_note = ('Measured: sensor | predicted: hrm_base' if unified
+                      else 'Measured / predicted: sensor')
+        if self.fts_frame_note.get_text() != frame_note:
+            self.fts_frame_note.set_text(frame_note)
+        self.update_admittance_target_plot()
         return 1
 
+    def update_admittance_target_plot(self):
+        """Show only confirmed targets in the unchanged unified-prediction convention."""
+        if not hasattr(self, 'admittance_target_lines'):
+            return
+        values = (self.admittance_target_panel.target_plot_mn()
+                  if self._using_force_id_preview() else None)
+        changed = False
+        for index, name in enumerate(('y', 'z')):
+            line = self.admittance_target_lines[name]
+            visible = values is not None
+            changed = changed or line.get_visible() != visible
+            line.set_visible(visible)
+            if visible and line.get_ydata()[0] != values[index]:
+                line.set_ydata([values[index], values[index]])
+                changed = True
+        if changed:
+            self.canvas.draw_idle()
+
+    def _using_force_id_preview(self):
+        preview = getattr(self.node, 'force_id_preview', None)
+        return isinstance(preview, ForceIdPreview) and preview.seen
+
     def _prediction_snapshot(self):
+        if self._using_force_id_preview():
+            snapshot = self.node.force_id_preview.snapshot()
+            return (snapshot.force_mn if snapshot.valid else None,
+                    'Receiving' if snapshot.valid else snapshot.status)
         preview = getattr(self.node, 'force_prediction', None)
         if not isinstance(preview, ForcePredictionPreview):
             return None, 'Waiting'
@@ -1738,6 +1974,7 @@ class MyGUI(QWidget):
 
     def update_fts_plot(self, frame):
         try:
+            self.update_admittance_target_plot()
             new_data = np.full(9, np.nan)
             if rclpy.ok():
                 new_data[0] = (self.node.fts_data.wrench.force.x)
@@ -1754,18 +1991,23 @@ class MyGUI(QWidget):
                 self.data_y[:, -1] = new_data
 
                 for i, line in enumerate(self.lines):
-                    line.set_data(range(len(self.data_y[i])), self.data_y[i])
+                    line.set_data(self.data_x, self.data_y[i])
 
-                # 최댓값과 최솟값을 찾아 축의 범위 설정
+                # Group all force/prediction samples separately from torque.
                 for group, axis in enumerate(self.fts_axes):
                     indices = [0, 1, 2, 6, 7, 8] if group == 0 else [3, 4, 5]
                     values = self.data_y[indices]
                     finite = values[np.isfinite(values)]
+                    if group == 0:
+                        for target_line in self.admittance_target_lines.values():
+                            if target_line.get_visible():
+                                finite = np.append(finite, target_line.get_ydata()[0])
                     if finite.size:
                         min_val, max_val = np.min(finite), np.max(finite)
                         margin = max((max_val - min_val) * 0.1, 0.1)
-                        axis.set_ylim(min_val - margin, max_val + margin)
-                    axis.set_xlim(0, self.data_y.shape[1] - 1)
+                        limits = (min_val - margin, max_val + margin)
+                        if axis.get_ylim() != limits:
+                            axis.set_ylim(*limits)
 
                 return self.lines
 
@@ -1800,6 +2042,9 @@ class MyGUI(QWidget):
             # Stop every GUI timer before destroying the ROS node handle.
             for timer in self.findChildren(QTimer):
                 timer.stop()
+            self.position_pid_panel.shutdown()
+            self.admittance_target_panel.shutdown()
+            self.admittance_parameters_panel.shutdown()
             if hasattr(self, 'animation') and self.animation.event_source:
                 self.animation.event_source.stop()
             self.image_preview.stop()

@@ -15,7 +15,11 @@ public:
   double compute_pd_output(
     double desired_value, double measured_value, double dt,
     double derivative_filter_sec);
-  double compute_output(const double& desired_value, const double& measured_value, const double& dt);
+  // Scalar PID on error: e, integral(e dt), and filtered (e-e_previous)/dt.
+  // tau=0 preserves the unfiltered derivative used by legacy callers.
+  double compute_output(
+    const double& desired_value, const double& measured_value, const double& dt,
+    double derivative_filter_sec = 0.0);
   Eigen::VectorXd compute_output(const Eigen::VectorXd& desired_values, const Eigen::VectorXd& measured_values, const double& dt);
   // Eigen::MatrixXd compute_output(const Eigen::MatrixXd& desired_values, const Eigen::MatrixXd& measured_values, double dt);
   double get_integral();
@@ -29,8 +33,7 @@ private:
   double dt_ = 0;
   double integral_ = 0;
   double previous_error_ = 0;
-  double previous_measurement_ = 0;
-  double filtered_measurement_velocity_ = 0;
+  double filtered_error_derivative_ = 0;
   Eigen::VectorXd integral_vector_ = Eigen::VectorXd::Zero(6);
   Eigen::VectorXd previous_error_vector_ = Eigen::VectorXd::Zero(6);
 };

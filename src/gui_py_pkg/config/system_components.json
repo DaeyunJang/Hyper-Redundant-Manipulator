@@ -81,12 +81,28 @@
       }
     },
     {
+      "id": "force_id",
+      "label": "Force / contact",
+      "package": "estimation_pkg",
+      "launch_file": "force_id_estimation.launch.py",
+      "expected_nodes": ["/force_id_estimator"],
+      "auto_start": true,
+      "delay_sec": 4.5,
+      "description": "Selected force/location bundle; diagnostic only, no physical motor output",
+      "arguments": {
+        "model_path": "{force_model_path}",
+        "body_contact_enabled": "{body_contact_enabled}",
+        "id_tol": "{force_id_tol}",
+        "device": "cpu"
+      }
+    },
+    {
       "id": "record",
       "label": "Data recorder",
       "package": "record_pkg",
       "launch_file": "_launch.py",
       "expected_nodes": ["/record"],
-      "auto_start": false,
+      "auto_start": true,
       "delay_sec": 5.0,
       "description": "HRM crop PNGs plus numeric sensor/motor/angle/tag bag; automatic CSV after Record Stop"
     },

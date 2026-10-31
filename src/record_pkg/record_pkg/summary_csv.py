@@ -23,6 +23,9 @@ ANGLE_FIELDS = POSITION_ANGLE_FIELDS + (
     'tilt_angular_velocity_relative', 'tilt_angular_velocity_absolute')
 JOINT_COUNT = 18
 MOTOR_COUNT = 4
+UNBOUNDED_NEAREST_GROUPS = frozenset((
+    'estimated_tip', 'fk_tip', 'fk_tip_tf', 'estimated_tip_orientation',
+))
 RELATIVE_VELOCITY_COLUMNS = tuple(
     f'relative_angular_velocity_{i}_rad_s' for i in range(1, JOINT_COUNT + 1))
 
@@ -136,11 +139,11 @@ def specifications():
          'receive', False, ''),
         ('wire_velocity', '/wire_length_velocity',
          lambda r: channels(r, 'data', 'Cable #{} velocity'), 'receive', False, ''),
-        ('estimated_tip', '/estimated_tip_position', point, 'source', True, ''),
-        ('fk_tip', '/kinematics/fk_tip_position', point, 'source', True, ''),
-        ('fk_tip_tf', '/tf', tf_pose, 'source', True, 'hrm_fk_tip'),
+        ('estimated_tip', '/estimated_tip_position', point, 'source', False, ''),
+        ('fk_tip', '/kinematics/fk_tip_position', point, 'source', False, ''),
+        ('fk_tip_tf', '/tf', tf_pose, 'source', False, 'hrm_fk_tip'),
         ('estimated_tip_orientation', '/tf',
-         lambda r: orientation(r, 'transform.rotation.'), 'source', True,
+         lambda r: orientation(r, 'transform.rotation.'), 'source', False,
          'estimated_segment_center_19'),
         ('tag_id0_to_id1', '/apriltag/tag1_in_tag0/pose', pose, 'source', False, ''),
     ]
@@ -218,7 +221,8 @@ class Timeline:
             self.advance()
         candidates = [item for item in (self.previous, self.following) if item is not None]
         best = min(candidates, key=lambda item: abs(item[0] - target)) if candidates else None
-        if best is None or abs(best[0] - target) > tolerance_ns:
+        if best is None or (tolerance_ns is not None and
+                            abs(best[0] - target) > tolerance_ns):
             self.stats['unmatched'] += 1
             return None
         self.stats['matched'] += 1
@@ -315,7 +319,11 @@ def export_summary(directory, manifest=None, max_time_difference_ms=25.0,
                 'later-gap handling and physical calibration remain training preparation tasks',
         columns=columns, invalid_anchor_timestamps=0, nonincreasing_anchor_timestamps=0,
         contact_segment_id=contact_id,
-        groups={p: dict(topic=t, time_basis=b, exact_source_stamp_only=e, child_frame=c)
+        groups={p: dict(topic=t, time_basis=b, exact_source_stamp_only=e, child_frame=c,
+                       matching=('nearest_unbounded' if p in UNBOUNDED_NEAREST_GROUPS
+                                 else 'nearest_bounded'),
+                       max_time_difference_ms=(None if p in UNBOUNDED_NEAREST_GROUPS
+                                               else max_time_difference_ms))
                 for p, t, _, b, e, c in specs},
         startup=dict(
             enabled=bool(required), required_groups=list(required), required_columns=required,
@@ -339,11 +347,13 @@ def export_summary(directory, manifest=None, max_time_difference_ms=25.0,
             'original velocity arrays remain in the angle topic CSV and bag.',
             'Per-topic CSVs and bag are unchanged and authoritative; summary drops high-rate '
             'samples between angle anchors. Nearest association may use past OR future data '
-            'and reuse a sample. No interpolation or unbounded hold-last.',
+            'and reuse a sample. No interpolation. Tip position/orientation groups have '
+            'no age limit and may reuse a distant sample across a gap or after a stream ends.',
             'Summary complete means file generation succeeded, NOT lossless recording. '
             'Inspect source manifest integrity/errors before trusting a dataset.',
             '25 ms default matching for sensors/tag poses does not synchronize camera clocks '
-            'or compensate filter/sensor latency. Blank means no close sample, not zero.',
+            'or compensate filter/sensor latency. Tip groups do not use this tolerance. '
+            'Blank means unmatched or invalid data, not zero.',
             'When /detections CSV exists, the nearest detection frame gates the tag pose: '
             'both ID0/ID1 must be detected and pose stamp must match that frame exactly. '
             'Explicit empty/one-tag frames are NOT filled from neighboring valid poses. '
@@ -353,7 +363,10 @@ def export_summary(directory, manifest=None, max_time_difference_ms=25.0,
             'Invalid numeric fields/array lengths are blank; original rows remain in topic CSV.',
             'Headerless wire topics use bag receive time against ANGLE RECEIVE time explicitly; '
             'not source-time aligned. Stamped streams with zero stamps are not matched.',
-            'Tips and DH orientations require exact angle source stamps. fk_tip_tf retains '
+            'Tips and DH orientations use the nearest source stamp WITHOUT a time limit. '
+            'Exact stamps win when present; otherwise either '
+            'past or future samples may be used. Each group retains its actual source stamp '
+            'and signed time difference, not a fabricated angle stamp. fk_tip_tf retains '
             'FK position and orientation even if PointStamped is absent. Never relabel '
             'legacy headerless /tool_endeffector_pose with a fabricated source stamp.',
             'All pan/tilt relative AND absolute arrays have 18 physical-joint-indexed columns '
@@ -415,6 +428,8 @@ def export_summary(directory, manifest=None, max_time_difference_ms=25.0,
                     target = (source_ns if basis == 'source'
                               else positive_ns(anchor.get('bag_receive_time_ns')))
                     tolerance = 0 if exact else round(max_time_difference_ms * 1e6)
+                    if prefix in UNBOUNDED_NEAREST_GROUPS:
+                        tolerance = None
                     if prefix == 'tag_id0_to_id1' and detection_guard:
                         detected = detections.nearest(target, tolerance)
                         if detected is not None:
@@ -478,7 +493,9 @@ def main(args=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('csv_directory', type=Path,
                         help='Existing topic CSV directory with manifest.json')
-    parser.add_argument('--max-time-difference-ms', type=float, default=25.0)
+    parser.add_argument('--max-time-difference-ms', type=float, default=25.0,
+                        help='Sensor/tag matching tolerance; tip position/orientation '
+                             'always use nearest source time without an age limit.')
     parser.add_argument('--startup-required-groups', nargs='*', default=None,
                         help='Override startup core groups; no values disables the gate. '
                              'Default: frozen session config, or no gate for legacy sessions.')
