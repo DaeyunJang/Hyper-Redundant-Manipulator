@@ -1,35 +1,107 @@
-*.pyc
-build
-install
-log
-figures
-docs/figures
+# ROS / colcon build and runtime output (also applies to nested workspaces).
+build/
+install/
+log/
 
-.cuda_realsense/
-.isaac_ros_compare/
-.ros_image_proc/
-.git
-record
-.mypy_cache
-.pytest_cache
-.vscode
+# Locally built third-party runtimes; keep their build/run scripts in Git.
+/.cuda_realsense/
+/.isaac_ros_compare/
+/.ros_image_proc/
 
-# Local model bundles and offline training/validation exports (provided separately).
-# Keep inference code and regression-test sources in Git, not generated assets.
+# Recorded datasets, generated figures, paper analyses and benchmark binaries.
+/record/
+/analysis/
+/docs/analysis/
+/docs/images/
+figures/
+
+# Local model bundles are supplied separately from the inference source.
 /src/estimation_pkg/models/
 
-# Generated test/coverage output; do not ignore scripts/ or src/*/test/ sources.
+# Python / test / tooling caches and generated packaging metadata.
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+*.egg-info/
+.pio/
 .coverage
 .coverage.*
 coverage.xml
 htmlcov/
+*.prof
+*.pstats
 
-# Ignore Python bytecode and cache files
-**/__pycache__
-**/*.pyc
+# Local editor state and temporary files.
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
 
-__pycache__
-scripts/__pycache__
-__pycache__/
-*.pyc
-*.pyo
+# Paper-only working files; these are not used by the robot runtime.
+/docs/FORCE_ESTIMATION_BASELINE_COMPARISON_KO.md
+/docs/IDEstimationAnalysis.m
+
+# Offline paper-analysis / benchmarking sources and their dedicated tests.
+# Exact paths intentionally avoid hiding future operational scripts.
+/scripts/add_efgh_to_cable_master.py
+/scripts/analyze_apriltag_static_reference.py
+/scripts/analyze_cable_state_cases.py
+/scripts/analyze_pipeline_recorded_rates.py
+/scripts/benchmark_control_computation.cpp
+/scripts/benchmark_control_computation.py
+/scripts/benchmark_force_inference.py
+/scripts/benchmark_image_computation.py
+/scripts/copy_nearest_loaded_group_images.py
+/scripts/create_force_range_normalization_template.py
+/scripts/export_force_range_normalized_results.py
+/scripts/export_force_vector_metrics.py
+/scripts/export_model_architecture_summary.py
+/scripts/export_rbsc_no_grid_overlays.py
+/scripts/export_realtime_pipeline_report.py
+/scripts/find_shape_distinct_cable_groups.py
+/scripts/full_white_body_profiles.py
+/scripts/match_integrated_cable_images.py
+/scripts/match_nearest_loaded_group_images.py
+/scripts/offline_contact_geometry.py
+/scripts/offline_contact_inference.py
+/scripts/package_integrated_scatter_matlab.py
+/scripts/plot_cable_channel_cases.py
+/scripts/plot_cable_group_profiles.py
+/scripts/plot_cable_pca_groups.py
+/scripts/plot_cable_state_cases.py
+/scripts/plot_integrated_cable_image_groups.py
+/scripts/plot_integrated_cable_scatter.py
+/scripts/plot_nearest_loaded_grid_images.py
+/scripts/plot_nearest_loaded_group_images.py
+/scripts/plot_selected_abcdefgh_rbsc.py
+/scripts/plot_user_selected_abcd_profiles.py
+/scripts/rank_existing_ad_shapes.py
+/scripts/rank_new_shape_pairs.py
+/scripts/rbsc_2d_centerline.py
+/scripts/render_recorded_contact.py
+/scripts/select_visual_cable_groups.py
+/scripts/shape_search_fk.py
+/scripts/test/test_cable_channel_cases.py
+/scripts/test/test_cable_pca_groups.py
+/scripts/test/test_cable_state_cases.py
+/scripts/test/test_full_white_body_profiles.py
+/scripts/test/test_integrated_cable_images.py
+/scripts/test/test_integrated_cable_scatter.py
+/scripts/test/test_integrated_scatter_matlab_package.py
+/scripts/test/test_nearest_loaded_group_images.py
+/scripts/test/test_offline_contact_geometry.py
+/scripts/test/test_offline_contact_inference.py
+/scripts/test/test_rbsc_2d_centerline.py
+/scripts/test/test_render_recorded_contact.py
+/scripts/verify_apriltag_pose_archive.py
+
+# Keep scripts/ operational tools and src/*/test/ regression sources visible.
+# In particular, robot_control_pkg/CMakeLists.txt compiles test sources when
+# BUILD_TESTING is enabled; do not use blanket *test*, *audit* or scripts/ rules.
+# Existing tracked files are NOT removed from Git by these ignore rules.

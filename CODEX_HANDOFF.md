@@ -1,6 +1,163 @@
 # Codex Handoff
 
-Last updated: 2026-10-31 (Asia/Seoul)
+Last updated: 2026-11-02 (Asia/Seoul)
+
+## PCA distribution and shared-axis group profiles (2026-11-02)
+
+- User approved drawing the proposed group-aware views. New output only:
+  `analysis/sine35_cable_group_visualization_20261102/` (five PNGs, PCA CSVs/report,
+  exact copied selected cases/groups/selection report, README_KO.txt). Old outputs
+  and recordings unchanged; no duplicate of the250MiB merged source.
+- `scripts/plot_cable_pca_groups.py`: all80,335 eligible force-norm>300 rows fitted
+  using ONLY4 cable+4 tension inputs, population z-score then covariance PCA.
+  ID/force are eligibility/annotations, not PCA features. Uniform20,000 gray points
+  (seed42) for display only, plus all10 selected points and 2D inset zooms.
+  PC1/2/3 explain44.8272/42.8326/3.94666%; cumulative2D87.65982%,3D91.60648%.
+  Sign fixed by positive largest-absolute loading. CSVs include means/stds,
+  component coefficients, eigenvalues, selected PCs and background row indices.
+- `scripts/plot_cable_group_profiles.py`: raw40 channel points retained in3D,
+  G01blue/G02orange mean guide lines plus channel-local minmax outlines; combined
+  displacement/tension profile panels (individuals+means+minmax shading), and
+  four shared-axis channel scatter panels each containing both groups.
+- Guides are NOT HRM geometry; sample ranges/zoom boxes are NOT confidence regions.
+  PCA variance is NOT physical-information retention or estimator accuracy.
+  Membership still comes from original complete-link8D0.1mm/20g/300mN criteria.
+  No altered coordinates/jitter or synthetic background points.
+- 56 related tests pass. Independent SVD selected-PC discrepancy <=2.1e-14;
+  20,000 background scores/seed sample set also verified. Source merged SHA
+  unchanged; copied case/group/report bytes and provenance strings preserved.
+
+## Channel / displacement / tension scatter in root analysis/ (2026-11-02)
+
+- User requested an unaggregated channel-X / displacement-Y / tension-Z plot
+  showing selected cases only, and NEW analysis outputs outside record/.
+  Use repository-root `analysis/` for new related outputs, not record/analysis/.
+- New folder `analysis/sine35_cable_channel_cases_20261102/` contains two PNGs,
+  lossless copies of the latest five-member matched cases/groups and selection
+  report, a 40-row `channel_points.csv`, hash manifest, and README_KO.txt.
+  G01/G02 correspond to the five-member results (10 cases total), not older pairs.
+  Original recordings and historical analyses stay in place. No250MiB duplicate.
+- Script `scripts/plot_cable_channel_cases.py`: four points per case, categorical
+  E/W/S/N channel1..4, raw motor-derived displacement[mm], native tension[g].
+  Color=recorded ID, group=circle/triangle. No averaging, jitter, background,
+  or connecting lines. Optional channel-wise view delivered as 2x4 zoom panels,
+  with clearly stated independent axis limits; original values unchanged.
+- Main plot preserves all8 scalar input values via4points, but overlaps remain.
+  Channel spacing is not physical and mixed-unit3D distances are not the match
+  criterion. Existing full8D/0.1mm/20g/300mN selection is unchanged.
+  Raw CSV timestamp strings (including existing scientific notation) preserved.
+
+## Five-member cable-state groups at 0.1 mm / 20 g (2026-11-02)
+
+- User requested five cases per G group and relaxed cable/tension tolerances.
+  Re-ran existing offline tools with exactly five distinct-ID samples per group,
+  EACH channel's full group range <=0.1 mm /20 g, individual force norm >300 mN,
+  EVERY pair force-vector distance >=300 mN, and existing ID gap>=3 unchanged.
+- 80,335 eligible rows; 513,101 radius pairs; 84,734 ID-valid pairs; 71,063
+  force-valid pairs; exactly SIX qualifying five-cliques. Independent audit agrees.
+  Five candidates share four rows and differ only in five adjacent ID6 frames;
+  select the smallest normalized diameter (.9435). Sixth is a separate regime.
+  Final: TWO groups /10 unique rows, not six independent cable-state regimes.
+- New G01: IDs3/6/9/12/16; max cable span .086091 mm; tension span18.87 g;
+  minimum force306.441 mN; every-pair minimum force difference345.962 mN.
+  New G02: IDs1/4/7/13/17; max cable span .094334 mm; tension span19.83 g;
+  minimum force325.361 mN; every-pair minimum force difference307.219 mN.
+  No selected >30deg angle warnings; still awaiting images for visual validation.
+- Outputs: `record/analysis/sine35_cable_state_cases_20261102/force300_five_members_c01_t20/`
+  (matched_cases/groups CSV, report, README_KO.txt, three plots). G numbering is
+  local to this new folder. Existing combined CSV is referenced, not copied.
+  Original40 hashes unchanged; all238,401 rows/67 original columns verified again;
+  independent audit also checked all10 selected rows and20 within-group pairs.
+  No code/model/controller/ROS runtime changes needed for this new search.
+
+## Force >300 mN revision of cable-state examples (2026-11-02)
+
+- User clarified that small-force rows have no meaningful contact location even
+  if the experiment file carries an ID. New criteria: EACH sample's aligned
+  Kalman XYZ L2 force norm >300 mN (<=300 excluded), and EVERY within-group pair's
+  L2 vector difference >=300 mN. These are different checks, not signed sums or
+  differences between scalar force magnitudes. Existing0.05mm/5g/idgap>=3 retained.
+- Previous36 selected samples contained29 with norm<=300mN; none of the old12
+  triples satisfies the new criteria. Preserve those prior outputs as history.
+- Added optional norm/pair-distance CLI arguments and full8D radius-graph clique
+  search to `analyze_cable_state_cases.py`, avoiding one-neighbor truncation under
+  force constraints. Loaded gate replaces (does not combine with) old axis-wise
+  `analysis_loaded_reference`. Original combined CSV/labels remain unchanged.
+- 80,335 eligible rows;375 close8D/different-ID pairs;283 force-separated pairs;
+  ZERO triangles, hence no valid3+member groups. Independent audit agrees.
+  Representative selection yields12 distinct two-sample regimes/24 unique rows.
+  All selected norms323.754..1810.946mN, pair distances313.239..1439.146mN.
+  None has the >30degree angle warning. This is not yet image-based validation.
+- New output subfolders under `record/analysis/sine35_cable_state_cases_20261102/`:
+  `force300_pairs/` (CSV/report/README_KO.txt/threePNG) and `force300_triplet_check/`
+  (zero-result audit). Existing250MiB merged CSV is referenced, not duplicated.
+  New G01..G12 refer to NEW pairs, not oldtriples with the same group names.
+- Plotter reads merged_csv and thresholds from report; gray background now also
+  uses norm>300 eligibility. New CSV reports per-sample force_norm_mN and group
+  minimum/maximum norm and minimum/maximum pairwise force distance.
+- 36 unit tests pass; all40 original hashes unchanged and all238,401 extracted
+  rows/67 source columns reverified. No model/controller/ROS changes. Cases are
+  force-contrast-filtered illustrations, not an unbiased occurrence/accuracy estimate.
+
+## Diverse matched cable-state cases and compact CSV extraction (2026-11-02)
+
+- User requested multiple DIFFERENT cable-state regimes, each containing nearby
+  cable/tension inputs at different contact IDs, plus one selected-column CSV.
+- Input `record/summaries_sine_35deg_both`: 40 CSVs, 238,401 rows. ALL current
+  filename IDs match recorded IDs, including 18_right. Do not reapply the old
+  October 11 ID1-to-ID18 repair contract to these refreshed files.
+- Output `record/analysis/sine35_cable_state_cases_20261102/`: combined CSV 250 MiB,
+  78 columns (67 source columns + 5 provenance + 6 analysis flags), manifests,
+  12 selected groups / 36 cases, numerical report, README_KO.txt, and 3 PNG plots.
+  Every row including missing values is retained; all 67 original column strings
+  and nanosecond stamps were rechecked across all 238,401 rows. Source hashes unchanged.
+- Full 8D matching: four motor-derived cable displacements [mm] and four
+  loadcell tensions [native g], each within-group range <=0.05 mm /5 g.
+  Valid/loaded/different-ID eligibility uses historical reference no-load box
+  +/-[134.326,126.814,192.670] mN and pairwise ID gap>=3; no live config changed.
+  From 115,234 eligible rows the one-neighbor-per-ID/greedy complete-link search
+  found 63 overlapping candidate triples, then chose 12 row-disjoint triples by
+  input-space farthest-first coverage. This is not a globally optimal/exhaustive
+  search. Force/shape differences do NOT rank candidates after eligibility.
+- Physical plot axes: (cE-cW)/2 [mm], (cS-cN)/2 [mm], mean(T1..4) [g]. Color is
+  recorded ID, size is Kalman aligned force magnitude. NOT actual XYZ space and
+  NOT proof of equality in all8 channels. Only the gray display background is sampled.
+- G03/G08 include suspect4_left angles (all4,896 rows have |q|>30deg). Retained
+  and flagged; don't use their large angle differences as physical shape evidence
+  before images are checked. Other10 groups also still need image/history review.
+- New offline-only scripts `analyze_cable_state_cases.py`,
+  `plot_cable_state_cases.py`, and `test/test_cable_state_cases.py` (15 passing tests).
+  No model inference, ROS launch, robot control, or source-recording changes.
+  Next: user downloading images; connect by source_file/source_csv_row/source_time_ns.
+
+## IMADA Soft Fy offline contact visualization (2026-11-01)
+
+- User requested contact heatmaps from remaining recorded data. Only
+  `record/IMADA_softsilicone_fy_2_good` retains RGB/depth: 1,666 exact-stamp pairs.
+  Soft Fz and rigid Fy/Fz have image saving disabled. None of these four bags
+  records `/force_id_estimation` or `/estimated_segment_image_geometry`;
+  historical GUI overlays/model identity cannot be recovered exactly.
+- Generated `record/IMADA_softsilicone_fy_2_good/derived/contact_overlay_20261101/`:
+  1,666 annotated PNGs, 55.55 s MP4, six uniform-time examples/overview,
+  predictions.csv, frame_index.csv, report.json, README_KO.md and audit hashes.
+  All 1,666 geometries reconstructed; 1,570 images have a recent prediction,
+  521 loaded frames display a marker, and 1,049 no-load frames hide it. The
+  remaining 96 images have no matched valid prediction (record-start warm-up).
+- Explicit recomputation choice, NOT verified historical selection: current
+  GUI-default cable_loadcell_angle masked force-KalmanNet/location-Transformer,
+  30x26 window; current inclusive XYZ no-load box +/-200 mN, ID band +/-2.
+  Raw-topic CSV receipt-order replay uses FeatureHistory; summary nearest-time
+  joins are NOT the inference inputs. Image association uses preceding input
+  source stamps, not original GUI availability/timer phase. No ground-truth
+  force/contact labels are used as inputs; output is not an accuracy claim.
+- Added offline-only scripts `offline_contact_inference.py`,
+  `offline_contact_geometry.py`, `render_recorded_contact.py` and 42 tests.
+  RBSC uses saved estimator config, crop-local K, zero ROI offset and fresh
+  filters. Contact IDs exclude fixed physical segment0. No ROS nodes, robot
+  commands, changes to original recordings, or live recorder changes were made.
+- PNG/MP4 frames and probabilities/argmax/age/no-load behavior verified.
+  Future live recorder still needs an explicit separate change to retain
+  force-ID predictions/geometry/GUI contact overlays; not silently added here.
 
 ## Git staging exclusions (2026-10-31)
 
