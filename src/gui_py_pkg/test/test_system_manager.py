@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import signal
 import subprocess
 from types import SimpleNamespace
@@ -8,7 +9,64 @@ import pytest
 
 from gui_py_pkg.system_manager import (
     ComponentSpec, ManagedProcess, SystemProcessManager, load_component_specs,
+    sensor_only_enabled,
 )
+
+
+@pytest.mark.parametrize('value, expected', [
+    ('', False), ('0', False), ('false', False), ('1', True),
+    ('true', True), ('YES', True), (' on ', True),
+])
+def test_sensor_only_mode_is_explicitly_enabled(monkeypatch, value, expected):
+    monkeypatch.setenv('HRM_SENSOR_ONLY', value)
+    assert sensor_only_enabled() is expected
+
+
+def test_sensor_only_config_removes_bridge_without_changing_native_config(monkeypatch):
+    config = Path(__file__).parents[1] / 'config' / 'system_components.json'
+    monkeypatch.delenv('HRM_SENSOR_ONLY', raising=False)
+    native = load_component_specs(config)
+    assert 'tcp' in [spec.component_id for spec in native]
+    monkeypatch.setenv('HRM_SENSOR_ONLY', '1')
+    guarded = load_component_specs(config)
+    assert guarded == [spec for spec in native if spec.component_id != 'tcp']
+
+
+@pytest.mark.parametrize('spec', [
+    ComponentSpec('renamed', 'Bridge', 'tcp_pkg', '_launch.py'),
+    ComponentSpec('tcp', 'Bridge', 'custom_pkg', '_launch.py'),
+    ComponentSpec('renamed', 'Bridge', 'custom_pkg', '_launch.py',
+                  expected_nodes=('/tcpclient',)),
+])
+def test_sensor_only_blocks_direct_bridge_start(monkeypatch, spec):
+    monkeypatch.setenv('HRM_SENSOR_ONLY', '1')
+    popen = Mock(side_effect=AssertionError('No real process may start.'))
+    monkeypatch.setattr('gui_py_pkg.system_manager.subprocess.Popen', popen)
+    assert not ManagedProcess(spec).start()
+    assert not SystemProcessManager([spec]).start(spec.component_id, set())
+    popen.assert_not_called()
+
+
+@pytest.mark.parametrize('arguments', [
+    {}, {'motor_output_enabled': True}, {'motor_output_enabled': 'true'},
+    {'motor_output_enabled': '{motor_output_enabled}'},
+])
+def test_sensor_only_forces_controller_launch_gate_off(monkeypatch, arguments):
+    spec = ComponentSpec('control', 'Control', 'robot_control_pkg', '_launch.py',
+                         arguments=arguments)
+    monkeypatch.setenv('HRM_SENSOR_ONLY', '1')
+    command = spec.command({'motor_output_enabled': True})
+    assert command == [
+        'ros2', 'launch', 'robot_control_pkg', '_launch.py',
+        'motor_output_enabled:=false',
+    ]
+    assert spec.arguments == arguments
+    monkeypatch.delenv('HRM_SENSOR_ONLY')
+    native_command = spec.command({'motor_output_enabled': True})
+    if arguments:
+        assert native_command[-1] == 'motor_output_enabled:=true'
+    else:
+        assert native_command == command[:4]
 
 
 def test_component_config_preserves_safe_startup_order(tmp_path):

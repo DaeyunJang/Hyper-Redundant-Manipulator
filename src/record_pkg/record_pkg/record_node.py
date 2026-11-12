@@ -1,3 +1,4 @@
+# AUTHOR: Daeyun -- HRM experiment recording and metadata capture.
 """GUI-compatible numeric rosbag capture with optional asynchronous crop PNGs."""
 
 import json

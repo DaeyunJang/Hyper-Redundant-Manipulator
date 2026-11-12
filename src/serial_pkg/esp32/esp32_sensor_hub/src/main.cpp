@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM sensor-hub task scheduling and combined F/T/loadcell serial protocol.
 #include <Arduino.h>
 
 constexpr uint32_t SERIAL_BAUD = 921600;

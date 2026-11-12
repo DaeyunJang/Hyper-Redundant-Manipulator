@@ -19,7 +19,7 @@
 #include <queue.h>
 #include <semphr.h>  // add the FreeRTOS functions for Semaphores (or Flags).
 #include <SPI.h>
-#include <mcp2515.h> // mcp2515 라이브러리를 설치해야 합니다. (https://github.com/autowp/arduino-mcp2515/)
+#include <mcp2515.h> // Install the mcp2515 library. (https://github.com/autowp/arduino-mcp2515/)
 #include <HX711.h>
 
 #define FORCE_CAN_ID 0x2A
@@ -180,10 +180,10 @@ void FTSNode(void *pvParameters){
   while(true)
   {
     if (mcp2515.readMessage(&kcan_read_msg_) == MCP2515::ERROR_OK) {
-      // CAN 메시지 출력
-//      Serial.print(kcan_read_msg_.can_id, HEX); // ID 출력
+      // Print the CAN message.
+//      Serial.print(kcan_read_msg_.can_id, HEX); // Print the ID.
 //      Serial.print(" ");
-//      Serial.print(kcan_read_msg_.can_dlc, HEX); // DLC 출력
+//      Serial.print(kcan_read_msg_.can_dlc, HEX); // Print the DLC.
 //      Serial.print(" ");
 //      for (int i = 0; i < kcan_read_msg_.can_dlc; i++) {
 //        Serial.print(kcan_read_msg_.data[i], HEX);
@@ -191,14 +191,14 @@ void FTSNode(void *pvParameters){
 //      Serial.println("");
 
       if (kcan_read_msg_.can_id == can_id_force_){  // 26
-        // mN 으로 force 계산
+        // Calculate force in mN.
         fx_ = (kcan_read_msg_.data[0]*256 + kcan_read_msg_.data[1])-30000;
         fy_ = (kcan_read_msg_.data[2]*256 + kcan_read_msg_.data[3])-30000;
         fz_ = (kcan_read_msg_.data[4]*256 + kcan_read_msg_.data[5])-30000;
         // Serial.println("FORCE");
       }
       else if (kcan_read_msg_.can_id == can_id_torque_){ //27
-        // mNm 으로 torque 계산
+        // Calculate torque in mNm.
         tx_ = (kcan_read_msg_.data[0]*256 + kcan_read_msg_.data[1])-30000;
         ty_ = (kcan_read_msg_.data[2]*256 + kcan_read_msg_.data[3])-30000;
         tz_ = (kcan_read_msg_.data[4]*256 + kcan_read_msg_.data[5])-30000;
@@ -228,10 +228,10 @@ void SensorsNode(void *pvParameters){
   while(true)
   {
     if (mcp2515.readMessage(&kcan_read_msg_) == MCP2515::ERROR_OK) {
-      // CAN 메시지 출력
-//      Serial.print(kcan_read_msg_.can_id, HEX); // ID 출력
+      // Print the CAN message.
+//      Serial.print(kcan_read_msg_.can_id, HEX); // Print the ID.
 //      Serial.print(" ");
-//      Serial.print(kcan_read_msg_.can_dlc, HEX); // DLC 출력
+//      Serial.print(kcan_read_msg_.can_dlc, HEX); // Print the DLC.
 //      Serial.print(" ");
 //      for (int i = 0; i < kcan_read_msg_.can_dlc; i++) {
 //        Serial.print(kcan_read_msg_.data[i], HEX);
@@ -239,14 +239,14 @@ void SensorsNode(void *pvParameters){
 //      Serial.println("");
 
       if (kcan_read_msg_.can_id == can_id_force_){  // 26
-        // mN 으로 force 계산
+        // Calculate force in mN.
         fx_ = (kcan_read_msg_.data[0]*256 + kcan_read_msg_.data[1])-30000;
         fy_ = (kcan_read_msg_.data[2]*256 + kcan_read_msg_.data[3])-30000;
         fz_ = (kcan_read_msg_.data[4]*256 + kcan_read_msg_.data[5])-30000;
         // Serial.println("FORCE");
       }
       else if (kcan_read_msg_.can_id == can_id_torque_){ //27
-        // mNm 으로 torque 계산
+        // Calculate torque in mNm.
         tx_ = (kcan_read_msg_.data[0]*256 + kcan_read_msg_.data[1])-30000;
         ty_ = (kcan_read_msg_.data[2]*256 + kcan_read_msg_.data[3])-30000;
         tz_ = (kcan_read_msg_.data[4]*256 + kcan_read_msg_.data[5])-30000;

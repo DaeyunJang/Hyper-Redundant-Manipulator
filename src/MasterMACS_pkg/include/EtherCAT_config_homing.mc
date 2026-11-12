@@ -55,7 +55,8 @@ long EtherCAT_configuration(void)
 	{
 		sdkEpos4_SetupECatSdoParam(C_DRIVE_BUSID1+i, C_PDO_NUMBER, C_AXIS1_POLARITY, g_OP_MODE);
 		
-		/** @author DY
+		/** @author Daeyun
+		* AUTHOR: Daeyun - HRM drive tuning and configuration.
 		*	@brief  tuning parameters
 		*/
 		//SdoWriten(C_DRIVE_BUSID1+i, 0x6065, 0, 4, 100000);	// Floowing Error window
@@ -411,7 +412,7 @@ long EtherCAT_configuration(void)
 }
 
 
-long EtherCAT_REINIT (long id, long signal, long event[], long data[]) // EtherCAT NMT 상태를 재부팅하여 Operational 상태로 만듦.
+long EtherCAT_REINIT (long id, long signal, long event[], long data[]) // Restart the EtherCAT NMT state machine and enter Operational.
 {
     long n_slaves, i,retval,res;
     print("REINIT");
@@ -468,7 +469,7 @@ long EtherCAT_REINIT (long id, long signal, long event[], long data[]) // EtherC
 }
 
 
-long EtherCAT_PREOP (long id, long signal, long event[], long data[])  // EtherCAT NMT State를 PRE operational 상태로 바꿈
+long EtherCAT_PREOP (long id, long signal, long event[], long data[])  // Set the EtherCAT NMT state to Pre-operational.
 {
 	long i=0;
 	// DY
@@ -491,7 +492,7 @@ long EtherCAT_PREOP (long id, long signal, long event[], long data[])  // EtherC
 	return(0);
 }
 
-long EtherCAT_OP (long id, long signal, long event[], long data[]) // EtherCAT NMT State를 Operational 상태로 바꿈
+long EtherCAT_OP (long id, long signal, long event[], long data[]) // Set the EtherCAT NMT state to Operational.
 {
 	//DY
 	print("EtherCAT OP set...");

@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM integration of the AIDIN F/T CAN protocol and shared sensor state.
 #include <Arduino.h>
 #include <driver/twai.h>
 

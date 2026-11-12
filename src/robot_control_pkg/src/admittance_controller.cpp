@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM force-feedback convention and compliant target-position generation.
 #include "admittance_controller.hpp"
 
 

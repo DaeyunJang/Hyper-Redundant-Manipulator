@@ -2,12 +2,12 @@
 #include <SysDef.mh>
 #include "C:\Users\mmkhych\Desktop\Zub\SDK\ApossC-SDK-V01-12\SDK\SDK_ApossC.mc"
 
-long server_handle ; // Ethernet 통신 위한 Handle 값
+long server_handle ; // Ethernet communication handle
 
-dim long array[60];  // Ethernet 통신 수신시, 처음 받는 Raw 데이터 저장 공간
-dim long array1[60]; // Ethenet 통신 수신시, 처음 받는 Raw 데이터를 변환하여 저장하는 공간
-dim long Recv_data[60]; // Ethernet 통신수신시, 변환한 데이터를 옮겨 저장하는 공간
-dim long Pattern_Send_data[32]; // Ethernet 통신 송신시, 송신할 데이터 저장하는 공간
+dim long array[60];  // Storage for the initial raw Ethernet receive data
+dim long array1[60]; // Storage for converted raw Ethernet receive data
+dim long Recv_data[60]; // Storage for the converted Ethernet receive data
+dim long Pattern_Send_data[32]; // Storage for outgoing Ethernet data
 
 double an1;
 double Voltage1;
@@ -27,7 +27,7 @@ long CV_1;
 long Status;
 
 
-long length = 32;               //Ethernet 통신시 허용 데이터 길이(byte 단위)
+long length = 32;               //Allowed Ethernet data length in bytes
 double AX1_POS;
 double AX2_POS;
 long AX1_POS_LONG;
@@ -112,14 +112,14 @@ SmState EthernetHandling {
 
 }
 
-SmState Axis1_2_State  // 1,2번 모터 제어용 루프
+SmState Axis1_2_State  // Control loop for motors 1 and 2
 {
 
 	SIG_INIT =
 	{
-	    SmSubscribe(id, SIG_ERROR); // Error Detection 루프
+	    SmSubscribe(id, SIG_ERROR); // Error-detection loop
 
-		return(SmTrans(->Standing)); // 이벤트 선언 후 "Standing_AXIS1_2"라는 State로 넘어감.
+		return(SmTrans(->Standing)); // After registering the events, transition to Standing_AXIS1_2.
 	}
 
     SIG_ERROR =
@@ -135,7 +135,7 @@ SmState Axis1_2_State  // 1,2번 모터 제어용 루프
 	}
 
 
-	SmState Standing   // 위에서 선언한 3개의 이벤트가 발생하는 것을 대기하는 State 루프
+	SmState Standing   // State loop waiting for the three events declared above
 	{
 
 
@@ -145,77 +145,77 @@ SmState Axis1_2_State  // 1,2번 모터 제어용 루프
 
 
 
-/////////////////////////////Ethernet으로 0x0D 받는 경우//////////////////////////////////////////////////////////////
+/////////////////////////////Ethernet command 0x0D//////////////////////////////////////////////////////////////
                      if(array1[0] == 0x0D)
                      {
 
 
                      }
 
-/////////////////////////////Ethernet으로 0x0A 받는 경우//////////////////////////////////////////////////////////////
+/////////////////////////////Ethernet command 0x0A//////////////////////////////////////////////////////////////
                      if(array1[0] == 0x0A)
                      {
 
                      }
 
-/////////////////////////////Ethernet으로 0x0C 받는 경우//////////////////////////////////////////////////////////////
+/////////////////////////////Ethernet command 0x0C//////////////////////////////////////////////////////////////
                      if(array1[0] == 0x0C)
                      {
 
                      }
 
-/////////////////////////////Ethernet으로 0x0B 받는 경우//////////////////////////////////////////////////////////////
+/////////////////////////////Ethernet command 0x0B//////////////////////////////////////////////////////////////
                      if(array1[0] == 0x0B)
                      {
 
                      }
 
-/////////////////////////////Ethernet으로 0x05 받는 경우//////////////////////////////////////////////////////////////
+/////////////////////////////Ethernet command 0x05//////////////////////////////////////////////////////////////
                      if(array1[0] == 0x05)
                      {
 
                      }
 
-/////////////////////////////Ethernet으로 0x07 받는 경우///////////////////////////////////////////////////////////
+/////////////////////////////Ethernet command 0x07///////////////////////////////////////////////////////////
                      if(array1[0] == 0x07)
                      {
 
                      }
 
-/////////////////////////////Ethernet으로 0x08 받는 경우///////////////////////////////////////////////////////////
+/////////////////////////////Ethernet command 0x08///////////////////////////////////////////////////////////
                      if(array1[0] == 0x08)
                      {
 
                      }
 
-/////////////////////////////Ethernet으로 0x09 받는 경우///////////////////////////////////////////////////////////
+/////////////////////////////Ethernet command 0x09///////////////////////////////////////////////////////////
                      if(array1[0] == 0x09)
                      {
 
                      }
-/////////////////////////////Ethernet으로 0x04 받는 경우///////////////////
+/////////////////////////////Ethernet command 0x04///////////////////
                      if(array1[0] == 0x04)
                      {
 
                      }
-/////////////////////////////Ethernet으로 0x0E 받는 경우///////////////////
+/////////////////////////////Ethernet command 0x0E///////////////////
                      if(array1[0] == 0x0E)
                      {
 
 
                      }
-////////////////////////////Ethernet으로 0x1F 받는 경우//////////////////////////////////////////////
+////////////////////////////Ethernet command 0x1F//////////////////////////////////////////////
                      if(array1[0] == 0x1F )
                      {
 
 
                      }
-////////////////////////////Ethernet으로 0x3F 받는 경우////////////////////////////////////////////////
+////////////////////////////Ethernet command 0x3F////////////////////////////////////////////////
                      if(array1[0] == 0x3F)
                      {
 
                      }
-///////////////////////////Ethernet으로 0x5F 받는 경우//////////////////////////////////////
+///////////////////////////Ethernet command 0x5F//////////////////////////////////////
                      if(array1[0] == 0x5F)
                      {
 

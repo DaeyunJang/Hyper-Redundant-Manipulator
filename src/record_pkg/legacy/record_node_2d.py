@@ -282,7 +282,7 @@ class RecordNode(Node):
         self.apriltag_tf_timer = self.create_timer(0.01, self.compute_relative_pose)
         self.base_frame = "ID0"
         self.target_frame = "ID1"
-        self.csv_writer_apriltag = None  # 외부에서 설정하도록 열어 둠
+        self.csv_writer_apriltag = None  # Allow this writer to be assigned externally.
         self.latest_transform_time = None
         self.relative_translation = (0,0,0)
         self.relative_euler = (0,0,0)
@@ -297,15 +297,15 @@ class RecordNode(Node):
         ### ================================================================
         ### file managers
         ### ================================================================
-        # hw_definition.hpp 파일의 경로 설정
+        # Set the path to hw_definition.hpp.
         self.get_logger().info(f"{os.getcwd()}")
 
         hw_definition_hpp_path = (
             "./src/robot_control_pkg/include/robot_control_pkg/hw_definition.hpp"
         )
-        # 파싱하여 상수 값을 읽어옴
+        # Parse the hardware constants.
         constants = self.parse_hw_definition_hpp(hw_definition_hpp_path)
-        # 상수 값 출력
+        # Print the constant values.
         for key, value in constants.items():
             # self.get_logger().info(f'{key}: {value} ({type(key)}/{type(value)})')
             if key == "NUM_OF_MOTORS":
@@ -462,12 +462,12 @@ class RecordNode(Node):
             rot = R.from_quat([r.x, r.y, r.z, r.w])
             euler = rot.as_euler("xyz", degrees=False)
 
-            # 내부 상태 저장
+            # Save the internal state.
             self.latest_transform_time = tf.header.stamp
             self.relative_translation = (t.x, t.y, t.z)
             self.relative_euler = tuple(euler)
 
-            # 🔽 출력 추가
+            # Print the parsed settings.
             # print(f"tf: {tf}")
             # print(f"[TF] Relative Translation (m): {self.relative_translation}")
             # print(f"[TF] Relative Euler Angles (rad): {self.relative_euler}")
@@ -1034,7 +1034,7 @@ class RecordNode(Node):
         #     metadata["units"][f"motor #{i}"] = "encoder inc"
         #     metadata["units"][f"loadcell #{i}"] = "mN"
 
-        # 메타데이터를 JSON 파일로 저장합니다.
+        # Save the metadata as JSON.
         self.metadata_file_name = os.path.join(self.directory_path_csv, "metadata.json")
         with open(self.metadata_file_name, "w") as metadata_file:
             json.dump(metadata, metadata_file, indent=4)

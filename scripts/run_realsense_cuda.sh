@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# AUTHOR: Daeyun - HRM-specific CUDA RealSense launch integration.
 
 set -e
 

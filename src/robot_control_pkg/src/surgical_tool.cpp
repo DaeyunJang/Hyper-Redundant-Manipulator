@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM-specific cable inverse kinematics and alternating-axis D-H forward kinematics.
 #include "surgical_tool.hpp"
 
 SurgicalTool::SurgicalTool() {

@@ -584,19 +584,19 @@ long main(void)
 
 	ErrorClear();
 
-	Vel(C_AXIS4,20,C_AXIS5,20,C_AXIS6,20);   // 속도 지정
-	Acc(C_AXIS4,40,C_AXIS5,40,C_AXIS6,40);   // 가속도 지정
-	Dec(C_AXIS4,50,C_AXIS5,50,C_AXIS6,50);   // 감속도 지정
+	Vel(C_AXIS4,20,C_AXIS5,20,C_AXIS6,20);   // Set velocity.
+	Acc(C_AXIS4,40,C_AXIS5,40,C_AXIS6,40);   // Set acceleration.
+	Dec(C_AXIS4,50,C_AXIS5,50,C_AXIS6,50);   // Set deceleration.
 
 
 
 	//$B
-  res = SmRun(Operation); // Opearation 이라는 이름의 Statemachine을 실행.
+  res = SmRun(Operation); // Run the configured state machine.
 
     return(0);
 }
 
-long EtherCAT_REINIT (long id, long signal, long event[], long data[]) // EtherCAT NMT 상태를 재부팅하여 Operational 상태로 만듦.
+long EtherCAT_REINIT (long id, long signal, long event[], long data[]) // Restart the EtherCAT NMT state machine and enter Operational.
 {
     long slaveCount, i,retval,res;
     print("REINIT");
@@ -652,7 +652,7 @@ long EtherCAT_REINIT (long id, long signal, long event[], long data[]) // EtherC
 }	//$B
 
 
-long EtherCAT_PREOP (long id, long signal, long event[], long data[])  // EtherCAT NMT State를 PRE operational 상태로 바꿈
+long EtherCAT_PREOP (long id, long signal, long event[], long data[])  // Set the EtherCAT NMT state to Pre-operational.
 {
 
 ECatMasterCommand(0x1000,1);
@@ -671,7 +671,7 @@ for (i = 1; i <= 1; i++) {
 return(SmTrans(Standing));
 }
 
-long EtherCAT_OP (long id, long signal, long event[], long data[]) // EtherCAT NMT State를 Operational 상태로 바꿈
+long EtherCAT_OP (long id, long signal, long event[], long data[]) // Set the EtherCAT NMT state to Operational.
 {
 sdkEtherCATMasterStart();
 AmpErrorClear(AXALL);

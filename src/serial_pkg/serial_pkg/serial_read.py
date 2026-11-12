@@ -1,3 +1,5 @@
+# AUTHOR: Daeyun
+# HRM serial sensor decoding, F/T filtering and ROS 2 publication.
 import serial
 import time
 import sys, os
@@ -109,7 +111,7 @@ class SerialNode(Node):
 
         self.create_service(SetBool, '/serial_data/set_zero', self.set_zero_callback)
 
-        self.baudrate = 921600  # 아두이노와 통신하는 속도
+        self.baudrate = 921600  # Serial baud rate for the sensor microcontroller.
         self.ser = None
         while self.ser is None or not self.ser.is_open:
             try:
@@ -118,7 +120,7 @@ class SerialNode(Node):
                 print("Connection successful!")
             except serial.SerialException as e:
                 print(f"Connection failed: {e}. Retrying in 2 seconds...")
-                time.sleep(2)  # 2초 후 재시도
+                time.sleep(2)  # Retry after two seconds.
 
         self.get_logger().info(f'Serial status: {self.ser}')
         self.force3d = np.zeros((1,3))    # empty list [0, 0, 0]
@@ -228,12 +230,12 @@ class SerialNode(Node):
     # Function of creating 'Kalman filter' - filterpy
     def create_kalman_filter(self, dim_x=1, dim_z=1, F=1, H=1, x_init=0, P=1, Q=1e-1, R=1e2):
         kf = KalmanFilter(dim_x=dim_x, dim_z=dim_z)
-        kf.F = np.array([[F]])  # 상태 전이 행렬 (단위 행렬)
-        kf.H = np.array([[H]])  # 측정 행렬 (단위 행렬)
-        kf.x = np.array([x_init])  # 초기 상태 추정
-        kf.P = np.array([[P]])  # 초기 공분산
-        kf.Q = np.array([[Q]])  # 프로세스 노이즈
-        kf.R = np.array([[R]])  # 측정 노이즈
+        kf.F = np.array([[F]])  # State transition matrix (identity for F=1).
+        kf.H = np.array([[H]])  # Measurement matrix (identity for H=1).
+        kf.x = np.array([x_init])  # Initial state estimate.
+        kf.P = np.array([[P]])  # Initial covariance.
+        kf.Q = np.array([[Q]])  # Process noise covariance.
+        kf.R = np.array([[R]])  # Measurement noise covariance.
         return kf
 
     def read_serial_data(self):
@@ -241,7 +243,7 @@ class SerialNode(Node):
             self.get_logger().info('Start serial reading')
             while True:
                 with self.serial_lock:
-                    # 시리얼 데이터 읽기
+                    # Read serial data.
                     try:
                         # serial_data = ser.readline()  # binary(ASCII)
                         serial_data = self.ser.readline().decode('utf-8', errors='ignore').rstrip()
@@ -249,7 +251,7 @@ class SerialNode(Node):
                         self.get_logger().warning('Error decoding data')
                         serial_data = ''
 
-                # 수신된 데이터가 비어있지 않으면 출력
+                # Process nonempty received data.
                 if serial_data:
                     parsing_data = self.parse_serial_data(serial_data)
                     if parsing_data == None:
@@ -324,7 +326,7 @@ class SerialNode(Node):
         except KeyboardInterrupt:
             self.get_logger().warning('Keyboard Interrupt')
         finally:
-            # 시리얼 포트 닫기
+            # Close the serial port.
             # self.get_logger().info('Close serial reading')
             self.ser.close()
 
@@ -349,10 +351,10 @@ class SerialNode(Node):
                         self.get_logger().warning(f'deleting {N} data is flushing at the start point')
 
                 while count < avg_num:
-                    # 시리얼 데이터 읽기
+                    # Read serial data.
                     try:
                         serial_data = self.ser.readline().decode('utf-8', errors='ignore').rstrip()
-                        # 수신된 데이터가 비어있지 않으면 출력
+                        # Process nonempty received data.
                         if serial_data:
                             parsing_data = self.parse_serial_data(serial_data)
                             if parsing_data == None:

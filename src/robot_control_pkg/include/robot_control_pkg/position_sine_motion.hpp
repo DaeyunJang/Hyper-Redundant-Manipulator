@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM-base Cartesian reference generation for position/admittance experiments.
 #pragma once
 
 #include <algorithm>

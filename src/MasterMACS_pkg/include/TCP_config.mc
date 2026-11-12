@@ -84,7 +84,8 @@ void TCP_receiveHandler(void)
 	retVal = EthernetReceiveTelegram(socketHandle, receiveData);
 
 	/**
-	** @author DY
+	** @author Daeyun
+	** AUTHOR: Daeyun - HRM motor-command packet handling.
 	** @brief Just input the value when TCP is READY(connected)
 	**/
 	if (status == SOCK_STATUS_READY) {

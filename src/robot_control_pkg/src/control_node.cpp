@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM control integration: visual feedback, cable commands and force-based compliance.
 #include "control_node.hpp"
 #include "hardware_metadata.hpp"
 
@@ -117,7 +119,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
   }
   HRM_position_controller_.set_limits(position_max_speed_deg_s_, position_derivative_filter_sec_);
 
-  // 파라미터 변경 콜백 등록
+  // Register the parameter-change callback.
   param_callback_handle_ = this->add_on_set_parameters_callback(
     std::bind(&ControlNode::parameter_callback, this, std::placeholders::_1)
   );
@@ -683,7 +685,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         response->success = true;
         response->message = "Sine wave publishing started.";
       } else {
-        // 서비스 요청이 False일 때 타이머 중지
+        // Stop the timer when the service request is false.
         count_ = 0;
         if (timer_ != nullptr) {
             timer_->cancel();
@@ -736,7 +738,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         response->success = true;
         response->message = "Sine wave publishing started.";
       } else {
-        // 서비스 요청이 False일 때 타이머 중지
+        // Stop the timer when the service request is false.
         count_ = 0;
         if (timer_ != nullptr) {
             timer_->cancel();
@@ -793,7 +795,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         response->success = true;
         response->message = "Circle-motion publishing started.";
       } else {
-        // 서비스 요청이 False일 때 타이머 중지
+        // Stop the timer when the service request is false.
         count_ = 0;
         if (timer_ != nullptr) {
             timer_->cancel();
@@ -851,7 +853,7 @@ ControlNode::ControlNode(const rclcpp::NodeOptions & node_options)
         response->success = true;
         response->message = "Moebius-motion publishing started.";
       } else {
-        // 서비스 요청이 False일 때 타이머 중지
+        // Stop the timer when the service request is false.
         count_ = 0;
         if (timer_ != nullptr) {
             timer_->cancel();
@@ -1296,14 +1298,14 @@ void ControlNode::publish_sine_wave()
     cal_inverse_kinematics(trajectory_, 0, 0);
     publish_motor_command_if_enabled("motion/move_sine_wave");
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
-    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    count_ += count_add_;  // Advance the phase to generate the sine wave.
     // std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
   }
   else if (control_mode_ == ControlMode::kDynamics) {
     double omega = 2.0 * M_PI / period_;
     trajectory_ = amp_deg_ * std::sin(omega * count_);
     this->theta_desired_ = trajectory_;
-    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    count_ += count_add_;  // Advance the phase to generate the sine wave.
     // std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
   }
   else if (control_mode_ == ControlMode::kPosition || control_mode_ == ControlMode::kAdmittance) {
@@ -1312,7 +1314,7 @@ void ControlNode::publish_sine_wave()
     Eigen::VectorXd x_target = Eigen::VectorXd::Zero(6);
     x_target(1) = trajectory_;
     this->x_desired_ = x_target;
-    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    count_ += count_add_;  // Advance the phase to generate the sine wave.
   }
 
 }
@@ -1326,7 +1328,7 @@ void ControlNode::publish_sine_wave_1time()
     cal_inverse_kinematics(trajectory_, 0, 0);
     publish_motor_command_if_enabled("motion/move_sine_wave_1time");
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
-    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    count_ += count_add_;  // Advance the phase to generate the sine wave.
     // std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
     
     if (count_ >= period_) {
@@ -1340,7 +1342,7 @@ void ControlNode::publish_sine_wave_1time()
     double omega = 2.0 * M_PI / period_;
     trajectory_ = amp_deg_ * std::sin(omega * count_);
     this->theta_desired_ = trajectory_; // +90 ~ -90
-    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    count_ += count_add_;  // Advance the phase to generate the sine wave.
     // std::cout << omega << " / " << amp_deg_ << " / " << trajectory_ << " / " << count_ << " / " << count_add_ << std::endl;
     
     if (count_ >= period_) {
@@ -1356,7 +1358,7 @@ void ControlNode::publish_sine_wave_1time()
     Eigen::VectorXd x_target = Eigen::VectorXd::Zero(6);
     x_target(1) = trajectory_;
     this->x_desired_ = x_target;
-    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    count_ += count_add_;  // Advance the phase to generate the sine wave.
     
     if (count_ >= period_) {
       count_ = 0;
@@ -1376,7 +1378,7 @@ void ControlNode::publish_circle_motion()
     cal_inverse_kinematics(pan_deg, 0, 0);
     publish_motor_command_if_enabled("kinematics/move_circle_motion");
     surgical_tool_pose_publisher_->publish(surgical_tool_pose_);
-    count_ += count_add_;  // 각도를 증가시켜 사인파를 만듦
+    count_ += count_add_;  // Advance the phase to generate the sine wave.
     // std::cout << pan_deg <<  " / " << tilt_deg << std::endl;
   }
 }
@@ -1716,22 +1718,22 @@ void ControlNode::run_dynamic_control_thread() {
 
         // publish dynamic MIMO values
         if (segment_angle_updated) {
-          // 데이터 생성
+          // Populate the dynamics data.
           dynamic_MIMO_values_.header.stamp = this->get_clock()->now();
           dynamic_MIMO_values_.header.frame_id = "dynamics_MIMO_values";
-          dynamic_MIMO_values_.sampling_time = dt; // 초 단위 변환
+          dynamic_MIMO_values_.sampling_time = dt; // Sampling interval in seconds.
           dynamic_MIMO_values_.p_gain = HRM_controller_.pid_controller_.kp_;
           dynamic_MIMO_values_.i_gain = HRM_controller_.pid_controller_.ki_;
           dynamic_MIMO_values_.d_gain = HRM_controller_.pid_controller_.kd_;
           dynamic_MIMO_values_.hrm_controller_enable = HRM_controller_.hrm_controller_enable_;
-          dynamic_MIMO_values_.theta_desired = theta_desired; // 예제 데이터
-          dynamic_MIMO_values_.theta_actual = HRM_controller_.end_effector_theta_actual_;    // 약간의 오차 추가
-          dynamic_MIMO_values_.omega_actual = HRM_controller_.end_effector_dtheta_dt_actual_;  // 예제 데이터
-          dynamic_MIMO_values_.tension = tension;                          // 예제 데이터
+          dynamic_MIMO_values_.theta_desired = theta_desired; // Desired angle.
+          dynamic_MIMO_values_.theta_actual = HRM_controller_.end_effector_theta_actual_;    // Measured angle.
+          dynamic_MIMO_values_.omega_actual = HRM_controller_.end_effector_dtheta_dt_actual_;  // Measured angular velocity.
+          dynamic_MIMO_values_.tension = tension;                          // Cable tension.
           dynamic_MIMO_values_.cable_velocity_left = cable_velocity[0];
           dynamic_MIMO_values_.cable_velocity_right = cable_velocity[1];
           dynamic_MIMO_values_.torque_input = HRM_controller_.torque_input_;
-          dynamic_MIMO_values_.external_force = external_force;                   // 예제 데이터
+          dynamic_MIMO_values_.external_force = external_force;                   // External force.
           dynamic_MIMO_values_.external_torque = HRM_controller_.tau_ext_;
           dynamic_MIMO_values_.friction_mode = 0;
           dynamic_MIMO_values_.friction_torque = HRM_controller_.tau_friction_;

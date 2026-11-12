@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# AUTHOR: Daeyun - HRM tip-pose validation and archive analysis.
 """Offline, no-fill tip CSV export and diagnostics from a finalized rosbag.
 
 No ROS node is initialized and no camera, motor, parameter, or service is used.

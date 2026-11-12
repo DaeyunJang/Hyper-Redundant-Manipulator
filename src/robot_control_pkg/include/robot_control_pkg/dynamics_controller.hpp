@@ -20,7 +20,7 @@ public:
     DynamicsController();
     ~DynamicsController();
 
-    // PID 제어기의 게인 설정
+    // Set the PID controller gains.
     PIDController pid_controller_;
     HRMDynamicsModel hrm_dynamics_model_;
     SurgicalTool surgical_tool_;

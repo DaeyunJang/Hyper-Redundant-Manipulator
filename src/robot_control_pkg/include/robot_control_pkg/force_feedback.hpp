@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM-specific validity checks for learned force/contact estimates used in control.
 #pragma once
 
 #include <cmath>

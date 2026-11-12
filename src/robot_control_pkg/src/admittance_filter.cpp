@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// Six-dimensional admittance implementation for the HRM interaction controller.
 #include "admittance_filter.hpp"
 #include <algorithm>
 #include <cmath>

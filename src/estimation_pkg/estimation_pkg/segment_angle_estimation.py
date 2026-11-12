@@ -1,3 +1,4 @@
+# AUTHOR: Daeyun -- HRM RGB-D estimation, filtering, and ROS visualization.
 import rclpy
 from rclpy.node import Node
 

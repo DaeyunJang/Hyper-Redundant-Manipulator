@@ -1,3 +1,4 @@
+# AUTHOR: Daeyun -- HRM contact localization overlay.
 """Display-only, source-aware contact probability geometry for the skeleton tile."""
 
 from dataclasses import dataclass

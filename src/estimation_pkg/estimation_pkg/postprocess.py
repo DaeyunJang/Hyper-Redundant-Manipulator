@@ -1,3 +1,5 @@
+# AUTHOR: Daeyun
+# HRM image-to-shape reconstruction and alternating-joint angle estimation.
 import os
 import sys
 import glob
@@ -85,20 +87,20 @@ class RBSC:
         return config
 
     def smoothing(self, binary, k_size=5):
-        # 빈틈을 채우기 위해 닫힘 연산 적용 (모폴로지 연산)
+        # Apply morphological closing to fill small gaps.
         kernel = np.ones((k_size, k_size), np.uint8)
         closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
-        # 외곽선을 찾아 근사화하지 않고 그대로 사용하여 매끄러운 곡선 유지
+        # Retain the full contour without approximation to preserve smooth boundaries.
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
-        # 빈 이미지 생성
+        # Create an empty image.
         smooth_image = np.zeros_like(closed)
 
-        # 근사화되지 않은 외곽선을 따라 그리기 (매끄러운 곡선 유지)
+        # Draw the full contour to retain the smooth outline.
         cv2.drawContours(smooth_image, contours, -1, 255, thickness=cv2.FILLED)
 
-        # 경계선 스무딩을 위해 블러링 적용 후 다시 이진화
+        # Blur and threshold again to smooth the boundary.
         blurred = cv2.GaussianBlur(smooth_image, (15, 15), 0)
         _, final_smooth = cv2.threshold(blurred, 127, 255, cv2.THRESH_BINARY)
 
@@ -148,8 +150,8 @@ class RBSC:
         return (a * x ** 4 + b * x ** 3 + c * x ** 2 + d * x) + L / (1 + np.exp(exp_term))
         # return (a * x **2 + b * x) + L / (1 + np.exp(-k * (x - x0)))
 
-    # 곡선 양끝에 n개의 점 추가
-    # y값을 기존값 그대로 쓸수도 있고, curve함수에 의해 수학적으로 구해지는 y를 쓸 수도 있다.
+    # Add n points at each end of the curve.
+    # Use either the original y values or values evaluated from the fitted curve.
     def extend_curve(self, x, y, popt, rate=0.8, start_method='linear', end_method='curve',replace='origin'):
         """
         :param x: x values
@@ -161,7 +163,7 @@ class RBSC:
         :return: extended x, y values
         """
         interval =  (x.max() - x.min()) / len(x)
-        n = len(x) * rate    # 전체 데이터 개수의 rate * 100 %만큼 연장
+        n = len(x) * rate    # Extend by rate * 100 percent of the original sample count.
         n = int(n)
         extend_threshold = interval * n
         x_new_start = np.arange(x.min() - extend_threshold, x.min(), interval)
@@ -197,12 +199,12 @@ class RBSC:
         params = None
         if popt == 'poly4d':
             params = self.popt_poly4d
-        # 피팅된 곡선 함수 정의 (curve_length 함수 내부에서)
+        # Define the fitted curve for the length calculation.
         def fitted_curve(x):
             # return params[0] * x ** 4 + params[1] * x ** 3 + params[2] * x ** 2 + params[3] * x
             return self.poly4d(x, *params)
 
-        # 곡선의 도함수를 수치적으로 계산하여 길이를 구함
+        # Numerically differentiate the curve for arc-length integration.
         integrand = lambda x: np.sqrt(1 + derivative(fitted_curve, x, dx=1e-3) ** 2)
         # integrand = lambda x: np.sqrt(1 + self.dfdx_poly4d(x) ** 2)
 
@@ -216,14 +218,14 @@ class RBSC:
 
         return length
 
-    # 주어진 곡선 길이에 대해 끝점(x1)을 찾는 함수
+    # Find the endpoint x1 for a specified curve length.
     def find_x_for_given_length(self, x_start, target_length):
-        # 곡선 길이를 계산한 후, 주어진 길이와의 차이를 반환하는 함수 정의
+        # Return the difference between the computed and requested curve lengths.
         def length_difference(x_end):
             return abs(self.get_curve_length(x_start, x_end) - target_length)
 
-        # 수치적으로 근을 찾기 위해 brentq 사용 (root-finding)
-        # x_end = brentq(length_difference, x_start, x_start + target_length)  # 범위를 적절히 조절
+        # Use brentq for numerical root finding.
+        # x_end = brentq(length_difference, x_start, x_start + target_length)  # Adjust the search interval as needed.
         # return x_end
 
         result = minimize_scalar(
@@ -238,7 +240,7 @@ class RBSC:
         # return result.root
 
     def find_closest_point(self, px, py):
-        # 임의의 점 (px, py)에서 곡선까지의 거리 최소화
+        # Minimize the distance from (px, py) to the curve.
         def distance_from_curve(x):
             return (self.func_poly4d(x) - py) ** 2 + (x - px) ** 2
 
@@ -267,7 +269,7 @@ class RBSC:
         self.yx_coords = np.column_stack(np.where(binary > 0)).astype(np.float64)
         # self.yx_coords = self.yx_coords[:-10]
         self.num_of_pixel_points = len(self.yx_coords)
-        self.xy_coords = self.yx_coords[:, [1, 0]]  # x, y 열 위치 조정
+        self.xy_coords = self.yx_coords[:, [1, 0]]  # Reorder the columns to x, y.
         self.xy_coords[:, 1] = binary.shape[0] - self.xy_coords[:, 1]  # height - y
 
         # Set the point with the smallest y to the origin
@@ -610,6 +612,7 @@ class RBSC:
         )
         return updated_state.copy()
 
+    # AUTHOR: Daeyun -- HRM joint-plane projection and cumulative DH frames.
     def project_segment_directions_to_joint_planes(self, timestamp_sec=None):
         """Project raw segment directions onto sequential DH joint planes.
 
@@ -839,6 +842,7 @@ class RBSC:
             ),
         )
 
+    # AUTHOR: Daeyun -- anchored 3D curve fitting and HRM segment sampling.
     def reconstruct_3d_segments(self, points_xyz, timestamp_sec=None):
         """Fit a normalized parametric 3D quartic and reconstruct segments."""
         finite = np.all(np.isfinite(points_xyz), axis=1)
@@ -1082,7 +1086,7 @@ class RBSC:
 
     def get_joints(self):
         # ============= find junction points ============
-        # 끝점의 기울기 - test
+        # Endpoint slope check.
         # self.tip_tangent = derivative(self.func_poly4d, self.x1, dx=1e-3)
         # self.tip_angle_rad = np.arctan(self.tip_tangent)
         # self.tip_angle_deg = np.degrees(self.tip_angle_rad)
@@ -1117,7 +1121,7 @@ class RBSC:
         self.joint_angle_degree = np.degrees(self.joint_angle)
 
         # first(0) joint is unstable compared to another joints
-        # 첫번째 segment는 오차가 있어서 점사이의 벡터를 가지고 각도를 따로 정의함
+        # Use the inter-point vector for the first segment angle to reduce endpoint error.
         vector_seg1_to_seg2 = [self.joints_xy[1,0]-self.joints_xy[0,0], self.joints_xy[1,1]-self.joints_xy[0,1]]
         tangent = vector_seg1_to_seg2[1] / vector_seg1_to_seg2[0]
         theta = np.arctan(tangent)
@@ -1186,27 +1190,27 @@ class RBSC:
                     'Expected rgb8 or bgr8.'
                 )
 
-            # 2. 색상 제거 전처리: HSV 색공간 변환
+            # 2. Color-removal preprocessing: convert to HSV.
             hsv = cv2.cvtColor(image, hsv_code)
 
-            # 붉은색 범위 지정 (두 구간으로 나눔)
-            lower_red1 = np.array([0, 50, 50])   # BGR에서 R이 강하고 B나 G가 상대적으로 작음
+            # Define two hue ranges for red.
+            lower_red1 = np.array([0, 50, 50])   # Target red-dominant pixels (R stronger than B or G in BGR).
             upper_red1 = np.array([255, 220, 220])
             # lower_red1 = np.array([0, 50, 50])
             # upper_red1 = np.array([50, 200, 200])
             # lower_red2 = np.array([100, 10, 10])
             # upper_red2 = np.array([200, 255, 255])
 
-            # 파란색 범위 지정
+            # Define the blue range.
             lower_blue = np.array([100, 70, 50])
             upper_blue = np.array([130, 255, 255])
 
-            # 마스크 생성
+            # Create the masks.
             # mask_red = cv2.inRange(hsv, lower_red1, upper_red1) | cv2.inRange(hsv, lower_red2, upper_red2)
             mask_red = cv2.inRange(hsv, lower_red1, upper_red1)
             mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
 
-            # 전체 마스크: 붉은색 또는 파란색
+            # Combined mask: red or blue.
             mask = cv2.bitwise_or(mask_red, mask_blue)
 
             # Convert only once to grayscale and mask there. Creating a second
@@ -1219,7 +1223,7 @@ class RBSC:
             self.image_w, self.image_h = self.gray_image.shape[1], self.gray_image.shape[0]
 
             # 2. Binarization
-            # 임계값 설정 (예: 127)
+            # Set the threshold (for example, 127).
             thresh_value = binary_thresh
             _, self.binary_image = cv2.threshold(self.gray_image, thresh_value, 255, cv2.THRESH_BINARY)
             timing_color_mask_done = time.perf_counter()
@@ -1251,8 +1255,8 @@ class RBSC:
             ####################################################################
             '''
             TODO
-            샘플링 타임에 가장 시간 많이쓰는 구간
-            없애던지 대체해야될것같기도... smoothing때문에 안해도 될것 같기도...
+            This stage accounts for the largest share of processing time.
+            Consider removing or replacing it if boundary smoothing makes it unnecessary.
             '''
             # Find the longest curve of backbone
             if filfinder_flag == True:
@@ -1274,7 +1278,7 @@ class RBSC:
 
         # ========== Curve fitting ==========
         try:
-            # 데이터 가중치 설정
+            # Set the sample weights.
             # weights = np.ones_like(self.yx_coords[:, 0])
             # sigma = 0.1
             # num = 10
@@ -1322,7 +1326,7 @@ class RBSC:
             # update curvefit coefficients
             """
             TODO
-            곡선 연장후 재피팅 안해줄 경우 skeleton 끝이 테두리로 삐져나갔을 때 대처가 안됌
+            Refit after extrapolation to handle skeleton endpoints that protrude toward the boundary.
             """
             self.popt_poly4d = self.fit_poly4d_through_origin(
                 ext_coords_x, ext_coords_y
@@ -1472,22 +1476,22 @@ class RBSC:
                    )
         plt.axis('off')
 
-        # 이미지를 파일로 저장
+        # Save the image to a file.
         dir_name = save_dir
         image_filename = os.path.basename(self.image_path)
         plt.savefig(os.path.join(dir_name, image_filename), bbox_inches='tight', pad_inches=0)
 
     def show(self):
-        # 결과 출력
+        # Display the results.
         plt.figure(figsize=(10, 5))
 
-        # 그레이스케일 이미지 출력
+        # Display the grayscale image.
         plt.subplot(2, 3, 1)
         plt.title('Grayscale Image')
         plt.imshow(self.gray_image, cmap='gray')
         plt.axis('off')
 
-        # 이진화 이미지 출력
+        # Display the binary image.
         plt.subplot(2, 3, 2)
         plt.title('Binary Image')
         plt.imshow(self.binary_image, cmap='gray')
@@ -1592,7 +1596,7 @@ class RBSC:
         #############################################################
         x_range = np.linspace(self.start_point[0], self.end_point[0], 100)
 
-        # 시각화
+        # Visualization.
         plt.figure(figsize=(8, 6))
         plt.plot(self.norm_trans_extended_xy_coords[:, 0], self.norm_trans_extended_xy_coords[:, 1], 'yo', markersize=10,
                  label='Extended Data(Skeleton) Points')
@@ -1644,7 +1648,7 @@ if __name__ == '__main__':
     images = [img for img in os.listdir(img_dir) if img.endswith(".png") or img.endswith(".jpg")]
     images = natsorted(images)
 
-    # 현재 시간 가져오기
+    # Get the current time.
     current_time = datetime.now()
     time_str = current_time.strftime("%Y%m%d_%H%M%S")
 

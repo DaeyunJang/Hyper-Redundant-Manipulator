@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# AUTHOR: Daeyun - HRM source-time-paired control diagnostics.
 """Read-only, source-stamp-paired admittance tuning measurements.
 
 No publishers, services, parameter writes or robot motion commands are created.

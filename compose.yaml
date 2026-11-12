@@ -1,0 +1,80 @@
+# AUTHOR: Daeyun - portable, motor-free HRM runtime.
+# Use scripts/hrm_docker.sh: it adds current camera/serial devices and host groups.
+name: hrm-sensors
+services:
+  hrm:
+    image: hrm:humble-cuda
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        CUDA_ARCH: ${HRM_CUDA_ARCH:-86}
+        BUILD_JOBS: ${HRM_BUILD_JOBS:-2}
+        RSUSB_BACKEND: ${HRM_RSUSB_BACKEND:-OFF}
+    user: "${HRM_UID:-1000}:${HRM_GID:-1000}"
+    working_dir: /opt/hrm_ws
+    init: true
+    network_mode: host
+    # Fast DDS sees the same host with host networking; share its SHM namespace.
+    ipc: host
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_signal: SIGINT
+    stop_grace_period: 35s
+    restart: "no"
+    environment:
+      HOME: /home/hrm
+      DISPLAY: ${DISPLAY:-}
+      XAUTHORITY: /tmp/hrm.xauth
+      QT_X11_NO_MITSHM: "1"
+      QT_QPA_PLATFORM: xcb
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics,display
+      ROS_DOMAIN_ID: ${HRM_ROS_DOMAIN_ID:-87}
+      ROS_LOCALHOST_ONLY: "1"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      HRM_SENSOR_ONLY: "1"
+      HRM_INFERENCE_PYTHON: /usr/bin/python3
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      PYTHONUNBUFFERED: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - type: bind
+        source: ${HRM_HOME_DIR:-./.docker-local/home}
+        target: /home/hrm
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${HRM_RECORD_DIR:-./record}
+        target: /opt/hrm_ws/record
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${HRM_MODELS_DIR:-./src/estimation_pkg/models}
+        target: /opt/hrm_ws/src/estimation_pkg/models
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${HRM_XAUTH_FILE:-./.docker-local/xauthority}
+        target: /tmp/hrm.xauth
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /tmp/.X11-unix
+        target: /tmp/.X11-unix
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /dev/bus/usb
+        target: /dev/bus/usb
+        bind: {create_host_path: false}
+    # USB bus node numbers change on reconnect. Other device nodes are enumerated
+    # explicitly by the helper; restart the container after video/serial reconnect.
+    device_cgroup_rules: ["c 189:* rw"]
+    command: [ros2, launch, launcher, system.launch.py, "auto_start_components:=false"]
+

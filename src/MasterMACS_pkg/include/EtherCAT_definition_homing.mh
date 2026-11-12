@@ -8,7 +8,8 @@
 #include "user_definition.mh"
 
 /***
- @author DY
+ @author Daeyun
+ AUTHOR: Daeyun - HRM-specific EtherCAT parameter configuration.
  @brief - If you want set EtherCAT parameters on each controllers, then modify g_ETHERCAT_CONFIG_INDIVIDUAL = 1
 		  (if set 0, it means that every controller have same EtherCAT parameters)
  @check - Although you use the same parameters, C_AXIS1's parameters have to be defined.

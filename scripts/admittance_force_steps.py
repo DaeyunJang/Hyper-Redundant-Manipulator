@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# AUTHOR: Daeyun - HRM admittance experiment command sequencing.
 """Apply a signed mN staircase to one admittance target; never enable motors.
 
 Example: python3 scripts/admittance_force_steps.py --axis fy --interval 3

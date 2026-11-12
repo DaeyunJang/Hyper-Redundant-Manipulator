@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM motor-command/state bridge between ROS 2 and the TCP motor interface.
 #include "tcp_node.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -124,8 +126,8 @@ void TCPClientNode::sendmsg()
 #else
   /**
    * @author DY
-   * @brief struct에 접근하여 input으로 던져줄 것.
-   *        ROS2 topic의 경우 배열로 던지고 받을 것.
+   * @brief Access the structure and pass its values as input.
+   *        Send and receive arrays through ROS 2 topics.
   */
   int32_t send_val[this->buffer_size_];
   for(int i=0; i<NUM_OF_MOTORS; i++){

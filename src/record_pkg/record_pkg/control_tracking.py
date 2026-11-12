@@ -1,3 +1,4 @@
+# AUTHOR: Daeyun -- HRM command/pose tracking evaluation export.
 """Offline command/pose inspection table from finalized per-topic CSV exports.
 
 Every /control/reference row is retained. Matching is streaming nearest source

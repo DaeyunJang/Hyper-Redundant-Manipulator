@@ -283,7 +283,8 @@ SmState TCPIP_Handler{
 								#endif
 
 								/*
-								** @author - DY
+								** @author Daeyun
+								** AUTHOR: Daeyun - HRM connection recovery.
 								** @brief if connection fail(disconnect any), TCP_RECONNECT function will be operated
 								*/
 								if(data[1] < 0) {
@@ -317,10 +318,10 @@ long main(void)
 
 	print("DY header : ", DY);
 	printf("State Machines Run...");
-  	status_sm = SmRun(SM_EtherCAT, SM_TCP); // Opearation 이라는 이름의 Statemachine을 실행.
+	status_sm = SmRun(SM_EtherCAT, SM_TCP); // Run the configured state machine.
 
   	// DY
-  	// Sm Run 이후는 실행되지 않음.
+	// Code after SmRun is not executed.
 	if(status_sm==0) {printf("Done");}
 	else {printf("#Error during Running State Machines!");}
 

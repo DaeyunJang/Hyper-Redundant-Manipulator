@@ -1,3 +1,4 @@
+# AUTHOR: Daeyun -- HRM feature mapping and timestamped inference histories.
 """Feature selection and fresh rolling histories; no ROS or actuator dependency."""
 
 from collections import deque

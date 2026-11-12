@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# AUTHOR: Daeyun - HRM offline segmentation export.
 """Export the current RBSC pre-skeleton masks without ROS playback or depth use.
 
 Source ROS/workspace, then run with HRM_env Python and the dataset-parent path.

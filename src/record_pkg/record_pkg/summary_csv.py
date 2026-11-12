@@ -1,3 +1,4 @@
+# AUTHOR: Daeyun -- timestamp-matched HRM experiment summary export.
 """Timestamp-matched wide CSV, derived from lossless topic CSVs after recording.
 
 No ROS imports, publications, training arrays, calibration or interpolation.

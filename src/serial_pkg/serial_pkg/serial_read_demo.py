@@ -22,9 +22,9 @@ from std_srvs.srv import SetBool
 from custom_interfaces.msg import LoadcellState
 from custom_interfaces.msg import DataFilterSetting
 
-usb_device_path = "/dev/ttyACM0"  # USB 장치의 경로에 맞게 변경하세요
+usb_device_path = "/dev/ttyACM0"  # Set this to the USB device path.
 
-# USB 장치에 대한 권한 변경 명령어
+# Command to change USB device permissions.
 command = f"sudo chmod 666 {usb_device_path}"
 
 class SerialNode(Node):
@@ -62,8 +62,8 @@ class SerialNode(Node):
             QOS_RKL10V
         )
 
-        # self.serial_port = '/dev/ttyACM0'  # 사용하는 시리얼 포트(COM 포트)를 지정하세요.
-        # self.baudrate = 115200  # 아두이노와 통신하는 속도
+        # self.serial_port = '/dev/ttyACM0'  # Select the serial (COM) port.
+        # self.baudrate = 115200  # Serial baud rate for the Arduino.
         # self.ser = serial.Serial(self.serial_port, self.baudrate, timeout=1)
         # self.get_logger().info(f'Serial status: {self.ser}')
 
@@ -140,7 +140,7 @@ class SerialNode(Node):
         try:
             self.get_logger().info('Start serial reading')
             while True:
-                # # 시리얼 데이터 읽기
+                # # Read serial data.
                 # try:
                 #     # serial_data = ser.readline()  # binary(ASCII)
                 #     serial_data = self.ser.readline().decode('utf-8', errors='ignore').rstrip()
@@ -148,7 +148,7 @@ class SerialNode(Node):
                 #     self.get_logger().warning('Error decoding data')
                 #     serial_data = ''
 
-                # # 수신된 데이터가 비어있지 않으면 출력
+                # # Print nonempty received data.
                 # if serial_data:
                 #     parsing_data = self.parse_serial_data(serial_data)
                 #     if parsing_data == None:
@@ -214,7 +214,7 @@ class SerialNode(Node):
         except KeyboardInterrupt:
             self.get_logger().warning('Keyboard Interrupt')
         finally:
-            # 시리얼 포트 닫기
+            # Close the serial port.
             # self.get_logger().info('Close serial reading')
             self.ser.close()
 
@@ -238,10 +238,10 @@ class SerialNode(Node):
         #             self.get_logger().warning(f'deleting {N} data is flushing at the start point')
 
         #     while count < avg_num:
-        #         # 시리얼 데이터 읽기
+        #         # Read serial data.
         #         try:
         #             serial_data = self.ser.readline().decode('utf-8', errors='ignore').rstrip()
-        #             # 수신된 데이터가 비어있지 않으면 출력
+        #             # Print nonempty received data.
         #             if serial_data:
         #                 parsing_data = self.parse_serial_data(serial_data)
         #                 if parsing_data == None:

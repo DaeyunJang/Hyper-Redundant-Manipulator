@@ -8,6 +8,9 @@ log/
 /.isaac_ros_compare/
 /.ros_image_proc/
 
+# Per-machine Docker state, Xauthority cookies, writable settings and tool caches.
+/.docker-local/
+
 # Recorded datasets, generated figures, paper analyses and benchmark binaries.
 /record/
 /analysis/

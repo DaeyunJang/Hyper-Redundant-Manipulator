@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# AUTHOR: Daeyun - HRM synchronized tip-validation capture.
 """Bounded passive capture of an already running HRM; never command hardware.
 
 Reuses record_pkg's bag/export pipeline in a separate owned session. Does not

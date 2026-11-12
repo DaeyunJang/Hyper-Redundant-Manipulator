@@ -67,7 +67,7 @@ SmState EtherCAT_Handler
 {
                 SIG_INIT = {
                             //long cnt = 0;
-                            //print(status_sm) 	// 전역변수 전달 필요
+                            //print(status_sm) 	// Pass the global variable.
                             SmSubscribe(id, SIG_ERROR);
                             SmParam (0x01220105, 1, SM_PARAM_EQUAL, id, SIG_PLAY);
                             SmParam (0x01220105, 2, SM_PARAM_EQUAL, id, SIG_STOP);
@@ -193,10 +193,10 @@ long main(void)
 	long res;
 	print(status_sm);
 	printf("State Machines Run...");
-  	status_sm = SmRun(SM_EtherCAT); // Opearation 이라는 이름의 Statemachine을 실행.
+	status_sm = SmRun(SM_EtherCAT); // Run the configured state machine.
 
   	// DY
-  	// Sm Run 이후는 실행되지 않음.
+	// Code after SmRun is not executed.
 	if(status_sm==0) {printf("Done");}
 	else {printf("#Error during Running State Machines!");}
 

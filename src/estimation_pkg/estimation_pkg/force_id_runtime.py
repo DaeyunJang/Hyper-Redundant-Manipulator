@@ -1,3 +1,4 @@
+# AUTHOR: Daeyun -- HRM model-bundle runtime integration.
 """ROS-free, portable force/contact-ID checkpoint inference.
 
 The output is raw continuous force in the bundle's training sign (N, hrm_base).

@@ -36,26 +36,26 @@ int main(int argc, const char* argv[])
         exit(1);
     }
 
-    // 윈속 프로그래밍을 하기 위해서 없어서는 안될
-    // 중요한 함수이다.
+    // Initialize Winsock before using any socket operations.
+    // This initialization is required for Winsock applications.
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
         ErrorHandling("WSAStartup() error!");
 
-    // 리눅스와 마찬가지로 소켓을 생성할 때는 별 다른점이 없다.
-    // 반환되는 값이나 에러가 다르다는 점??
+    // Socket creation is similar to Linux socket programming.
+    // Return values and error reporting differ on Windows.
     SOCKET hServSock = socket(PF_INET, SOCK_STREAM, 0);
     if (hServSock == INVALID_SOCKET)
         ErrorHandling("socket() error!");
 
-    // 리눅스에서와 똑같다.
+    // Configure the address as in Linux socket programming.
     SOCKADDR_IN servAddr;
     ZeroMemory(&servAddr, sizeof(servAddr));
     servAddr.sin_family = AF_INET;
     servAddr.sin_addr.S_un.S_addr = htonl(INADDR_ANY);
     servAddr.sin_port = htons(atoi(argv[1]));
 
-    // 여기도 마찬가지...
+    // Bind the socket to the configured address.
     if (bind(hServSock, (const SOCKADDR*)&servAddr, sizeof(servAddr)) == SOCKET_ERROR)
         ErrorHandling("bind() error!");
 
@@ -129,7 +129,7 @@ int main(int argc, const char* argv[])
     send(hClntSock, message, sizeof(message), 0);
     closesocket(hClntSock);
     closesocket(hServSock);
-    // 이 함수는 윈속 라이브러리를 더이상 사용하지 않겠다는 의미에서 호출하면 된다.
+    // Release Winsock resources when no further socket operations are needed.
     WSACleanup();
     return 0;
 }

@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM tilt/pan reference generation for cable-kinematics experiments.
 #pragma once
 
 #include <algorithm>

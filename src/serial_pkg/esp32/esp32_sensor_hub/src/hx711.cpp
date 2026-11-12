@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM four-channel acquisition/calibration wrapper around the HX711_ADC library.
 #include <Arduino.h>  // HX711 sampling implementation.
 #include <HX711_ADC.h>
 

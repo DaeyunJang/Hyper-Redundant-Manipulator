@@ -1,3 +1,4 @@
+# AUTHOR: Daeyun -- HRM force/contact inference node integration.
 """Optional learned force/contact inference. Never publishes actuator commands."""
 
 import math

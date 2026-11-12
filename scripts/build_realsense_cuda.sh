@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# AUTHOR: Daeyun - HRM workspace build integration, not the upstream SDK.
 
 set -e
 

@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// PID implementation used by the HRM feedback controllers.
 #include "PID_controller.hpp"
 #include <cmath>
 #include <stdexcept>
@@ -76,43 +78,43 @@ double PIDController::compute_output(
   return control_signal;
 }
 
-// Eigen 벡터에 대한 PID 제어 함수 (벡터 타입)
+// PID control for an Eigen vector.
 Eigen::VectorXd PIDController::compute_output(const Eigen::VectorXd& desired_values, const Eigen::VectorXd& measured_values, const double& dt) {
-  // 동일한 방식으로 벡터의 각 요소에 대해 PID 제어를 적용
+  // Apply the same PID law to each vector element.
   Eigen::VectorXd errors = desired_values - measured_values;
   dt_ = dt;
 
-  // 적분 계산 (I 항)
-  integral_vector_ += errors * dt;  // 전체 오차의 합을 적분으로 처리
+  // Calculate the integral (I term).
+  integral_vector_ += errors * dt;  // Accumulate the error integral per element.
 
-  // 미분 계산 (D 항)
+  // Calculate the derivative (D term).
   Eigen::VectorXd derivative = (errors - previous_error_vector_) / dt;
 
-  // PID 제어 계산: P * error + I * integral + D * derivative
+  // PID output: P * error + I * integral + D * derivative.
   Eigen::VectorXd control_signals = kp_ * errors + ki_ * integral_vector_ + kd_ * derivative;
 
-  // 이전 오차 업데이트
+  // Update the previous error.
   previous_error_vector_ = errors;
 
   return control_signals;
 }
 
-// // Eigen 행렬에 대한 PID 제어 함수 (행렬 타입)
+// // PID control for an Eigen matrix.
 // Eigen::MatrixXd PIDController::compute_output(const Eigen::MatrixXd& desired_values, const Eigen::MatrixXd& measured_values, double dt) {
-//   // 동일한 방식으로 행렬의 각 요소에 대해 PID 제어를 적용
+//   // Apply the same PID law to each matrix element.
 //   Eigen::MatrixXd errors = desired_values - measured_values;
 //   dt_ = dt;
 
-//   // 적분 계산 (I 항)
-//   integral_ += errors.sum() * dt;  // 전체 오차의 합을 적분으로 처리
+//   // Calculate the integral (I term).
+//   integral_ += errors.sum() * dt;  // Integrate the sum of all errors.
 
-//   // 미분 계산 (D 항)
+//   // Calculate the derivative (D term).
 //   Eigen::MatrixXd derivative = (errors - previous_error_) / dt;
 
-//   // PID 제어 계산: P * error + I * integral + D * derivative
+//   // PID output: P * error + I * integral + D * derivative.
 //   Eigen::MatrixXd control_signals = kp_ * errors + ki_ * integral_ + kd_ * derivative;
 
-//   // 이전 오차 업데이트
+//   // Update the previous error.
 //   previous_error_ = errors;
 
 //   return control_signals;

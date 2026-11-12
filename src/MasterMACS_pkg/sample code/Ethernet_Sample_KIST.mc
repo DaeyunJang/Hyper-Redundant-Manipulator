@@ -4,12 +4,12 @@
 #include "..\include\SDK\SDK_ApossC.mc"
 
 
-long server_handle ; // Ethernet 통신 위한 Handle 값
+long server_handle ; // Ethernet communication handle
 
-dim long array[60];  // Ethernet 통신 수신시, 처음 받는 Raw 데이터 저장 공간
-dim long array1[60]; // Ethenet 통신 수신시, 처음 받는 Raw 데이터를 변환하여 저장하는 공간
-dim long Recv_data[60]; // Ethernet 통신수신시, 변환한 데이터를 옮겨 저장하는 공간
-dim long Pattern_Send_data[500]; // Ethernet 통신 송신시, 송신할 데이터 저장하는 공간
+dim long array[60];  // Storage for the initial raw Ethernet receive data
+dim long array1[60]; // Storage for converted raw Ethernet receive data
+dim long Recv_data[60]; // Storage for the converted Ethernet receive data
+dim long Pattern_Send_data[500]; // Storage for outgoing Ethernet data
 
 double an1;
 double Voltage1;
@@ -29,7 +29,7 @@ long CV_1;
 long Status;
 
 
-long length = 500; //200개일 때 10ms  //400개일 때 60ms             //Ethernet 통신시 허용 데이터 길이(byte 단위)
+long length = 500; //200 items: 10 ms; 400 items: 60 ms. Allowed Ethernet data length in bytes.
 double AX1_POS;
 double AX2_POS;
 long AX1_POS_LONG;
@@ -114,14 +114,14 @@ SmState EthernetHandling {
 
 }
 
-SmState Axis1_2_State  // 1,2번 모터 제어용 루프
+SmState Axis1_2_State  // Control loop for motors 1 and 2
 {
 
 	SIG_INIT =
 	{
-	    SmSubscribe(id, SIG_ERROR); // Error Detection 루프
+	    SmSubscribe(id, SIG_ERROR); // Error-detection loop
 
-		return(SmTrans(->Standing)); // 이벤트 선언 후 "Standing_AXIS1_2"라는 State로 넘어감.
+		return(SmTrans(->Standing)); // After registering the events, transition to Standing_AXIS1_2.
 	}
 
     SIG_ERROR =
@@ -137,7 +137,7 @@ SmState Axis1_2_State  // 1,2번 모터 제어용 루프
 	}
 
 
-	SmState Standing   // 위에서 선언한 3개의 이벤트가 발생하는 것을 대기하는 State 루프
+	SmState Standing   // State loop waiting for the three events declared above
 	{
 
 

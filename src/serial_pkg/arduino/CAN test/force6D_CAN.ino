@@ -62,14 +62,14 @@ void loop()
 void parse_fts(can_frame canMsg)
 {
   if (canMsg.can_id == FORCE_ID){  // 26
-    // mN 으로 force 계산
+    // Calculate force in mN.
     ftMsg.fx = (canMsg.data[0]*256 + canMsg.data[1])-30000;
     ftMsg.fy = (canMsg.data[2]*256 + canMsg.data[3])-30000;
     ftMsg.fz = (canMsg.data[4]*256 + canMsg.data[5])-30000;
     // Serial.println("FORCE");
   }
   else if (canMsg.can_id == TORQUE_ID){ //27
-    // mNm 으로 torque 계산
+    // Calculate torque in mNm.
     ftMsg.tx = (canMsg.data[0]*256 + canMsg.data[1])-30000;
     ftMsg.ty = (canMsg.data[2]*256 + canMsg.data[3])-30000;
     ftMsg.tz = (canMsg.data[4]*256 + canMsg.data[5])-30000;

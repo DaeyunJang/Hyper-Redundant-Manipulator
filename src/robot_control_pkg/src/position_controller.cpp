@@ -1,3 +1,5 @@
+// AUTHOR: Daeyun
+// HRM tip-position feedback and conversion of Y/Z errors to tilt/pan commands.
 #include "position_controller.hpp"
 
 #include <algorithm>

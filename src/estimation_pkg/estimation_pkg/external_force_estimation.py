@@ -94,7 +94,7 @@ class ExternalForceEstimationNode(Node):
         self.model = tf.keras.models.load_model(self.model_path)
         # self.model = tf.keras.models.load_model('model/lstm_model_legacy.h5')
 
-        # 스케일러 불러오기
+        # Load the scaler.
         self.scaler_x = joblib.load(self.scaler_x_path)
         self.scaler_y = joblib.load(self.scaler_y_path)
         # self.scaler_x = joblib.load('model/scaler_x.pkl')

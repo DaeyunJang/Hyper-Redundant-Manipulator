@@ -1,6 +1,6 @@
 
-#include <SysDef.mh> // 기본적으로 참조해야 하는 참조파일(기본 문법 / 기본 파라미터 등이 정의가 되어 있음)
-#include "ApossC_SDK_V01.09\SDK\SDK_ApossC.mc" // 쉽게 프로그램 할 수 있도록 기능 별로 SDK를 만들어 놨음
+#include <SysDef.mh> // Required definitions for basic syntax and default parameters
+#include "ApossC_SDK_V01.09\SDK\SDK_ApossC.mc" // Function-specific SDK helpers for simpler application programming
 
 dim long Monitoring_MAXON_TO_PC[12];
 long Direction;
@@ -8,73 +8,73 @@ double AnalogValue;
 double dSpeed;
             long velres, maxrpm, rampmin;
 long errAxis,errNo,USERVEL,ActVel,JOG_Mode;
-//*** 명령어 정의
+//*** Command definitions
 #define COMMAND_NONE            0
-#define COMMAND_MOVE_VEL        1  //2번축 테스트 완료
-#define COMMAND_MOVE_REL        2  //2번축 테스트 완료
-#define COMMAND_MOVE_ABS        3  //2번축 테스트 완료
-#define COMMAND_MOVE_HOME       4  //2번축 테스트 완료
+#define COMMAND_MOVE_VEL        1  //Tested on axis 2.
+#define COMMAND_MOVE_REL        2  //Tested on axis 2.
+#define COMMAND_MOVE_ABS        3  //Tested on axis 2.
+#define COMMAND_MOVE_HOME       4  //Tested on axis 2.
 #define COMMAND_MOVE_ANALOG     5  //
-#define COMMAND_STOP            6   //2번축 테스트 완료
-#define COMMAND_SET_SOFTLIMIT   7   //2번축 테스트 완료
-#define COMMAND_SET_SERVO_ON    8   //2번축 테스트 완료
-#define COMMAND_SET_SERVO_OFF   9   //2번축 테스트 완료
+#define COMMAND_STOP            6   //Tested on axis 2.
+#define COMMAND_SET_SOFTLIMIT   7   //Tested on axis 2.
+#define COMMAND_SET_SERVO_ON    8   //Tested on axis 2.
+#define COMMAND_SET_SERVO_OFF   9   //Tested on axis 2.
 #define COMMAND_SET_POS         10  // vlfdydjqtdj qhdla.
 #define ignored_value 5
 
-// 모터 EC-i40 496661 CPT 1024
-#define AXIS0 0 //모터 출력 포트 : 오른쪽에서부터 0,1,2,3
-#define AXIS0_ENCPORT 0 // 엔코더 입력 포트 : 오른쪽에서부터 0,1,2,3
-#define AXIS0_ENCRES 1024*4 //엔코더 분해능
-#define AXIS0_ENC_LATCHTYPE 0 // 신경안써도 됨
-#define AXIS0_ENC_LATCHPARAM 0//신경안써도 됨.
-#define AXIS0_ENC_LATCHSLOPE HWLATCH_SLOPE_RISING //신경안써도 됨.
+// Motor: EC-i40 496661, 1024 CPT
+#define AXIS0 0 //Motor output ports: 0, 1, 2, 3 from the right
+#define AXIS0_ENCPORT 0 // Encoder input ports: 0, 1, 2, 3 from the right
+#define AXIS0_ENCRES 1024*4 //Encoder resolution
+#define AXIS0_ENC_LATCHTYPE 0 // Default setting; no adjustment required.
+#define AXIS0_ENC_LATCHPARAM 0//Default setting; no adjustment required.
+#define AXIS0_ENC_LATCHSLOPE HWLATCH_SLOPE_RISING //Default setting; no adjustment required.
 
-#define AXIS0_CONTROLMODE HWAMP_MODE_POS_VEL_CUR // 위치 / 속도 / 토크 제어기
-#define AXIS0_POLEPAIRS 7 // 모터 자극 쌍의 수
-#define AXIS0_MAXCUR	2720*1.25 // 모터 최대 전류  (단위 : mA)
-#define AXIS0_CONCUR	2720 // 모터의 정격 전류      (단위 : mA)
-#define AXIS0_THERMAL_TIME 20700 // Thermaltime constant winding 정격 전류의 2.5배에 달하는
-                                 // 부하가 걸렸을 때 모터가 구동 가능한 시간 (단위 : ms)
-#define AXIS0_MAX_RPM 8000 // 카탈로그의 23번 항목의 max.speed를 넘지 않는 것을 권장 드림.
+#define AXIS0_CONTROLMODE HWAMP_MODE_POS_VEL_CUR // Position / velocity / torque controller
+#define AXIS0_POLEPAIRS 7 // Number of motor pole pairs
+#define AXIS0_MAXCUR	2720*1.25 // Maximum motor current, in mA
+#define AXIS0_CONCUR	2720 // Rated motor current, in mA
+#define AXIS0_THERMAL_TIME 20700 // Winding thermal time constant: operating time at
+                                 // a load corresponding to 2.5 times the rated current, in ms.
+#define AXIS0_MAX_RPM 8000 // Do not exceed the maximum speed specified in catalog item 23.
 
-// Tools - Current regulator Calculaotr 에서 인가전압 / 인덕턴스와 저항을 입력하여 계산해서 나온 결과물 기입
-#define AXIS0_CURKPROP	5898 // 전류 제어기의 P 게인 - 위 메뉴에서 계산 가능.
-#define AXIS0_CURKINT 402    // 전류 제어기의 I 게인 - 위 메뉴에서 계산 가능.
-#define AXIS0_CURKILIM	32767 // 고정값
-#define AXIS0_VELKPROP		1700 // 속도제어기의 P 게인
-#define AXIS0_VELKINT		100  // 속도제어기의 I 게인
-#define AXIS0_VELKILIM		1000 // 고정값
+// Enter the values computed from supply voltage, inductance and resistance in Tools > Current Regulator Calculator.
+#define AXIS0_CURKPROP	5898 // Current-controller P gain, calculated in the tool above
+#define AXIS0_CURKINT 402    // Current-controller I gain, calculated in the tool above
+#define AXIS0_CURKILIM	32767 // Fixed value
+#define AXIS0_VELKPROP		1700 // Velocity-controller P gain
+#define AXIS0_VELKINT		100  // Velocity-controller I gain
+#define AXIS0_VELKILIM		1000 // Fixed value
 
-#define AXIS0_BRUSHLESS 1     // 브러쉬리스 모터를 사용할 경우에 필요한 파라미터(브러쉬가 있는 DC모터를 사용할 경우에는 필요없음)
-#define AXIS0_ALIGN_CUR 1000  // Align 잡을 때 사용하는 전류 레벨
+#define AXIS0_BRUSHLESS 1     // Required for brushless motors; not needed for brushed DC motors
+#define AXIS0_ALIGN_CUR 1000  // Current level used for alignment
 
 //Movemnet Param
-#define AXIS0_VELRES 100  // 속도 분해능
-#define AXIS0_RAMPTYPE 0  // 모션 프로파일 타입 : 0 : 사다리꼴 1 : S-curve 2: Jerk
-#define AXIS0_RAMPMIN 1000 // 가속도 : 최대 가속도 (설정해놓은 최대 속도까지 올라가는 데 걸리는 시간) 단위는 ms
-#define AXIS0_JERKMIN 1000 // Jerk 시 사용하는 최대 가속도
+#define AXIS0_VELRES 100  // Velocity resolution
+#define AXIS0_RAMPTYPE 0  // Motion profile: 0 = trapezoidal, 1 = S-curve, 2 = jerk-limited
+#define AXIS0_RAMPMIN 1000 // Acceleration ramp time to the configured maximum velocity, in ms
+#define AXIS0_JERKMIN 1000 // Maximum acceleration used for jerk-limited motion
 
-#define AXIS0_DIRECTION -1 // 모터의 구동 방향 결정
+#define AXIS0_DIRECTION -1 // Motor rotation direction
 
-#define AXIS0_KPROP 80 // 위치제어기의 P 게인
-#define AXIS0_KINT 0   // 위치제어기의 I 게인
-#define AXIS0_KDER 600 // 위치제어기의 D 게인
-#define AXIS0_KILIM 3000 // 고정값
-#define AXIS0_KILIMTIME 0 // 고정값
-#define AXIS0_BANDWIDTH 1000 // 고정값
-#define AXIS0_FFVEL 1000     // 고정값
-#define AXIS0_KFFAC 0        // 고정값
-#define AXIS0_KFFDEC 0       // 고정값
+#define AXIS0_KPROP 80 // Position-controller P gain
+#define AXIS0_KINT 0   // Position-controller I gain
+#define AXIS0_KDER 600 // Position-controller D gain
+#define AXIS0_KILIM 3000 // Fixed value
+#define AXIS0_KILIMTIME 0 // Fixed value
+#define AXIS0_BANDWIDTH 1000 // Fixed value
+#define AXIS0_FFVEL 1000     // Fixed value
+#define AXIS0_KFFAC 0        // Fixed value
+#define AXIS0_KFFDEC 0       // Fixed value
 
-#define AXIS0_POSENCREV	1 // 고정값
-#define AXIS0_POSENCQC AXIS1_ENCRES // 사용되는 엔코더 분해능
-#define AXIS0_POSFACT_Z 1 // 사용되는 기어의 기어비를 넣는 부분(전자기어비) ex. 100:1 -> 100
-#define AXIS0_POSFACT_N 1 // 사용되는 기어의 기어비를 넣는 부분(전자기어비) ex. 100:1 -> 1
-#define AXIS0_FEEDREV 1 // 고정값
-#define AXIS0_FEEDDIST AXIS1_ENCRES // 사용되는 엔코더 분해능
+#define AXIS0_POSENCREV	1 // Fixed value
+#define AXIS0_POSENCQC AXIS1_ENCRES // Encoder resolution used
+#define AXIS0_POSFACT_Z 1 // Electronic gear-ratio numerator, e.g. 100:1 -> 100
+#define AXIS0_POSFACT_N 1 // Electronic gear-ratio denominator, e.g. 100:1 -> 1
+#define AXIS0_FEEDREV 1 // Fixed value
+#define AXIS0_FEEDDIST AXIS1_ENCRES // Encoder resolution used
 
-// 모터 EC-i40 496661 CPT 1024
+// Motor: EC-i40 496661, 1024 CPT
 #define AXIS1 1
 #define AXIS1_ENCPORT 1
 #define AXIS1_ENCRES 1024*4
@@ -89,7 +89,7 @@ long errAxis,errNo,USERVEL,ActVel,JOG_Mode;
 #define AXIS1_THERMAL_TIME 20700
 #define AXIS1_MAX_RPM 8000
 
-// Tools - Current regulator Calculaotr 에서 인가전압 / 인덕턴스와 저항을 입력하여 계산해서 나온 결과물 기입
+// Enter the values computed from supply voltage, inductance and resistance in Tools > Current Regulator Calculator.
 #define AXIS1_CURKPROP	5898
 #define AXIS1_CURKINT 402
 #define AXIS1_CURKILIM	32767
@@ -103,10 +103,10 @@ long errAxis,errNo,USERVEL,ActVel,JOG_Mode;
 //Movemnet Param
 #define AXIS1_VELRES 100
 #define AXIS1_RAMPTYPE 0
-#define AXIS1_RAMPMIN 1000 //단위는 ms
+#define AXIS1_RAMPMIN 1000 //Unit: ms
 #define AXIS1_JERKMIN 1000
 
-#define AXIS1_DIRECTION -1 // 모터의 구동 방향 결정
+#define AXIS1_DIRECTION -1 // Motor rotation direction
 
 #define AXIS1_KPROP 80
 #define AXIS1_KINT 0
@@ -126,7 +126,7 @@ long errAxis,errNo,USERVEL,ActVel,JOG_Mode;
 #define AXIS1_FEEDDIST AXIS2_ENCRES
 
 
-// 모터 EC-i40 496661 CPT 1024
+// Motor: EC-i40 496661, 1024 CPT
 #define AXIS2 2
 #define AXIS2_ENCPORT 2
 #define AXIS2_ENCRES 1024*4
@@ -141,7 +141,7 @@ long errAxis,errNo,USERVEL,ActVel,JOG_Mode;
 #define AXIS2_THERMAL_TIME 20700
 #define AXIS2_MAX_RPM 8000
 
-// Tools - Current regulator Calculaotr 에서 인가전압 / 인덕턴스와 저항을 입력하여 계산해서 나온 결과물 기입
+// Enter the values computed from supply voltage, inductance and resistance in Tools > Current Regulator Calculator.
 #define AXIS2_CURKPROP	5898
 #define AXIS2_CURKINT 402
 #define AXIS2_CURKILIM	32767
@@ -155,10 +155,10 @@ long errAxis,errNo,USERVEL,ActVel,JOG_Mode;
 //Movemnet Param
 #define AXIS2_VELRES 10000
 #define AXIS2_RAMPTYPE 0
-#define AXIS2_RAMPMIN 1000 //단위는 ms
+#define AXIS2_RAMPMIN 1000 //Unit: ms
 #define AXIS2_JERKMIN 1000
 
-#define AXIS2_DIRECTION -1 // 모터의 구동 방향 결정
+#define AXIS2_DIRECTION -1 // Motor rotation direction
 
 #define AXIS2_KPROP 80
 #define AXIS2_KINT 0
@@ -193,14 +193,14 @@ long errAxis,errNo,USERVEL,ActVel,JOG_Mode;
 #define AXIS3_CONTROLMODE    HWAMP_MODE_POS_VEL_CUR
 #define AXIS3_POLEPAIRS      2
 #define AXIS3_MAXCUR	     2480*1.25
-#define AXIS3_CONCUR	     2480  // 정격전류
-#define AXIS3_THERMAL_TIME   31200 //단위 : ms : 41.5s
-#define AXIS3_MAX_RPM        8000  //기어의 Max.입력속도에 의거해서 결정.
+#define AXIS3_CONCUR	     2480  // Rated current
+#define AXIS3_THERMAL_TIME   31200 //Unit: ms; 41.5 s
+#define AXIS3_MAX_RPM        8000  //Determined by the maximum permitted gear-input speed
 
-// Tools - Current regulator Calculaotr 에서 인가전압 / 인덕턴스와 저항을 입력하여 계산해서 나온 결과물 기입
+// Enter the values computed from supply voltage, inductance and resistance in Tools > Current Regulator Calculator.
 #define AXIS3_CURKPROP	     4151
 #define AXIS3_CURKINT        351
-#define AXIS3_CURKILIM	     32767 // 구체적ㅈ인 용도
+#define AXIS3_CURKILIM	     32767 // Specific purpose
 #define AXIS3_VELKPROP		 1700  // Proportional factor of velocity controller
 #define AXIS3_VELKINT		 100   // Integral factor of velocity controller
 #define AXIS3_VELKILIM		 1000
@@ -209,10 +209,10 @@ long errAxis,errNo,USERVEL,ActVel,JOG_Mode;
 //Movemnet Param
 #define AXIS3_VELRES         100
 #define AXIS3_RAMPTYPE       0
-#define AXIS3_RAMPMIN        1000 //단위는 ms
+#define AXIS3_RAMPMIN        1000 //Unit: ms
 #define AXIS3_JERKMIN        1000
 
-#define AXIS3_DIRECTION      -1 // 모터의 구동 방향 결정
+#define AXIS3_DIRECTION      -1 // Motor rotation direction
 
 #define AXIS3_BRUSHLESS      1
 #define AXIS3_ALIGN_CUR      1000
@@ -265,7 +265,7 @@ SmEvent TickPeriod2 {PRM_CLOCK}
 SmEvent TickPeriod3 {PRM_CLOCK}
 SmEvent TickPeriod4 {PRM_CLODK}
 
-//*** 2번축 Event 리스트
+//*** Axis 2 event list
 SmEvent Event_VelocityMove_Axis2 {}
 SmEvent Event_RelativeMove_Axis2 {}
 SmEvent Event_AbsoluteMove_Axis2 {}
@@ -282,7 +282,7 @@ SmEvent TickPeriod_AnalogControl_Axis2 {PRM_CLOCK}
 SmEvent TickPeriod_StatusMonitor_Axis2 {PRM_CLOCK}
 
 /***
- *** 각축별 명령 Command 영역을 리셋한다
+ *** Reset the command area for each axis
  ***/
 void CommandReset(long Axis)
 {
@@ -293,19 +293,19 @@ void CommandReset(long Axis)
 }
 
 /***
- *** 소프트웨어 리미트를 설정한다
+ *** Configure software limits
  ***/
 void SetSoftwareLimit(long Axis, long SwEnable, double Max, double Min)
 {
 	if (SwEnable == 0)
 	{
-		//*** 소프트웨어 리미트 Disable
+		//*** Disable software limits
 		AXE_PARAM(Axis, SWPOSLIMACT) = 0;
 		AXE_PARAM(Axis, SWNEGLIMACT) = 0;
 	}
 	else
 	{
-		//*** 소프트웨어 리미트 Enable
+		//*** Enable software limits
 		AXE_PARAM(Axis, NEGLIMIT) = Min;
 		AXE_PARAM(Axis, POSLIMIT) = Max;
 		AXE_PARAM(Axis, SWPOSLIMACT) = 1;
@@ -314,7 +314,7 @@ void SetSoftwareLimit(long Axis, long SwEnable, double Max, double Min)
 }
 
 /***
- *** 위치값을 기록한다
+ *** Record position
  ***/
 void UpdatePosition(long Axis)
 {
@@ -341,7 +341,7 @@ void UpdatePosition(long Axis)
 }
 
 /***
- *** User Parameter에서 속도값을 읽는다
+ *** Read velocity from the user parameters
  ***/
 double GetSpeedFromUserParameter(long Axis)
 {
@@ -352,7 +352,7 @@ double GetSpeedFromUserParameter(long Axis)
 }
 
 /***
- *** User Parameter에서 가속도값을 읽는다
+ *** Read acceleration from the user parameters
  ***/
 double GetAccelFromUserParameter(long Axis)
 {
@@ -363,7 +363,7 @@ double GetAccelFromUserParameter(long Axis)
 }
 
 /***
- *** User Parameter에서 감속도값을 읽는다
+ *** Read deceleration from the user parameters
  ***/
 double GetDecelFromUserParameter(long Axis)
 {
@@ -374,7 +374,7 @@ double GetDecelFromUserParameter(long Axis)
 }
 
 /***
- *** User Parameter에서 위치값을 읽는다
+ *** Read position from the user parameters
  ***/
 double GetPositionFromUserParameter(long Axis)
 {
@@ -385,7 +385,7 @@ double GetPositionFromUserParameter(long Axis)
 }
 
 /***
- *** User Parameter에서 Software Limit 상한값을 읽는다
+ *** Read the upper software limit from the user parameters
  ***/
 double GetSoftLimitCwFromUserParameter(long Axis)
 {
@@ -396,7 +396,7 @@ double GetSoftLimitCwFromUserParameter(long Axis)
 }
 
 /***
- *** User Parameter에서 Software Limit 하한값을 읽는다
+ *** Read the lower software limit from the user parameters
  ***/
 double GetSoftLimitCcwFromUserParameter(long Axis)
 {
@@ -426,15 +426,15 @@ SmState Axis2_State
         SmPeriod (80, id, TickPeriod_StatusMonitor_Axis2);
         SmPeriod (1, id, TickPeriod_AnalogControl_Axis2);
 
-        SmParam (0x01220130, COMMAND_MOVE_VEL, SM_PARAM_EQUAL, id, Event_VelocityMove_Axis2);  //TEST완결
-        SmParam (0x01220130, COMMAND_MOVE_REL, SM_PARAM_EQUAL, id, Event_RelativeMove_Axis2);  //TEST완결
-        SmParam (0x01220130, COMMAND_MOVE_ABS, SM_PARAM_EQUAL, id, Event_AbsoluteMove_Axis2);  //TEST완결
+        SmParam (0x01220130, COMMAND_MOVE_VEL, SM_PARAM_EQUAL, id, Event_VelocityMove_Axis2);  //Test completed.
+        SmParam (0x01220130, COMMAND_MOVE_REL, SM_PARAM_EQUAL, id, Event_RelativeMove_Axis2);  //Test completed.
+        SmParam (0x01220130, COMMAND_MOVE_ABS, SM_PARAM_EQUAL, id, Event_AbsoluteMove_Axis2);  //Test completed.
         SmParam (0x01220130, COMMAND_MOVE_HOME, SM_PARAM_EQUAL, id, Event_HomeMove_Axis2);
         SmParam (0x01220130, COMMAND_MOVE_ANALOG, SM_PARAM_EQUAL, id, Event_AnalogMove_Axis2);
-        SmParam (0x01220130, COMMAND_STOP, SM_PARAM_EQUAL, id, Event_Stop_Axis2);              //TEST완결
+        SmParam (0x01220130, COMMAND_STOP, SM_PARAM_EQUAL, id, Event_Stop_Axis2);              //Test completed.
         SmParam (0x01220130, COMMAND_SET_SOFTLIMIT, SM_PARAM_EQUAL, id, Event_SoftwareLimit_Axis2);
-        SmParam (0x01220130, COMMAND_SET_SERVO_ON, SM_PARAM_EQUAL, id, Event_ServoOn_Axis2);   //TEST완결
-        SmParam (0x01220130, COMMAND_SET_SERVO_OFF, SM_PARAM_EQUAL, id, Event_ServoOff_Axis2); //TEST완결
+        SmParam (0x01220130, COMMAND_SET_SERVO_ON, SM_PARAM_EQUAL, id, Event_ServoOn_Axis2);   //Test completed.
+        SmParam (0x01220130, COMMAND_SET_SERVO_OFF, SM_PARAM_EQUAL, id, Event_ServoOff_Axis2); //Test completed.
         SmParam (0x01220130, COMMAND_SET_POS, SM_PARAM_EQUAL, id, Event_SetPosition_Axis2);
 
 		return(SmTrans(->Standing_AXIS2));
@@ -453,18 +453,18 @@ SmState Axis2_State
 		           }
 		           return(SmTrans(->Standing_AXIS2));
 		            }
-	//*** 명령수행 이벤트
+	//*** Command execution event
 	SmState Standing_AXIS2
 	{
-		Event_VelocityMove_Axis2 =         // TEST 완료
+		Event_VelocityMove_Axis2 =         // Test completed.
 		{
 			double Speed, Accel;
 
-			//*** 실행명령 User Parameter 리셋
+			//*** Reset the command user parameter
 			CommandReset(AXIS0);
 
-			Speed = GetSpeedFromUserParameter(AXIS0); // 속도값을 읽어온다
-			Accel = GetAccelFromUserParameter(AXIS0); // 가속도값을 읽어온다
+			Speed = GetSpeedFromUserParameter(AXIS0); // Read velocity.
+			Accel = GetAccelFromUserParameter(AXIS0); // Read acceleration.
 
 			Cvel(AXIS0, Speed);     // Set the velocity
 			Acc(AXIS0, Accel);      // Set the acceleration
@@ -472,17 +472,17 @@ SmState Axis2_State
 			AxisCvelStart(AXIS0);   // Start constant velocity mode
 		}
 
-		Event_RelativeMove_Axis2 =            // TEST 완료
+		Event_RelativeMove_Axis2 =            // Test completed.
 		{
 			double Speed, Accel, Decel, Pos;
 
-			//*** 실행명령 User Parameter 리셋
+			//*** Reset the command user parameter
 			CommandReset(AXIS0);
 
-			Speed = GetSpeedFromUserParameter(AXIS0);  // 속도값을 읽어온다
-			Accel = GetAccelFromUserParameter(AXIS0);  // 가속도값을 읽어온다
-			Decel = GetDecelFromUserParameter(AXIS0);  // 감속도값을 읽어온다
-			Pos = GetPositionFromUserParameter(AXIS0); // 위치값을 읽어온다
+			Speed = GetSpeedFromUserParameter(AXIS0);  // Read velocity.
+			Accel = GetAccelFromUserParameter(AXIS0);  // Read acceleration.
+			Decel = GetDecelFromUserParameter(AXIS0);  // Read deceleration.
+			Pos = GetPositionFromUserParameter(AXIS0); // Read position.
 
 			Vel(AXIS0, Speed);
 			Acc(AXIS0, Accel);
@@ -490,17 +490,17 @@ SmState Axis2_State
 			AxisPosRelStart(AXIS0, Pos);
 		}
 
-		Event_AbsoluteMove_Axis2 =    // TEST 완료
+		Event_AbsoluteMove_Axis2 =    // Test completed.
 		{
 			double Speed, Accel, Decel, Pos;
 
-			//*** 실행명령 User Parameter 리셋
+			//*** Reset the command user parameter
 			CommandReset(AXIS0);
 
-			Speed = GetSpeedFromUserParameter(AXIS0);  // 속도값을 읽어온다
-			Accel = GetAccelFromUserParameter(AXIS0);  // 가속도값을 읽어온다
-			Decel = GetDecelFromUserParameter(AXIS0);  // 감속도값을 읽어온다
-			Pos = GetPositionFromUserParameter(AXIS0); // 위치값을 읽어온다
+			Speed = GetSpeedFromUserParameter(AXIS0);  // Read velocity.
+			Accel = GetAccelFromUserParameter(AXIS0);  // Read acceleration.
+			Decel = GetDecelFromUserParameter(AXIS0);  // Read deceleration.
+			Pos = GetPositionFromUserParameter(AXIS0); // Read position.
 
 			Vel(AXIS0, Speed);
 			Acc(AXIS0, Accel);
@@ -508,9 +508,9 @@ SmState Axis2_State
 			AxisPosAbsStart(AXIS0, Pos);
 		}
 
-		Event_HomeMove_Axis2 =    // TEST 완료
+		Event_HomeMove_Axis2 =    // Test completed.
 		{
-			//*** 실행명령 User Parameter 리셋
+			//*** Reset the command user parameter
 			CommandReset(AXIS0);
 
             velres = AXIS0_VELRES;
@@ -528,7 +528,7 @@ SmState Axis2_State
 
 		Event_AnalogMove_Axis2 =
 		{
-			//*** 실행명령 User Parameter 리셋
+			//*** Reset the command user parameter
 			CommandReset(AXIS0);
             JOG_Mode = 1; // Analog Jog Mode
 			Cvel(AXIS0, USERVEL);     // Set the velocity
@@ -539,7 +539,7 @@ SmState Axis2_State
 			//AXE_PROCESS(AXIS2, REG_USERREFVEL) = USERVEL;
 		}
 
-		Event_Stop_Axis2 =          // TEST 완료
+		Event_Stop_Axis2 =          // Test completed.
 		{
 			double Decel;
 
@@ -549,7 +549,7 @@ SmState Axis2_State
 			AxisStop(AXIS0);
 
 			//Sysvar[0x0125007A]; }
-			Decel = GetDecelFromUserParameter(AXIS2);  // 감속도값을 읽어온다
+			Decel = GetDecelFromUserParameter(AXIS2);  // Read deceleration.
 			Dec(AXIS0, Decel);			               // Set the deceleration
 			AxisCvelStop(AXIS0);		               // Stop constant velocity mode
 			}
@@ -561,23 +561,23 @@ SmState Axis2_State
 
 		}
 
-		Event_SoftwareLimit_Axis2 =   // TEST 완료
+		Event_SoftwareLimit_Axis2 =   // Test completed.
 		{
 			double SwMax, SwMin;
 
 			CommandReset(AXIS0);
 
-			//*** User Parameter에서 소프트웨어 리미트 값을 읽어온다
+			//*** Read software limits from the user parameters
 			SwMax = GetSoftLimitCwFromUserParameter(AXIS0);
 			SwMin = GetSoftLimitCcwFromUserParameter(AXIS0);
 
 			if (SwMax == SwMin)
-				SetSoftwareLimit(AXIS0, 0, 0, 0);         // 소프트웨어 리미트 Disable
+				SetSoftwareLimit(AXIS0, 0, 0, 0);         // Disable software limits.
 			else
-				SetSoftwareLimit(AXIS0, 1, SwMax, SwMin); // 소프트웨어 리미트 Enable
+				SetSoftwareLimit(AXIS0, 1, SwMax, SwMin); // Enable software limits.
 		}
 
-		Event_ServoOn_Axis2 =                    // TEST 완료
+		Event_ServoOn_Axis2 =                    // Test completed.
 		{
 			CommandReset(AXIS0);
 
@@ -585,7 +585,7 @@ SmState Axis2_State
 			print("Axis2 Enabled");
 		}
 
-		Event_ServoOff_Axis2 =                   // TEST 완료
+		Event_ServoOff_Axis2 =                   // Test completed.
 		{
 			CommandReset(AXIS0);
 
@@ -593,7 +593,7 @@ SmState Axis2_State
 			print("Axis2 Disabled");
 		}
 
-		Event_SetPosition_Axis2 =                // TEST 완료 필요없어 보임.
+		Event_SetPosition_Axis2 =                // Test completed; appears unnecessary.
 		{
 			CommandReset(AXIS0);
 		}
@@ -601,21 +601,21 @@ SmState Axis2_State
 
 	//Command Velocity [RPM] = vel *  Maximum Velocity (VELMAX)/ Velocity Resolution (VELRES)
 
-	//*** 타이머, Analog 입력으로 모터제어
+	//*** Timer: control the motor from the analog input
 	TickPeriod_AnalogControl_Axis2 =
 	{
 
 
-		//Direction = DigInput(16);                         // Get the state of input 13, 1 또는 0
-		AnalogValue = AnalogInput(1);                     // 1번 아날로그 입력 전압을 읽는다
+		//Direction = DigInput(16);                         // Get the state of input 13, 1 or 0
+		AnalogValue = AnalogInput(1);                     // Read analog input voltage 1.
 
-		// 1=정방향, -1=역방향
+		// 1 = forward, -1 = reverse
 		if (Direction > 0)
 			Direction = 1;
 		else
 			Direction = -1;
 
-		AnalogValue = AnalogValue * Direction;            // 입력전압에 방향을 적용한다
+		AnalogValue = AnalogValue * Direction;            // Apply the direction to the input voltage.
 		USERVEL = AnalogValue / 300;
 
 
@@ -625,10 +625,10 @@ SmState Axis2_State
 		}
 	}
 
-	//*** 상태를 업데이트 하기위한 타이머
+	//*** Timer for updating status
 	TickPeriod_StatusMonitor_Axis2 =
 	{
-		//*** Busy상태 업데이트, 1=Moving, 0=Stop
+		//*** Update busy status: 1 = moving, 0 = stopped
 		AxisMoving(AXIS0);
 		AxisMoving(AXIS1);
 		AxisMoving(AXIS2);
@@ -645,13 +645,13 @@ SmState Axis2_State
 		else
 			Sysvar[0x01210005].i0 = 0;
 
-		//*** Motor On 상태 업데이트, 1=Off, 0=On
+		//*** Update motor-on status: 1 = off, 0 = on
 		if(Sysvar[0x0125007B].i7 == 0)
 			Sysvar[0x01210005].i2 = 1;
 		else
 			Sysvar[0x01210005].i2 = 0;
 
-		//*** 위치값 업데이트
+		//*** Update position
 		UpdatePosition(AXIS0);
 	}
 }
@@ -692,7 +692,7 @@ void InitAxis0()
 
 	// Current control setup
 	sdkSetupCurrentPIControl( 	AXIS0,
-								AXIS0_CURKPROP,//Current Regulator Calculator에서 계산한 값들을 넣게 되어 있음.
+								AXIS0_CURKPROP,//Enter the values calculated by Current Regulator Calculator.
 								AXIS0_CURKINT,
 								AXIS0_CURKILIM
 								);
@@ -770,7 +770,7 @@ void InitAxis1()
 
 	// Current control setup
 	sdkSetupCurrentPIControl( 	AXIS1,
-								AXIS1_CURKPROP,//Current Regulator Calculator에서 계산한 값들을 넣게 되어 있음.
+								AXIS1_CURKPROP,//Enter the values calculated by Current Regulator Calculator.
 								AXIS1_CURKINT,
 								AXIS1_CURKILIM
 								);
@@ -782,9 +782,9 @@ void InitAxis1()
 								);
 	// Movement parameters for the axis
 	sdkSetupAxisMovementParam(	AXIS1,
-								AXIS1_VELRES, //100으로 설정되어 있음.
+								AXIS1_VELRES, //Configured as 100.
 								AXIS1_MAX_RPM, // 6900RPM
-								AXIS1_RAMPTYPE, // 0으로 선언 . Trapezoidal.
+								AXIS1_RAMPTYPE, // Set to 0 for a trapezoidal profile.
 								AXIS1_RAMPMIN, // 1000ms
 								AXIS1_JERKMIN  // 1000ms
 								);
@@ -845,7 +845,7 @@ void InitAxis2()
 
 	// Current control setup
 	sdkSetupCurrentPIControl(AXIS2,
-	                         AXIS2_CURKPROP,  //Current Regulator Calculator에서 계산한 값들을 넣게 되어 있음.
+	                         AXIS2_CURKPROP,  //Enter the values calculated by Current Regulator Calculator.
 	                         AXIS2_CURKINT,
 	                         AXIS2_CURKILIM);
 
@@ -857,9 +857,9 @@ void InitAxis2()
 
 	// Movement parameters for the axis
 	sdkSetupAxisMovementParam(AXIS2,
-	                          AXIS2_VELRES,   // 100으로 설정되어 있음.
+	                          AXIS2_VELRES,   // Configured as 100.
 	                          AXIS2_MAX_RPM,  // 6900RPM
-	                          AXIS2_RAMPTYPE, // 0으로 선언 . Trapezoidal.
+	                          AXIS2_RAMPTYPE, // Set to 0 for a trapezoidal profile.
 	                          AXIS2_RAMPMIN,  // 1000ms
 	                          AXIS2_JERKMIN); // 1000ms
 
@@ -916,7 +916,7 @@ void InitAxis3()
 
 	// Current control setup
 	sdkSetupCurrentPIControl(AXIS3,
-	                         AXIS3_CURKPROP,//Current Regulator Calculator에서 계산한 값들을 넣게 되어 있음.
+	                         AXIS3_CURKPROP,//Enter the values calculated by Current Regulator Calculator.
 	                         AXIS3_CURKINT,
 	                         AXIS3_CURKILIM);
 
@@ -928,9 +928,9 @@ void InitAxis3()
 
 	// Movement parameters for the axis
 	sdkSetupAxisMovementParam(AXIS3,
-	                          AXIS3_VELRES, //100으로 설정되어 있음.
+	                          AXIS3_VELRES, //Configured as 100.
 	                          AXIS3_MAX_RPM, // 6900RPM
-	                          AXIS3_RAMPTYPE, // 0으로 선언 . Trapezoidal.
+	                          AXIS3_RAMPTYPE, // Set to 0 for a trapezoidal profile.
 	                          AXIS3_RAMPMIN, // 1000ms
 	                          AXIS3_JERKMIN);  // 1000ms
 
@@ -974,20 +974,20 @@ long main(void)
     ErrorClear();
 
     print("Motor Init start");
-    //*** 각축별 초기화
+    //*** Initialize each axis
     InitAxis0();
    // InitAxis1();
   //  InitAxis2();
  //   InitAxis3();
     print("Motor Init Finished");
 
-    //*** 모터 Off
+    //*** Switch the motor off
     AxisControl(AXIS0, OFF);
 
 
 
 
-	//*** State Machine 시작
+	//*** Start the state machine
     res = SmRun(Axis0StateMachine, Axis1StateMachine, Axis2StateMachine, Axis3StateMachine);
 
     return(0);

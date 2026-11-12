@@ -375,7 +375,7 @@ private:
 
   rclcpp::Service<MoveToolAngle>::SharedPtr dynamics_move_tool_angle_service_server_;
 
-  rclcpp::TimerBase::SharedPtr timer_;  // 타이머는 시작과 중지를 위해 nullptr로 관리
+  rclcpp::TimerBase::SharedPtr timer_;  // Use nullptr to manage timer start/stop state.
   int timer_period_ms_ = 10;
   float amp_deg_ = 43.5;  // degeree  38 deg is almost same in 0.03 m in position mode
   float amp_mm_ = 0.02;  // m

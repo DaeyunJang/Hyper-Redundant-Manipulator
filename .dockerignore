@@ -1,0 +1,43 @@
+# Allow only the runtime build inputs. In particular, NEVER send .git, record,
+# analysis, trained model bundles, or host build/install trees to the daemon.
+**
+!.dockerignore
+!docker/
+!docker/**
+!src/
+!src/custom_interfaces/
+!src/custom_interfaces/**
+!src/image_rate_probe/
+!src/image_rate_probe/**
+!src/estimation_pkg/
+!src/estimation_pkg/**
+!src/gui_py_pkg/
+!src/gui_py_pkg/**
+!src/serial_pkg/
+!src/serial_pkg/**
+!src/record_pkg/
+!src/record_pkg/**
+!src/robot_control_pkg/
+!src/robot_control_pkg/**
+!src/launcher/
+!src/launcher/**
+# robot_control currently includes this header directory; do not build TCP.
+!src/tcp_pkg/
+!src/tcp_pkg/include/
+!src/tcp_pkg/include/**
+src/estimation_pkg/models
+src/estimation_pkg/models/**
+src/serial_pkg/arduino/**
+src/serial_pkg/esp32/**
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+**/.pytest_cache
+**/test
+**/test/**
+**/legacy
+**/legacy/**
+**/build
+**/install
+**/log
+
