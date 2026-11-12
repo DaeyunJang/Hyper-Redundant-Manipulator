@@ -4,13 +4,15 @@ HRM(Hyper-Redundant-Manipulator) motion control on ROS system
 For GUI/CUDA camera startup and checks of the 30 Hz estimation pipeline, see the
 [real-time operation guide](docs/REALTIME_ESTIMATION.md).
 
-## Docker on Ubuntu 22.04 (sensor-only)
+## Docker on Ubuntu 22.04 (full system)
 
 The [Docker guide](docker/README.md) provides an additional, isolated installation
-path for the GUI, CUDA RealSense cameras, ESP32 sensors, shape estimation, and
-force/contact model loading. The native installation below is not replaced.
-The container deliberately excludes the motor TCP bridge and disables physical
-motor output. It starts the GUI with component autostart disabled.
+path for the same GUI, CUDA RealSense cameras, ESP32 sensors, shape/force/contact
+estimation, recording, TCP bridge and robot controller. The native installation
+below is not replaced. It starts `ros2 launch launcher system.launch.py`, with
+component autostart and physical motor output initially disabled, as in native
+startup. Use the GUI's per-component Start/Stop controls to choose which devices
+and processes to run, and Motor Enable to control physical motor output.
 
 ```bash
 bash scripts/hrm_docker.sh doctor
@@ -20,6 +22,7 @@ bash scripts/hrm_docker.sh smoke
 bash scripts/hrm_docker.sh gui
 ```
 
+The `smoke` command checks software without starting ROS nodes or accessing hardware.
 Model bundles are supplied separately. Recorded data and editable settings are
 stored in host directories, not baked into the image. Container build/hardware
 validation status and remaining prerequisites are recorded in the Docker guide.

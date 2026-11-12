@@ -1,12 +1,20 @@
 # HRM Docker runtime: Ubuntu 22.04, ROS 2 Humble, NVIDIA GPU
 
-This is an **additional sensor-only execution path**, not a replacement for the
-existing native installation. It packages the operator GUI, current image/angle
-pipeline, force/contact model runtime, recorder, AprilTag pipeline, and dry-run FK.
-The Windows motor server is not containerized. Neither `tcp_pkg` nor the legacy
-DAQ/MasterMACS/LSTM workspace is built into this image.
+This is an **additional full-system execution path**, not a replacement for the
+existing native installation. It packages the same operator GUI, current image/angle
+pipeline, force/contact runtime, recorder, AprilTag pipeline, TCP bridge, and robot
+controller. Physical cameras and sensors are the same devices used by native ROS;
+there is no simulated substitute. The Windows motor server remains on its original
+machine; the Linux `tcp_pkg` client is included in the image and communicates with
+that server. The unused DAQ/MasterMACS/LSTM workspace is not built into the image.
 
-## Validation status (2026-11-11)
+The normal entry command is `ros2 launch launcher system.launch.py`. Its GUI starts
+with component autostart off and Motor Enable off, matching native defaults. All
+normal components remain available. Use the existing per-component Start/Stop
+controls to choose which devices and processes to run, and Motor Enable to control
+physical motor output.
+
+## Validation status (2026-11-12)
 
 Docker support has been added, but **an actual image build and container hardware
 test have not yet been completed on this PC**: Docker is absent, installing it
@@ -17,7 +25,7 @@ not substitutes for building the image and testing the camera pipeline below.
 
 Completed without hardware access:
 
-- 95 GUI/process/port-selector regression tests and 10 Docker-helper tests passed.
+- GUI/process/port-selector and Docker-helper regression tests passed.
 - Compose base and generated device/group configurations passed the official
   standalone Compose validator; shell syntax and Python parsing passed.
 - Python dependency resolution passed a dry run (no host installation).
@@ -26,6 +34,8 @@ Completed without hardware access:
 - The existing trusted `cable_loadcell_angle` Masked/KalmanNet/Transformer bundle
   loaded and inferred successfully on CPU with a synthetic 30-sample, 26-feature
   window. This is a loading check, not a live prediction-accuracy measurement.
+- TCP package, executable and launch-file presence are now required by the image
+  smoke check. It inspects files without starting TCP or communicating with motors.
 
 Reserve **at least 25 GiB** in Docker's storage location for the initial image,
 compiler stages and build cache. This is a conservative preparation estimate, not
@@ -182,22 +192,44 @@ actual camera model/serial and USB port, then start only the components you need
 1. HRM camera; inspect RGB and aligned depth.
 2. Segment estimation after lighting/ROI/base placement are correct.
 3. Serial sensors; inspect four load cells and F/T values.
-4. Optional robot control for FK with physical output disabled.
+4. Robot control for FK/control; physical output remains initially disabled.
 5. Optional tag camera and AprilTag when a second camera is connected.
-6. Optional force/contact and recorder, subject to the missing-input rules below.
+6. The TCP bridge, force/contact estimator and recorder, as required by the
+   experiment. Start TCP only when the actual motor system is ready.
 
-`HRM_SENSOR_ONLY=1` is enforced by the entrypoint. TCP components are hidden/rejected,
-Motor Enable is disabled, direct GUI motor publication is blocked, and GUI controller
-launches force `motor_output_enabled:=false`. This is workflow protection, **not a
-security boundary against arbitrary manual ROS commands**. Keep the physical motor
-server disconnected for this validation. There is no supported motor-enabled
-Docker profile in this change.
+TCP is available through its Start/Stop controls, and Motor Enable uses the existing
+native confirmation and controller gate. Start only the components needed for the
+connected devices; leave TCP stopped when working without the motor system. The
+controller algorithms, force signs, hardware definitions and existing launch delays
+are not changed by Docker.
 
-Without TCP, `/motor_state` normally does not exist. Models requiring motor/cable
-inputs may correctly report invalid/not-ready rather than infer. Normal recording
-also requires motor/cable inputs, so it may refuse to start or produce a complete
-summary. No fake values, relaxed required-data checks, or automatic bag replay are
-introduced. Use the smoke test to test model loading separately from live validity.
+To start the same GUI manually inside an initialized container shell:
+
+```bash
+bash scripts/hrm_docker.sh shell
+# The following command runs INSIDE the container, not the host terminal:
+ros2 launch launcher system.launch.py
+```
+
+Only run one GUI/system instance at a time. If you prefer the configured automatic
+startup sequence, the existing `auto_start_components:=true` launch argument is
+available; it can start TCP, so do not enable it in a hardware-free test.
+
+The TCP endpoint remains the native compile-time value in
+`src/tcp_pkg/include/tcp_pkg/tcp_node.hpp` (`172.16.1.0:7777` at this revision).
+The host must have the correct route/network interface for the Windows server.
+Changing that native constant requires rebuilding the image. `network_mode: host`
+preserves host routing; `ROS_LOCALHOST_ONLY` controls ROS discovery, not direct TCP.
+**Starting TCP immediately connects and exchanges packets, even if Motor Enable is
+off.** Leave TCP stopped to avoid that communication. The `smoke` command is a
+software check that never starts ROS nodes or TCP or accesses hardware.
+
+With TCP stopped, `/motor_state` normally does not exist. Models requiring
+motor/cable inputs may correctly report invalid/not-ready rather than infer.
+Normal recording also requires motor/cable inputs, so it may refuse to start or
+produce a complete summary. No fake values, relaxed required-data checks, or
+automatic bag replay are introduced. Use the smoke test to test model loading
+separately from live validity.
 
 The helper enumerates current `/dev/video*`, `/dev/media*`, `/dev/ttyUSB*`, and
 `/dev/ttyACM*` nodes and adds their numeric host groups. USB bus nodes are shared
@@ -224,16 +256,20 @@ ros2 run image_rate_probe pipeline_rate_probe
 ```
 
 Networking and IPC use the host namespaces so Fast DDS shared-memory communication
-is consistent. The default ROS domain is **87**, with `ROS_LOCALHOST_ONLY=1`, to
-separate this validation from the normal robot graph. A ROS domain is not a security
-boundary; do not reuse it for an active motor system. Host-to-container diagnostics
-must use the same domain. All intra-container nodes share the existing image-sized
-Fast DDS configuration. Do not forward host-only `PYTHONPATH`, ROS prefixes, or DDS
-profile filenames into the container.
+is consistent. Normal helper startup inherits host `ROS_DOMAIN_ID` and
+`ROS_LOCALHOST_ONLY` when set, otherwise both default to **0**, matching normal ROS
+defaults. `HRM_ROS_DOMAIN_ID` and `HRM_ROS_LOCALHOST_ONLY` explicitly override them.
+Do not run the native and container robot stacks simultaneously on the same graph
+or the same devices. A ROS domain is not a security boundary. Host-to-container
+diagnostics must use the same domain. All intra-container nodes share the existing
+image-sized Fast DDS configuration. Do not forward host-only `PYTHONPATH`, ROS
+prefixes, or DDS profile filenames into the container.
 
 After hardware startup, measure RGB/aligned-depth rates, processed-angle rate,
-source age, sensor rates and inference timing. Verify no `tcpclient` node and that
-`ros2 param get /robot_control motor_output_enabled` reports false if FK is running.
+source age, sensor rates and inference timing. When running FK with motor output
+disabled, verify that `ros2 param get /robot_control motor_output_enabled` reports
+false. Verify TCP/motor telemetry before following the existing operator
+motor-enable procedure.
 Docker does not guarantee deterministic real-time scheduling or native performance.
 Record actual measured values; do not reuse old native timing numbers as Docker results.
 

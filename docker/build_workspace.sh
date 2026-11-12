@@ -72,7 +72,7 @@ workspace)
     colcon --log-base /opt/hrm_ws/log build \
         --base-paths /opt/hrm_ws/src \
         --packages-select custom_interfaces image_rate_probe estimation_pkg \
-            gui_py_pkg serial_pkg record_pkg robot_control_pkg launcher \
+            gui_py_pkg serial_pkg record_pkg robot_control_pkg tcp_pkg launcher \
         --build-base /opt/hrm_ws/build --install-base /opt/hrm_ws/install \
         --merge-install --parallel-workers "$build_jobs" \
         --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \

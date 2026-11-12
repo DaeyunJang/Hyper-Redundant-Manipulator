@@ -1,6 +1,6 @@
-# AUTHOR: Daeyun - portable, motor-free HRM runtime.
+# AUTHOR: Daeyun - portable full-system HRM runtime.
 # Use scripts/hrm_docker.sh: it adds current camera/serial devices and host groups.
-name: hrm-sensors
+name: hrm
 services:
   hrm:
     image: hrm:humble-cuda
@@ -29,10 +29,9 @@ services:
       QT_X11_NO_MITSHM: "1"
       QT_QPA_PLATFORM: xcb
       NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics,display
-      ROS_DOMAIN_ID: ${HRM_ROS_DOMAIN_ID:-87}
-      ROS_LOCALHOST_ONLY: "1"
+      ROS_DOMAIN_ID: ${HRM_ROS_DOMAIN_ID:-0}
+      ROS_LOCALHOST_ONLY: ${HRM_ROS_LOCALHOST_ONLY:-0}
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-      HRM_SENSOR_ONLY: "1"
       HRM_INFERENCE_PYTHON: /usr/bin/python3
       OPENBLAS_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"

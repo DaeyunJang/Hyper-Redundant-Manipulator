@@ -9,22 +9,6 @@ import subprocess
 import time
 
 
-def sensor_only_enabled():
-    """Opt in to GUI sensor-only workflow guards, not a ROS security boundary."""
-
-    return os.environ.get('HRM_SENSOR_ONLY', '').strip().lower() in (
-        '1', 'true', 'yes', 'on',
-    )
-
-
-def _is_motor_bridge(spec):
-    return (
-        spec.package == 'tcp_pkg'
-        or spec.component_id == 'tcp'
-        or '/tcpclient' in spec.expected_nodes
-    )
-
-
 @dataclass(frozen=True)
 class ComponentSpec:
     """One launchable system component loaded from the GUI configuration."""
@@ -45,14 +29,7 @@ class ComponentSpec:
             for key, value in (substitutions or {}).items()
         }
         command = ['ros2', 'launch', self.package, self.launch_file]
-        arguments = dict(self.arguments)
-        if sensor_only_enabled() and (
-                self.package == 'robot_control_pkg'
-                or self.component_id == 'robot_control'
-                or '/robot_control' in self.expected_nodes
-                or 'motor_output_enabled' in arguments):
-            arguments['motor_output_enabled'] = False
-        for name, value in arguments.items():
+        for name, value in self.arguments.items():
             if isinstance(value, str):
                 value = value.format(**substitutions)
             if isinstance(value, bool):
@@ -86,8 +63,6 @@ def load_component_specs(config_path):
             description=entry.get('description', ''),
             arguments=dict(entry.get('arguments', {})),
         ))
-    if sensor_only_enabled():
-        specs = [spec for spec in specs if not _is_motor_bridge(spec)]
     return specs
 
 
@@ -131,9 +106,6 @@ class ManagedProcess:
         return True
 
     def start(self, substitutions=None):
-        # Guard directly constructed specs as well as filtered GUI config.
-        if sensor_only_enabled() and _is_motor_bridge(self.spec):
-            return False
         self.poll()
         if self.is_alive:
             return False

@@ -79,8 +79,8 @@ COPY docker/build_workspace.sh /opt/hrm_ws/docker/build_workspace.sh
 RUN CUDA_ARCH="${CUDA_ARCH}" BUILD_JOBS="${BUILD_JOBS}" \
     RSUSB_BACKEND="${RSUSB_BACKEND}" bash docker/build_workspace.sh vendor
 
-# Explicit allowlist: no tcp_pkg executable/package, DAQ, motor firmware, or
-# LSTM training submodule is part of the image. The controller shares headers.
+# Explicit allowlist for the complete native GUI/system runtime, including TCP
+# and control. The unused DAQ package, firmware, and training data stay outside.
 COPY src/custom_interfaces/ src/custom_interfaces/
 COPY src/image_rate_probe/ src/image_rate_probe/
 COPY src/estimation_pkg/ src/estimation_pkg/
@@ -89,14 +89,13 @@ COPY src/serial_pkg/ src/serial_pkg/
 COPY src/record_pkg/ src/record_pkg/
 COPY src/robot_control_pkg/ src/robot_control_pkg/
 COPY src/launcher/ src/launcher/
-COPY src/tcp_pkg/include/ src/tcp_pkg/include/
+COPY src/tcp_pkg/ src/tcp_pkg/
 RUN BUILD_JOBS="${BUILD_JOBS}" bash docker/build_workspace.sh workspace
 
 FROM runtime-base AS runtime
-LABEL org.opencontainers.image.title="HRM sensor and force-inference runtime" \
+LABEL org.opencontainers.image.title="HRM GUI, sensor, inference, and control runtime" \
       org.opencontainers.image.authors="Daeyun"
 ENV HRM_INFERENCE_PYTHON=/usr/bin/python3 \
-    HRM_SENSOR_ONLY=1 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display \
     QT_X11_NO_MITSHM=1 \

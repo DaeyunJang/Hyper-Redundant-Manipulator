@@ -21,10 +21,9 @@
 !src/robot_control_pkg/**
 !src/launcher/
 !src/launcher/**
-# robot_control currently includes this header directory; do not build TCP.
+# Include the complete TCP package used by the native GUI/control runtime.
 !src/tcp_pkg/
-!src/tcp_pkg/include/
-!src/tcp_pkg/include/**
+!src/tcp_pkg/**
 src/estimation_pkg/models
 src/estimation_pkg/models/**
 src/serial_pkg/arduino/**

@@ -60,7 +60,6 @@ from enum import Enum
 from ament_index_python.packages import get_package_share_directory
 from gui_py_pkg.system_manager import SystemProcessManager
 from gui_py_pkg.system_manager import load_component_specs
-from gui_py_pkg.system_manager import sensor_only_enabled
 from gui_py_pkg.image_preview import ImagePreviewPanel
 from gui_py_pkg.serial_port_selector import SerialPortSelector
 from gui_py_pkg.camera_selector import CameraSelector
@@ -354,10 +353,6 @@ class GUINode(Node):
     def set_motor_output_enabled(self, enabled):
         """Set the robot controller safety gate without blocking the GUI."""
 
-        if enabled and sensor_only_enabled():
-            self.get_logger().warning(
-                'Sensor-only mode rejects enabling physical motor output.')
-            return None
         if not self.robot_control_parameter_client.service_is_ready():
             return None
         request = SetParameters.Request()
@@ -371,10 +366,6 @@ class GUINode(Node):
         return self.robot_control_parameter_client.call_async(request)
 
     def publish(self, msg):
-        if sensor_only_enabled():
-            self.get_logger().warning(
-                'Sensor-only mode blocks direct motor command publication.')
-            return
         self.motor_command_publisher_.publish(msg)
 
     def call_service_async(self, client, request, service_name):
@@ -513,9 +504,7 @@ class MyGUI(QWidget):
         control_font = self.font()
         control_font.setPointSizeF(min(control_font.pointSizeF(), 10.0))
         self.setFont(control_font)
-        self.setWindowTitle(
-            'Hyper-Redundant Manipulator Control'
-            + (' — SENSOR ONLY' if sensor_only_enabled() else ''))
+        self.setWindowTitle('Hyper-Redundant Manipulator Control')
         self.resize(1500, 900)
 
         root_layout = QHBoxLayout(self)
@@ -634,13 +623,6 @@ class MyGUI(QWidget):
         heading.setStyleSheet('font-size: 18px; font-weight: 600;')
         self.system_layout.addWidget(heading)
 
-        if sensor_only_enabled():
-            sensor_only_note = QLabel(
-                'SENSOR ONLY · motor output locked · controller preview available')
-            sensor_only_note.setWordWrap(True)
-            sensor_only_note.setStyleSheet('font-weight: 600; color: #1a73e8;')
-            self.system_layout.addWidget(sensor_only_note)
-
         explanation = QLabel(
             'Green: running · Blue: external (not stopped by this GUI)'
         )
@@ -752,11 +734,8 @@ class MyGUI(QWidget):
         safety_layout.setContentsMargins(8, 2, 8, 2)
         self.motor_output_checkbox = QCheckBox('Enable physical motor output')
         self.motor_output_checkbox.setChecked(False)
-        self.motor_output_checkbox.setEnabled(not sensor_only_enabled())
         self.motor_output_checkbox.toggled.connect(self.motor_output_toggled)
         self.motor_output_note = QLabel(
-            'SENSOR ONLY — physical motor output is locked off'
-            if sensor_only_enabled() else
             'OFF — IK preview only; motor_command is blocked'
         )
         self.motor_output_note.setWordWrap(True)
@@ -766,8 +745,7 @@ class MyGUI(QWidget):
 
     def process_substitutions(self):
         substitutions = {
-            'motor_output_enabled': (
-                not sensor_only_enabled() and self.motor_output_checkbox.isChecked()),
+            'motor_output_enabled': self.motor_output_checkbox.isChecked(),
             'serial_port': self.serial_port_selector.selected_port(),
         }
         substitutions.update(self.camera_selector.substitutions())
@@ -1087,13 +1065,6 @@ class MyGUI(QWidget):
             )
 
     def motor_output_toggled(self, enabled):
-        if sensor_only_enabled():
-            self.motor_output_checkbox.blockSignals(True)
-            self.motor_output_checkbox.setChecked(False)
-            self.motor_output_checkbox.blockSignals(False)
-            self.motor_output_note.setText(
-                'SENSOR ONLY — physical motor output is locked off')
-            return
         if enabled:
             answer = QMessageBox.warning(
                 self,
@@ -1147,8 +1118,6 @@ class MyGUI(QWidget):
         if successful:
             state = 'ENABLED' if enabled else 'DISABLED'
             self.motor_output_note.setText(
-                'SENSOR ONLY — Robot control acknowledged motor output disabled'
-                if sensor_only_enabled() and not enabled else
                 f'{state} — Robot control acknowledged the setting'
             )
             color = '#d93025' if enabled else '#188038'

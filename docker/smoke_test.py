@@ -48,16 +48,26 @@ def check_packages():
 
     for name in (
         'custom_interfaces', 'image_rate_probe', 'estimation_pkg', 'gui_py_pkg',
-        'serial_pkg', 'record_pkg', 'robot_control_pkg', 'launcher',
+        'serial_pkg', 'record_pkg', 'robot_control_pkg', 'tcp_pkg', 'launcher',
         'realsense2_camera', 'realsense2_camera_msgs', 'image_proc', 'apriltag_ros',
     ):
         get_package_prefix(name)
-    for name in ('tcp_pkg', 'daq_pkg'):
-        try:
-            get_package_prefix(name)
-        except PackageNotFoundError:
-            continue
-        raise RuntimeError(f'{name} must not be installed in the sensor image.')
+    try:
+        get_package_prefix('daq_pkg')
+    except PackageNotFoundError:
+        pass
+    else:
+        raise RuntimeError('The unused native daq_pkg must not be installed.')
+    # Inspect files only: starting tcpclient would attempt a motor connection.
+    tcp_prefix = Path(get_package_prefix('tcp_pkg'))
+    for name in ('tcpclient', 'demo_node'):
+        executable = tcp_prefix / 'lib' / 'tcp_pkg' / name
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise RuntimeError(f'Missing installed TCP executable: {executable}')
+    for name in ('_launch.py', '_launch_demo.py'):
+        launch_file = tcp_prefix / 'share' / 'tcp_pkg' / 'launch' / name
+        if not launch_file.is_file():
+            raise RuntimeError(f'Missing installed TCP launch file: {launch_file}')
     camera = Path(get_package_prefix('realsense2_camera'))
     expected_camera = Path('/opt/hrm_ws/.cuda_realsense/install/realsense-ros')
     if camera.resolve() != expected_camera:
@@ -65,8 +75,8 @@ def check_packages():
     library = Path('/opt/hrm_ws/.cuda_realsense/install/librealsense/lib/librealsense2.so')
     # Dynamic linking only: do not create an SDK context or enumerate cameras.
     ctypes.CDLL(str(library))
-    print('PASS ROS package registration and CUDA RealSense library linkage; '
-          'motor TCP and DAQ packages are absent')
+    print('PASS ROS package registration, TCP executables/launch files, and '
+          'CUDA RealSense library linkage; TCP was not started')
 
 
 def check_qt_and_images():

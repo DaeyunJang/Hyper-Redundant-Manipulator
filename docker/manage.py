@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # AUTHOR: Daeyun - local device, display and data mapping for the HRM container.
-"""Manage the motor-free container without installing or deleting host software."""
+"""Manage the native HRM system in Docker without changing its GUI controls."""
 
 import argparse
 import json
@@ -48,6 +48,8 @@ def environment():
         ('HRM_RECORD_DIR', ROOT / 'record'),
     ):
         env[key] = str(Path(env.get(key, fallback)).expanduser().resolve())
+    env.setdefault('HRM_ROS_DOMAIN_ID', env.get('ROS_DOMAIN_ID', '0'))
+    env.setdefault('HRM_ROS_LOCALHOST_ONLY', env.get('ROS_LOCALHOST_ONLY', '0'))
     return env
 
 
@@ -105,8 +107,8 @@ def prepare_runtime(env, gui=False):
     override = runtime_override(devices, os.getgroups())
     (STATE / 'devices.json').write_text(json.dumps(override, indent=2) + '\n')
     print('Mapped local devices:', ', '.join(str(path) for path in devices) or '(USB bus only)', flush=True)
-    print('Sensor-only mode: TCP omitted, physical motor output disabled; ROS domain '
-          + env.get('HRM_ROS_DOMAIN_ID', '87'), flush=True)
+    print('Native GUI including TCP; motor output initially OFF; ROS domain '
+          + env.get('HRM_ROS_DOMAIN_ID', '0'), flush=True)
 
 
 def doctor():

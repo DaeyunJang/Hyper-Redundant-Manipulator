@@ -78,11 +78,10 @@ def test_xauth_failure_is_clear_and_no_xhost(monkeypatch, tmp_path):
     manage.run.assert_not_called()
 
 
-def test_compose_is_sensor_only_and_preserves_host_data():
+def test_compose_defaults_to_full_gui_and_preserves_host_data():
     config = yaml.safe_load((ROOT / 'compose.yaml').read_text())
     service = config['services']['hrm']
-    assert service['environment']['HRM_SENSOR_ONLY'] == '1'
-    assert service['environment']['ROS_LOCALHOST_ONLY'] == '1'
+    assert service['environment']['ROS_LOCALHOST_ONLY'] == '${HRM_ROS_LOCALHOST_ONLY:-0}'
     assert service['network_mode'] == service['ipc'] == 'host'
     assert 'privileged' not in service
     assert 'auto_start_components:=false' in service['command']
@@ -94,25 +93,25 @@ def test_compose_is_sensor_only_and_preserves_host_data():
     assert '/var/run/docker.sock' not in mounts
 
 
-def test_entrypoint_guards_and_persistent_config_not_single_file_mounts():
+def test_entrypoint_keeps_native_launch_and_persistent_config():
     text = (ROOT / 'docker/entrypoint.sh').read_text()
-    assert 'export HRM_SENSOR_ONLY=1' in text
     assert 'if [[ ! -e "$target" ]]' in text
     assert 'exec "$@"' in text
+    assert 'set -- ros2 launch launcher system.launch.py auto_start_components:=false' in text
     assert 'motor_output_enabled:=true' not in text
 
 
-def test_image_build_excludes_control_bridge_and_context_is_allowlisted():
+def test_image_build_includes_control_bridge_and_context_is_allowlisted():
     ignore = (ROOT / '.dockerignore').read_text().splitlines()
     assert '**' in ignore
-    assert '!src/tcp_pkg/include/**' in ignore
-    assert '!src/tcp_pkg/**' not in ignore
+    assert '!src/tcp_pkg/**' in ignore
     assert 'src/estimation_pkg/models/**' in ignore
     assert not any(line.startswith('!record') or line.startswith('!.git/') for line in ignore)
     build = (ROOT / 'docker/build_workspace.sh').read_text()
-    assert 'gui_py_pkg serial_pkg record_pkg robot_control_pkg launcher' in build
-    assert '--packages-select tcp_pkg' not in build
+    assert 'gui_py_pkg serial_pkg record_pkg robot_control_pkg tcp_pkg launcher' in build
     assert 'HRM_CONTAINER_BUILD' in build
+    recipe = (ROOT / 'docker/Dockerfile').read_text()
+    assert 'COPY src/tcp_pkg/ src/tcp_pkg/' in recipe
 
 
 def test_shell_config_and_doctor_help_are_not_installers():
@@ -121,3 +120,50 @@ def test_shell_config_and_doctor_help_are_not_installers():
     assert 'system prune' not in source
     assert 'volume prune' not in source
     assert "['stop', 'hrm']" in source
+
+
+def test_runtime_keeps_native_graph_defaults(monkeypatch):
+    for name in ('HRM_ROS_DOMAIN_ID', 'HRM_ROS_LOCALHOST_ONLY',
+                 'ROS_DOMAIN_ID', 'ROS_LOCALHOST_ONLY'):
+        monkeypatch.delenv(name, raising=False)
+    result = manage.environment()
+    assert result['HRM_ROS_DOMAIN_ID'] == '0'
+    assert result['HRM_ROS_LOCALHOST_ONLY'] == '0'
+    monkeypatch.setenv('ROS_DOMAIN_ID', '23')
+    monkeypatch.setenv('ROS_LOCALHOST_ONLY', '1')
+    result = manage.environment()
+    assert result['HRM_ROS_DOMAIN_ID'] == '23'
+    assert result['HRM_ROS_LOCALHOST_ONLY'] == '1'
+
+
+def test_explicit_domain_override_is_preserved(monkeypatch):
+    monkeypatch.setenv('ROS_DOMAIN_ID', '23')
+    monkeypatch.setenv('HRM_ROS_DOMAIN_ID', '28')
+    monkeypatch.setenv('ROS_LOCALHOST_ONLY', '1')
+    monkeypatch.setenv('HRM_ROS_LOCALHOST_ONLY', '0')
+    result = manage.environment()
+    assert result['HRM_ROS_DOMAIN_ID'] == '28'
+    assert result['HRM_ROS_LOCALHOST_ONLY'] == '0'
+
+
+@pytest.mark.parametrize('action, expected_tail', [
+    ('gui', ['up', '--no-build', 'hrm']),
+    ('shell', ['run', '--rm', '--no-deps', 'hrm', 'bash']),
+    ('config', ['config']),
+    ('smoke', ['run', '--rm', '--no-deps', '-e', 'QT_QPA_PLATFORM=offscreen',
+               'hrm', '/usr/bin/python3', '/opt/hrm_ws/docker/smoke_test.py']),
+])
+def test_cli_uses_single_runtime_without_starting_processes(monkeypatch, action, expected_tail):
+    monkeypatch.setattr(manage.sys, 'argv', ['manage.py', action])
+    monkeypatch.setattr(manage, 'require_docker', lambda: None)
+    env = {'HRM_ROS_DOMAIN_ID': '23', 'HRM_ROS_LOCALHOST_ONLY': '0'}
+    monkeypatch.setattr(manage, 'environment', lambda: env.copy())
+    preparation = Mock()
+    runner = Mock()
+    monkeypatch.setattr(manage, 'prepare_runtime', preparation)
+    monkeypatch.setattr(manage, 'run', runner)
+    manage.main()
+    assert runner.call_args.kwargs['env'] == env
+    assert preparation.call_args.args[0] == env
+    assert preparation.call_args.kwargs['gui'] is (action == 'gui')
+    assert runner.call_args.args[0][-len(expected_tail):] == expected_tail

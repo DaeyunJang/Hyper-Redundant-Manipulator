@@ -8,9 +8,6 @@ source /opt/hrm_ws/install/setup.bash
 export LD_LIBRARY_PATH="/opt/hrm_ws/.cuda_realsense/install/librealsense/lib:${LD_LIBRARY_PATH:-}"
 export HRM_INFERENCE_PYTHON=/usr/bin/python3
 
-# This image is intentionally a sensor-only distribution (no tcp_pkg executable).
-# Do not permit a passed environment variable to silently re-enable GUI actuation.
-export HRM_SENSOR_ONLY=1
 export XDG_RUNTIME_DIR="/tmp/hrm-runtime-$(id -u)"
 mkdir -p "$XDG_RUNTIME_DIR" /home/hrm/config
 chmod 700 "$XDG_RUNTIME_DIR"
